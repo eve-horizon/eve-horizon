@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-worker
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - name: EVE_TCP_INGRESS_PROVIDER
+              value: "klipper"
+            - name: EVE_TCP_INGRESS_HOSTED_ZONE
+              value: "lvh.me"

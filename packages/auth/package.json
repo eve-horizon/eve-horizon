@@ -1,0 +1,29 @@
+{
+  "name": "@eve-horizon/auth",
+  "version": "0.0.1",
+  "description": "Unified auth SDK for Eve-compatible apps — agent jobs and user sessions",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eve-horizon/eve-horizon.git",
+    "directory": "packages/auth"
+  },
+  "keywords": ["eve", "auth", "jwt", "jwks", "express", "middleware"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

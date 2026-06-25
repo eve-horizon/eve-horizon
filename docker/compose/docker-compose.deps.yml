@@ -1,0 +1,22 @@
+# Dependencies only - used by "eh start local" for hot-reload development
+# For full containerized stack, use docker-compose.yml instead
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${EVE_DB_USER:-eve}
+      POSTGRES_PASSWORD: ${EVE_DB_PASSWORD:-eve}
+      POSTGRES_DB: ${EVE_DB_NAME:-eve}
+    ports:
+      - "${EVE_DB_PORT:-4803}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${EVE_DB_USER:-eve}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:

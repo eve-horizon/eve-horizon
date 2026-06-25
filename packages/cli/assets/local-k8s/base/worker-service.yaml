@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: eve-worker
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-worker
+spec:
+  selector:
+    app.kubernetes.io/name: eve-worker
+  ports:
+    - name: http
+      port: 4749
+      targetPort: http

@@ -1,0 +1,90 @@
+# Eve Horizon Project Manifest
+# This file configures how Eve deploys and manages this project
+
+project: fullstack-example
+
+# Default settings
+defaults:
+  env: staging
+  harness: mclaude
+
+# Environment definitions
+environments:
+  test:
+    type: persistent
+  staging:
+    type: persistent
+  production:
+    type: persistent
+
+# Component definitions for K8s deployment
+# Variable interpolation: ${ENV_NAME}, ${PROJECT_ID}, ${ORG_ID}, ${COMPONENT_NAME}
+components:
+  db:
+    type: service
+    image: postgres:15-alpine
+    port: 5432
+    env:
+      POSTGRES_DB: app_${ENV_NAME}
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: secret
+
+  api:
+    type: service
+    image: ghcr.io/eve-horizon/fullstack-api
+    port: 3000
+    env:
+      DATABASE_URL: postgres://app:secret@${ENV_NAME}-db:5432/app_${ENV_NAME}
+      NODE_ENV: production
+      LOG_LEVEL: info
+
+  web:
+    type: service
+    image: ghcr.io/eve-horizon/fullstack-web
+    port: 80
+    env:
+      API_URL: http://${ENV_NAME}-api:3000
+      PUBLIC_URL: https://web.${ENV_NAME}.example.com
+
+# Optional: override the cluster's default domain
+# domain: apps.yourdomain.com
+
+# Pipelines - Event-driven CI/CD
+pipelines:
+  deploy:
+    trigger:
+      event: github.push
+      branch: main
+    steps:
+      - name: build
+        run: npm run build
+
+      - name: test
+        run: npm test
+        depends_on:
+          - build
+
+      - name: deploy-staging
+        run: eve deploy --env staging
+        depends_on:
+          - test
+
+  feature-ci:
+    trigger:
+      event: github.push
+      branch: feature/*
+    steps:
+      - name: lint
+        run: npm run lint
+
+      - name: test
+        run: npm test
+
+# Workflows - Manual and scheduled operations
+workflows:
+  manual-deploy:
+    manual: true
+    db_access: read_write
+    steps:
+      - name: deploy
+        run: eve deploy

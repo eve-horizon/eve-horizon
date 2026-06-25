@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Stub harness for e2e testing - outputs expected marker
+# Real harness uses OpenSkills synced to agent config directory
+
+harness="${EVE_HARNESS_NAME:-code}"
+timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+echo "{\"msg\":{\"type\":\"task_started\"},\"timestamp\":\"$timestamp\"}"
+echo "{\"msg\":{\"type\":\"agent_message\",\"message\":\"skill-pack-check core_pack=e2e-core repo_pack=e2e-repo\",\"harness\":\"$harness\"},\"timestamp\":\"$timestamp\"}"
+echo "{\"msg\":{\"type\":\"agent_message\",\"message\":\"Hello from stub code\",\"harness\":\"$harness\",\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":340}},\"timestamp\":\"$timestamp\",\"model\":\"o3\"}"

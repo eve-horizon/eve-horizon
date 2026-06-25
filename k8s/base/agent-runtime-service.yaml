@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: eve-agent-runtime
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-agent-runtime
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: eve-agent-runtime
+  ports:
+    - name: http
+      port: 4812
+      targetPort: http

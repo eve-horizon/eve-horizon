@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run migrations using our simple runner (build first)
+cd "$(dirname "$0")/.."
+pnpm --filter @eve/db build
+pnpm --filter @eve/db migrate

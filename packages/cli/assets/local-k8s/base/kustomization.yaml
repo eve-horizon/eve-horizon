@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - api-rbac.yaml
+  - app-secret.yaml
+  - postgres-secret.yaml
+  - postgres-statefulset.yaml
+  - buildkitd-pvc.yaml
+  - buildkitd-deployment.yaml
+  - buildkitd-service.yaml
+  - buildkitd-network-policy.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - api-ingress.yaml
+  - orchestrator-deployment.yaml
+  - orchestrator-service.yaml
+  - worker-rbac.yaml
+  - worker-deployment.yaml
+  - worker-service.yaml
+  - agent-runtime-pvc.yaml
+  - agent-runtime-deployment.yaml
+  - agent-runtime-service.yaml
+  - gateway-deployment.yaml
+  - gateway-service.yaml
+  - gateway-ingress.yaml
+  - registry-configmap.yaml
+  - registry-pvc.yaml
+  - registry-deployment.yaml
+  - registry-service.yaml
+  - mailpit-deployment.yaml
+  - mailpit-service.yaml
+  - mailpit-ingress.yaml
+  - supabase-auth-deployment.yaml
+  - supabase-auth-service.yaml
+  - supabase-auth-ingress.yaml
+  - supabase-auth-cors-middleware.yaml
+  - auth-bootstrap-configmap.yaml
+  - auth-bootstrap-job.yaml
+  - sso-deployment.yaml
+  - sso-service.yaml
+  - sso-ingress.yaml

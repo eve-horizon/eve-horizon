@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+namespace: eve
+patchesStrategicMerge:
+  - agent-runtime-pvc.patch.yaml
+  - agent-runtime-org-id.patch.yaml
+  - managed-db.patch.yaml
+  - worker-registry.patch.yaml

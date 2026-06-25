@@ -1,0 +1,6 @@
+# Eve Horizon Skill Packs
+# Public packs (eve-se + eve-work)
+https://github.com/eve-horizon/eve-skillpacks
+
+# Private dev-only packs (local filesystem)
+./private-eve-dev-skills/eve-dev

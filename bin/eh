@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+show_help() {
+  echo "Eve Horizon Dev CLI"
+  echo ""
+  echo "Usage: eh [command] [options]"
+  echo ""
+  echo "Commands:"
+  echo "  status        Show environment status (RUN THIS FIRST)"
+  echo "  start         Start services (local or docker mode)"
+  echo "  stop          Stop current services"
+  echo "  configure     Configure instance (ports, k8s ownership)"
+  echo "  k8s           Kubernetes helpers"
+  echo "  kubectl       Safe local kubectl wrapper (k3d-eve-local only)"
+  echo "  kctx          Show current kube context safety status"
+  echo "  k8s-image     Build/import k3d images"
+  echo "  worker-image  Build and import worker image variants"
+  echo "  app           Fast-path app image build/import/deploy (local k3d)"
+  echo "  db            Database management (migrate/reset/status)"
+  echo "  test          Run integration tests"
+  echo "  auth          Credential management"
+  echo "  browser       Repo-pinned Playwright browser wrapper"
+  echo "  skills        Skills manifest helpers"
+  echo "  starter       Starter template management (sync/diff/check)"
+  echo ""
+  echo "Quick start:"
+  echo "  eh status              # Check what's running"
+  echo "  eh start local         # Hot-reload development"
+  echo "  eh start docker        # Containerized stack"
+  echo "  eh stop                # Stop current mode"
+  echo "  eh browser install     # Install repo-pinned Playwright browser binaries"
+  echo "  eh browser dashboard   # Open local dashboard with Eve auth injected"
+  echo "  eh kubectl get pods -n eve"
+  echo "  eh test integration    # Run integration tests"
+  echo ""
+  echo "Use ./bin/eh kubectl ...; do not use raw kubectl for local cluster ops."
+  echo ""
+  echo "For runtime operations, use: eve (npx @eve/cli)"
+}
+
+COMMAND="${1:-}"
+if [[ -z "$COMMAND" ]]; then
+  show_help
+  exit 1
+fi
+
+COMMAND_PATH="$SCRIPT_DIR/eh-commands/$COMMAND.sh"
+if [[ -x "$COMMAND_PATH" ]]; then
+  shift
+  exec "$COMMAND_PATH" "$@"
+fi
+
+if [[ "$COMMAND" == "org" || "$COMMAND" == "project" || "$COMMAND" == "job" ]]; then
+  echo "Runtime commands moved to the published CLI. Use: npx @eve/cli"
+  exit 1
+fi
+
+if [[ "$COMMAND" == "dev" || "$COMMAND" == "docker" ]]; then
+  echo "Error: 'eh $COMMAND' has been removed."
+  echo ""
+  echo "Use the unified commands instead:"
+  echo "  eh start local   # Hot-reload development (was: eh dev start)"
+  echo "  eh start docker  # Containerized stack (was: eh docker start)"
+  echo "  eh stop          # Stop current mode"
+  exit 1
+fi
+
+show_help
+exit 1

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-registry
+  namespace: eve-system
+  labels:
+    app: eve-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eve-registry
+  template:
+    metadata:
+      labels:
+        app: eve-registry
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: config
+              mountPath: /etc/docker/registry
+            - name: data
+              mountPath: /var/lib/registry
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: eve-registry-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: eve-registry-data

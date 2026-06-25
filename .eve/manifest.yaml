@@ -1,0 +1,44 @@
+# Eve Horizon Project Manifest
+# This project manages itself - dogfooding the manifest system
+
+project: eve-horizon
+
+# Default environment for jobs without explicit --env
+defaults:
+  env: test
+  harness: docker
+
+# Environment definitions
+environments:
+  test:
+    type: persistent
+    namespace: eve-test
+    db_ref: test-db
+    overrides:
+      replicas: 1
+      resources:
+        memory: 512Mi
+        cpu: 250m
+
+# Component definitions (for K8s deployment)
+components:
+  api:
+    type: service
+    image: eve-api
+    port: 3000
+    replicas: 1
+
+  orchestrator:
+    type: service
+    image: eve-orchestrator
+    replicas: 1
+
+  worker:
+    type: service
+    image: eve-worker
+    replicas: 1
+
+  db:
+    type: database
+    image: postgres:16
+    port: 5432

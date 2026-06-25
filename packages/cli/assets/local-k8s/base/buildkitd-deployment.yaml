@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildkitd
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: buildkitd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: buildkitd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: buildkitd
+    spec:
+      containers:
+        - name: buildkitd
+          image: moby/buildkit:v0.12.5
+          args:
+            - --addr
+            - tcp://0.0.0.0:1234
+            - --oci-worker-gc
+            - --oci-worker-gc-keepstorage
+            - "12000"
+          ports:
+            - name: grpc
+              containerPort: 1234
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: buildkitd-cache
+              mountPath: /var/lib/buildkit
+      volumes:
+        - name: buildkitd-cache
+          persistentVolumeClaim:
+            claimName: buildkitd-cache

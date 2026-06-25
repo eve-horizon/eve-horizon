@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+cmd="${1:-}"
+if [ "$cmd" = "--help" ] || [ "$cmd" = "help" ] || [ -z "$cmd" ]; then
+  echo "obs observations list --json"
+  exit 0
+fi
+
+if [ "$cmd" = "observations" ] && [ "${2:-}" = "list" ]; then
+  curl -fsS -H "Authorization: Bearer ${EVE_APP_LINK_OBSERVATION_TOKEN:-}" "${EVE_APP_LINK_OBSERVATION_API_URL:-}/observations"
+  exit 0
+fi
+
+echo "unknown obs command" >&2
+exit 2

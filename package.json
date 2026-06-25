@@ -1,0 +1,34 @@
+{
+  "name": "eve-horizon",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "check:api-list-responses": "bash scripts/check-api-list-response-contracts.sh",
+    "db:migrate": "pnpm --filter @eve/db build && pnpm --filter @eve/db migrate",
+    "db:reset": "./bin/eh db reset --force",
+    "docker:up": "docker compose -f docker/compose/docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker/compose/docker-compose.yml down"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dotenv": "^17.2.3",
+    "typescript": "^5.7.0",
+    "yaml": "^2.8.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@nestjs/core",
+      "protobufjs"
+    ]
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48"
+}

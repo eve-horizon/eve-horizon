@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+harness="pi"
+ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Lifecycle events (classified as 'system')
+echo "{\"type\":\"session\",\"version\":3,\"id\":\"test-session\",\"timestamp\":\"$ts\",\"cwd\":\"$(pwd)\"}"
+echo "{\"type\":\"agent_start\"}"
+echo "{\"type\":\"turn_start\"}"
+echo "{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}"
+
+# Skill-pack event (matches existing harness stub pattern)
+echo "{\"type\":\"event\",\"timestamp\":\"$ts\",\"content\":{\"message\":\"skill-pack-check core_pack=e2e-core repo_pack=e2e-repo\",\"harness\":\"$harness\"}}"
+
+# Assistant text (classified as 'assistant')
+echo "{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from $harness stub\"}]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Hello from $harness stub\"}}"
+
+# Message end with usage (triggers llm.call extraction via extractUsage → message.usage path)
+# pi emits bare input/output/cacheRead/cacheWrite fields (not input_tokens/output_tokens)
+echo "{\"type\":\"message_end\",\"model\":\"anthropic/claude-sonnet-4\",\"message\":{\"api\":\"anthropic\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from $harness stub\"}],\"usage\":{\"cost\":{\"input\":0.006,\"output\":0.0051,\"total\":0.0111},\"input\":1200,\"output\":340,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":1540},\"provider\":\"anthropic\",\"stopReason\":\"stop\"}}"
+
+# Lifecycle close
+echo "{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from $harness stub\"}]},\"toolResults\":[]}"
+echo "{\"type\":\"agent_end\",\"messages\":[]}"

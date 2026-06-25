@@ -1,0 +1,31 @@
+{
+  "name": "@eve/gateway",
+  "license": "MIT",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@eve/shared": "workspace:*",
+    "@eve-horizon/auth": "workspace:*",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.0.0",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.0.0",
+    "nostr-tools": "^2.23.0",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

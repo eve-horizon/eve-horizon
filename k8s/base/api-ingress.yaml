@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eve-api
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-api
+spec:
+  rules:
+    - host: api.eve.lvh.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eve-api
+                port:
+                  number: 4701

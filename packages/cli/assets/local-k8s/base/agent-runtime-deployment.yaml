@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: eve-agent-runtime
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-agent-runtime
+spec:
+  serviceName: eve-agent-runtime
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eve-agent-runtime
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eve-agent-runtime
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent-runtime
+          securityContext:
+            allowPrivilegeEscalation: false
+          image: eve-horizon/agent-runtime:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: eve-app
+          env:
+            - name: DATABASE_URL
+              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+            - name: EVE_API_URL
+              value: http://eve-api:4701
+            - name: AGENT_RUNTIME_PORT
+              value: "4812"
+            # EVE_ORG_ID: omitted — agent runtime auto-discovers orgs from the database.
+            # Set explicitly only for multi-tenant deployments that pin pods to a specific org.
+            - name: AGENT_RUNTIME_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AGENT_RUNTIME_CAPACITY
+              value: "8"
+            - name: AGENT_RUNTIME_STATUS
+              value: healthy
+            - name: EVE_AGENT_RUNTIME_EXECUTION_MODE
+              value: inline
+            - name: EVE_AGENT_CLI_PATH
+              value: /app/packages/eve-agent-cli/bin/eve-agent-cli.js
+            - name: EVE_ORG_FS_ROOT
+              value: /org
+            - name: EVE_K8S_NAMESPACE
+              value: eve
+            - name: EVE_RUNTIME
+              value: k8s
+            - name: WORKSPACE_ROOT
+              value: /opt/eve/workspaces
+            - name: EVE_TOOLCHAIN_ROOT
+              value: /opt/eve/toolchains
+            - name: EVE_TOOLCHAIN_IMAGE_PREFIX
+              value: eve-horizon/toolchain-
+            - name: EVE_TOOLCHAIN_IMAGE_TAG
+              value: local
+            - name: EVE_STORAGE_BACKEND
+              value: minio
+            - name: EVE_STORAGE_ENDPOINT
+              value: http://eve-minio.eve.svc.cluster.local:9000
+            - name: EVE_STORAGE_REGION
+              value: us-east-1
+            - name: EVE_STORAGE_ORG_BUCKET_PREFIX
+              value: eve-org
+            - name: EVE_STORAGE_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: access-key
+                  optional: true
+            - name: EVE_STORAGE_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: secret-key
+                  optional: true
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          ports:
+            - name: http
+              containerPort: 4812
+          volumeMounts:
+            - name: org-fs
+              mountPath: /org
+            - name: toolchains
+              mountPath: /opt/eve/toolchains
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      terminationGracePeriodSeconds: 120
+      volumes:
+        - name: org-fs
+          persistentVolumeClaim:
+            claimName: eve-org-fs-org-default
+        - name: toolchains
+          emptyDir: {}

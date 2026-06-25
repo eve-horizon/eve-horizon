@@ -1,0 +1,67 @@
+schema: eve/compose/v2
+project: cons
+registry: none
+
+services:
+  api:
+    image: praqma/network-multitool:latest
+    ports: [80]
+
+environments:
+  local: {}
+
+x-eve:
+  app_links:
+    consumes:
+      observation:
+        project: prod
+        api: observation
+        environment: same
+        scopes: [observations:read]
+        inject_into:
+          services: [api]
+          jobs: true
+      observation-ingest:
+        project: prod
+        api: observation-ingest
+        environment: same
+        scopes: [observations:write]
+        inject_into:
+          jobs: true
+
+workflows:
+  load-sandbox:
+    env: local
+    trigger:
+      cron:
+        schedule: "0 0 30 2 *"
+    steps:
+      - name: smoke
+        script:
+          run: |
+            set -eu
+            printf 'EVE_APP_LINK_OBSERVATION_API_URL=%s\n' "$EVE_APP_LINK_OBSERVATION_API_URL"
+            printf 'EVE_APP_LINK_OBSERVATION_ENV=%s\n' "$EVE_APP_LINK_OBSERVATION_ENV"
+            printf 'EVE_APP_LINK_OBSERVATION_TOKEN=<redacted:%s>\n' "$([ -n "${EVE_APP_LINK_OBSERVATION_TOKEN:-}" ] && printf true || printf false)"
+            printf 'EVE_APP_LINK_OBSERVATION_INGEST_API_URL=%s\n' "$EVE_APP_LINK_OBSERVATION_INGEST_API_URL"
+            printf 'EVE_APP_LINK_OBSERVATION_INGEST_ENV=%s\n' "$EVE_APP_LINK_OBSERVATION_INGEST_ENV"
+            printf 'EVE_APP_LINK_OBSERVATION_INGEST_TOKEN=<redacted:%s>\n' "$([ -n "${EVE_APP_LINK_OBSERVATION_INGEST_TOKEN:-}" ] && printf true || printf false)"
+            printf 'LOAD_API_URL=%s\n' "${LOAD_API_URL:-}"
+            printf 'LOAD_INGEST_API_URL=%s\n' "${LOAD_INGEST_API_URL:-}"
+            test -n "$EVE_APP_LINK_OBSERVATION_API_URL"
+            test -n "$EVE_APP_LINK_OBSERVATION_TOKEN"
+            test -n "$EVE_APP_LINK_OBSERVATION_INGEST_API_URL"
+            test -n "$EVE_APP_LINK_OBSERVATION_INGEST_TOKEN"
+      - name: dependent
+        depends_on: [smoke]
+        script:
+          run: |
+            set -eu
+            printf 'DEPENDENT_EVE_APP_LINK_OBSERVATION_API_URL=%s\n' "$EVE_APP_LINK_OBSERVATION_API_URL"
+            printf 'DEPENDENT_EVE_APP_LINK_OBSERVATION_TOKEN=<redacted:%s>\n' "$([ -n "${EVE_APP_LINK_OBSERVATION_TOKEN:-}" ] && printf true || printf false)"
+            printf 'DEPENDENT_EVE_APP_LINK_OBSERVATION_INGEST_API_URL=%s\n' "$EVE_APP_LINK_OBSERVATION_INGEST_API_URL"
+            printf 'DEPENDENT_EVE_APP_LINK_OBSERVATION_INGEST_TOKEN=<redacted:%s>\n' "$([ -n "${EVE_APP_LINK_OBSERVATION_INGEST_TOKEN:-}" ] && printf true || printf false)"
+            test -n "$EVE_APP_LINK_OBSERVATION_API_URL"
+            test -n "$EVE_APP_LINK_OBSERVATION_TOKEN"
+            test -n "$EVE_APP_LINK_OBSERVATION_INGEST_API_URL"
+            test -n "$EVE_APP_LINK_OBSERVATION_INGEST_TOKEN"

@@ -1,0 +1,43 @@
+{
+  "name": "@eve-horizon/cli",
+  "version": "0.2.44",
+  "description": "Eve Horizon CLI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eve-horizon/eve-horizon.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "eve": "bin/eve.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "bin",
+    "dist",
+    "assets",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && esbuild src/index.ts --bundle --platform=node --target=node22 --outfile=dist/index.js --format=cjs --external:yaml",
+    "test": "vitest run"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "yaml": "^2.5.1"
+  },
+  "devDependencies": {
+    "@eve/migrate": "workspace:*",
+    "@eve/shared": "workspace:*",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.27.3",
+    "postgres": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

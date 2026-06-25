@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-dashboard
+  namespace: eve
+  labels:
+    app: eve-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eve-dashboard
+  template:
+    metadata:
+      labels:
+        app: eve-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: eve-horizon/dashboard:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3200
+          env:
+            - name: EVE_API_URL
+              value: "http://eve-api:4701"
+            - name: PORT
+              value: "3200"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3200
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3200
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

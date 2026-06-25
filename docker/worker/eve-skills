@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: eve-skills install"
+}
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+read_sources() {
+  local skills_file="${1:-./skills.txt}"
+  local -a sources=()
+
+  if [[ ! -f "$skills_file" ]]; then
+    echo "No skills.txt found at $skills_file (skipping)" >&2
+    return 0
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="$(trim "$line")"
+    [[ -z "$line" ]] && continue
+    sources+=("$line")
+  done < "$skills_file"
+
+  if [[ ${#sources[@]} -eq 0 ]]; then
+    echo "No skills listed in skills.txt (skipping)" >&2
+    return 0
+  fi
+
+  printf '%s\n' "${sources[@]}"
+}
+
+AGENTS=("claude-code" "codex" "gemini-cli" "pi")
+
+install_skills() {
+  if ! command -v skills >/dev/null 2>&1; then
+    echo "skills CLI not available; skipping skills install" >&2
+    return 0
+  fi
+
+  local -a sources=()
+  while IFS= read -r source; do
+    [[ -z "$source" ]] && continue
+    sources+=("$source")
+  done < <(read_sources "${1:-./skills.txt}")
+
+  if [[ ${#sources[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  local -a resolved_sources=()
+  for source in "${sources[@]}"; do
+    local resolved="$source"
+    if [[ "$source" != .* && "$source" != /* && "$source" != ~* ]]; then
+      if [[ -e "$source" ]]; then
+        resolved="./$source"
+        echo "Assuming local path; prefixing ./: $source -> $resolved"
+      fi
+    fi
+    resolved_sources+=("$resolved")
+    echo "Installing skill source: $resolved"
+    for agent in "${AGENTS[@]}"; do
+      skills add "$resolved" -a "$agent" -y --all || echo "Warning: failed to install $resolved for $agent"
+    done
+  done
+
+  mkdir -p .agents .claude
+
+  local agent_skills=".agents/skills"
+  local claude_skills=".claude/skills"
+
+  if [[ -L "$claude_skills" ]]; then
+    local target
+    target="$(readlink "$claude_skills" || true)"
+    if [[ "$target" != "$agent_skills" && "$target" != "../.agents/skills" ]]; then
+      rm -f "$claude_skills"
+    fi
+  fi
+
+  if [[ ! -e "$claude_skills" ]]; then
+    if ln -s "../.agents/skills" "$claude_skills" 2>/dev/null; then
+      echo "Linked .claude/skills -> .agents/skills"
+    else
+      echo "Symlink failed; installing skills into .claude/skills directly"
+      for source in "${resolved_sources[@]}"; do
+        echo "Installing Claude skill source: $source"
+        skills add "$source" -a claude-code -y --all || echo "Warning: failed to install $source for claude-code"
+      done
+    fi
+  elif [[ ! -L "$claude_skills" ]]; then
+    echo ".claude/skills exists; skipping symlink"
+  fi
+}
+
+SUBCOMMAND="${1:-}"
+case "$SUBCOMMAND" in
+  install)
+    shift
+    install_skills "$@"
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    echo "Unknown subcommand: $SUBCOMMAND" >&2
+    usage
+    exit 1
+    ;;
+esac

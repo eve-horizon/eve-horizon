@@ -1,0 +1,17 @@
+# Prevent host node_modules (with platform-specific binaries) from
+# overwriting container node_modules during COPY . .
+**/node_modules
+
+# Git history is never needed inside images
+.git
+
+# Development / CI artifacts
+.beads
+.claude
+.github
+**/dist
+*.md
+!packages/*/README.md
+docs
+tests
+private-*

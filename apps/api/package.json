@@ -1,0 +1,42 @@
+{
+  "name": "@eve/api",
+  "private": true,
+  "license": "MIT",
+  "version": "0.0.1",
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "test": "vitest",
+    "openapi:export": "node dist/scripts/export-openapi.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-auto-scaling": "^3.1004.0",
+    "@aws-sdk/client-s3": "^3.1004.0",
+    "@aws-sdk/client-sesv2": "^3.1004.0",
+    "@aws-sdk/client-xray": "^3.1039.0",
+    "@aws-sdk/s3-request-presigner": "^3.1004.0",
+    "@eve/db": "workspace:*",
+    "@eve/shared": "workspace:*",
+    "@fastify/swagger": "^9.6.1",
+    "@fastify/swagger-ui": "^5.2.4",
+    "@kubernetes/client-node": "^1.4.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.0.0",
+    "@nestjs/swagger": "^11.0.1",
+    "fastify": "^5.0.0",
+    "nodemailer": "^8.0.7",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.0",
+    "yaml": "^2.5.1",
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/nodemailer": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

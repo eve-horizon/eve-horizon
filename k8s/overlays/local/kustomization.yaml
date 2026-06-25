@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+namespace: eve
+patchesStrategicMerge:
+  - postgres.patch.yaml
+  - agent-runtime-pvc.patch.yaml
+  - agent-runtime-org-id.patch.yaml
+  - managed-db.patch.yaml
+
+  - api-tcp-ingress.patch.yaml
+  - worker-registry.patch.yaml
+  - worker-tcp-ingress.patch.yaml

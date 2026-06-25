@@ -1,0 +1,19 @@
+name: Kubectl Context Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "bin/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+
+jobs:
+  lint-kubectl-context-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint kubectl context safety
+        run: ./scripts/lint-kubectl-context-safety.sh

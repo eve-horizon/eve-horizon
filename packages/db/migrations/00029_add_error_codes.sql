@@ -1,0 +1,2 @@
+ALTER TABLE build_runs ADD COLUMN IF NOT EXISTS error_code VARCHAR(64);
+ALTER TABLE pipeline_step_runs ADD COLUMN IF NOT EXISTS error_code VARCHAR(64);

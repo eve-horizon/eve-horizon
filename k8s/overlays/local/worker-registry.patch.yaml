@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-worker
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - name: EVE_REGISTRY_HOST
+              value: "eve-registry.eve.svc.cluster.local:5000"
+            - name: EVE_BUILDKIT_INSECURE_REGISTRIES
+              value: "eve-registry.eve.svc.cluster.local:5000"
+            - name: EVE_TOOLCHAIN_IMAGE_PREFIX
+              value: "eve-registry.eve.svc.cluster.local:5000/eve-horizon/toolchain-"
+            - name: EVE_TOOLCHAIN_IMAGE_TAG
+              value: "local"
+            - name: EVE_TOOLCHAIN_REGISTRY_INSECURE
+              value: "true"

@@ -1,0 +1,108 @@
+name: Build and Publish eve-migrate Image
+
+on:
+  push:
+    tags:
+      - 'eve-migrate/v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ECR_REGISTRY: public.ecr.aws/w7c4v0w3
+  ECR_NAMESPACE: ${{ vars.ECR_NAMESPACE || 'eve-horizon' }}
+  AWS_ECR_REGION: ${{ vars.AWS_ECR_REGION || 'eu-west-1' }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build migrate package
+        run: pnpm --filter @eve/migrate build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials for ECR
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_ECR_REGION }}
+
+      - name: Login to Amazon ECR (public)
+        run: |
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/eve-migrate/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/eve-migrate/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "has_version=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_version=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Ensure ECR repository exists
+        env:
+          ECR_NAMESPACE: ${{ env.ECR_NAMESPACE }}
+        run: |
+          ECR_REPOSITORY="${ECR_NAMESPACE}/migrate"
+          if ! aws ecr-public describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-1 >/dev/null 2>&1; then
+            aws ecr-public create-repository --repository-name "$ECR_REPOSITORY" --region us-east-1 >/dev/null
+          fi
+
+      - name: Build tags
+        id: tags
+        run: |
+          ECR_IMAGE_NAME="${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/migrate"
+          TAGS=""
+
+          if [[ "${{ steps.version.outputs.has_version }}" == "true" ]]; then
+            VERSION="${{ steps.version.outputs.version }}"
+            TAGS="${ECR_IMAGE_NAME}:${VERSION},${ECR_IMAGE_NAME}:latest"
+          fi
+
+          SHA_TAG="${ECR_IMAGE_NAME}:sha-${{ steps.sha.outputs.short }}"
+          if [[ -n "$TAGS" ]]; then
+            TAGS="${TAGS},${SHA_TAG}"
+          else
+            TAGS="$SHA_TAG"
+          fi
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./packages/migrate
+          file: ./packages/migrate/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/migrate-cache:latest
+          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/migrate-cache:latest,mode=max
+          platforms: linux/amd64,linux/arm64

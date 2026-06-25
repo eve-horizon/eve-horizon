@@ -1,0 +1,35 @@
+schema: eve/compose/v2
+project: prod
+registry: none
+
+services:
+  api:
+    image: traefik/whoami:v1.10
+    ports: [80]
+    x-eve:
+      api_spec:
+        type: openapi
+        spec_path: ./openapi.yaml
+        auth: eve
+
+environments:
+  local: {}
+
+x-eve:
+  app_links:
+    exports:
+      apis:
+        observation:
+          service: api
+          scopes: [observations:read]
+          consumers:
+            - project: cons
+              scopes: [observations:read]
+              envs: [local]
+        observation-ingest:
+          service: api
+          scopes: [observations:write]
+          consumers:
+            - project: cons
+              scopes: [observations:write]
+              envs: [local]

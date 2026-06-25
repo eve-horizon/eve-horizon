@@ -1,0 +1,3 @@
+source_commit=d4974dc5819730f79ca8b8b290de039cd2b11ddf
+publication=clean-history snapshot from the sanitized Eve Horizon source tree
+legacy_history=retained privately in the original source repository

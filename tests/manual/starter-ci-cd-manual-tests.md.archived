@@ -1,0 +1,329 @@
+# Manual Testing Guide: Starter CI/CD Flow
+
+This guide walks through the same scenarios covered by the e2e tests, using CLI commands
+that you can run manually against a local k8s stack.
+
+## Prerequisites
+
+```bash
+# 1. Ensure k8s stack is running
+./bin/eh status
+# Should show: K8s Stack ✓
+
+# 2. Set API URL
+export EVE_API_URL=http://api.eve.lvh.me
+
+# 3. Verify connectivity
+eve health
+# Should show API healthy
+```
+
+## Test 1: Connectivity Check
+
+Verifies the Eve API is accessible.
+
+```bash
+# Health check
+curl -s $EVE_API_URL/health | jq
+
+# Expected: { "status": "ok", ... }
+
+# Auth status
+eve auth status --json
+
+# Expected: Shows authentication state
+```
+
+## Test 2: Create Org and Project
+
+Creates an org and project for testing.
+
+```bash
+# Create or ensure org exists
+eve org ensure "manual-test-org" --json
+
+# Note the org ID from output, then create project
+eve project ensure \
+  --org <ORG_ID> \
+  --name "manual-test-project" \
+  --slug mtest \
+  --repo-url https://github.com/eve-horizon/eve-horizon-fullstack-example \
+  --branch main \
+  --force \
+  --json
+
+# Note the project ID for subsequent tests
+export PROJECT_ID=<project_id_from_output>
+```
+
+## Test 3: Smoke Job (Basic Agent Execution)
+
+Tests that a simple job can run with the mclaude harness.
+
+```bash
+# Create a job
+eve job create \
+  --project $PROJECT_ID \
+  --description "Run a quick smoke check: list top-level files and exit." \
+  --harness mclaude \
+  --json
+
+# Note job ID from output
+export JOB_ID=<job_id_from_output>
+
+# Wait for completion (max 5 minutes)
+eve job wait $JOB_ID --timeout 300
+
+# Check result
+eve job show $JOB_ID --json
+
+# Expected: phase = "done"
+```
+
+## Test 4: Edit Tool Permission (Yolo Mode)
+
+Tests that the Edit tool works with yolo permission policy.
+
+```bash
+# Create a job that uses Edit
+eve job create \
+  --project $PROJECT_ID \
+  --title "Test Edit tool permission" \
+  --description "Read the README.md file and use the Edit tool to add a comment at the top." \
+  --phase ready \
+  --priority 0 \
+  --json
+
+# Follow the job to see real-time output
+eve job follow <job_id>
+
+# Expected: Job completes successfully (exit code 0)
+# The logs should show:
+#   - "permission":"yolo"
+#   - "--dangerously-skip-permissions" in the command
+#   - Edit tool succeeds
+```
+
+## Test 5: Pipeline Operations
+
+### 5.1 List Pipelines
+
+```bash
+# List pipelines for the project
+eve pipeline list $PROJECT_ID --json
+
+# Expected: Shows pipelines defined in manifest (e.g., deploy-test, remediation)
+```
+
+### 5.2 Show Pipeline Details
+
+```bash
+# Get details of a specific pipeline
+eve pipeline show $PROJECT_ID deploy-test --json
+
+# Expected: Shows pipeline definition with trigger and steps
+```
+
+### 5.3 Run a Pipeline
+
+```bash
+# Run a pipeline (creates jobs for each step)
+eve pipeline run deploy-test \
+  --project $PROJECT_ID \
+  --ref main \
+  --env test \
+  --json
+
+# Note the run ID from output
+export RUN_ID=<run_id_from_output>
+
+# Check the pipeline run
+eve run show $PROJECT_ID $RUN_ID --json
+
+# Expected: Shows run status with associated jobs
+```
+
+### 5.4 Pipeline Job Dependencies
+
+```bash
+# When a pipeline runs, jobs are created with dependencies
+# - First step: phase = "ready"
+# - Dependent steps: phase = "backlog" (waiting for dependencies)
+
+eve job list --project $PROJECT_ID --json
+
+# Filter for pipeline jobs
+eve job list --project $PROJECT_ID --label pipeline:deploy-test
+```
+
+## Test 6: Workflow Operations
+
+### 6.1 List Workflows
+
+```bash
+# List available workflows
+eve workflow list $PROJECT_ID --json
+
+# Expected: Shows workflows defined in manifest (e.g., manual-deploy)
+```
+
+### 6.2 Run Workflow (Fire and Forget)
+
+```bash
+# Run workflow without waiting
+eve workflow run $PROJECT_ID manual-deploy \
+  --input '{"test": true}' \
+  --json
+
+# Expected: Returns job_id immediately
+```
+
+### 6.3 Invoke Workflow (Wait for Result)
+
+```bash
+# Invoke workflow and wait for completion
+eve workflow invoke $PROJECT_ID manual-deploy \
+  --input '{"test": true}' \
+  --json
+
+# Expected: Returns job_id, status, and result when complete
+```
+
+## Test 7: Event System
+
+### 7.1 Emit Event via CLI
+
+```bash
+# Emit a manual event
+eve event emit \
+  --project $PROJECT_ID \
+  --type manual.test \
+  --source manual \
+  --json
+
+# Expected: Event created with ID and status
+```
+
+### 7.2 List Events
+
+```bash
+# List recent events
+eve event list --project $PROJECT_ID --json
+
+# Expected: Shows events including the one just emitted
+```
+
+### 7.3 Event-Triggered Pipeline
+
+If the manifest has a pipeline with `trigger.system.event`:
+
+```bash
+# Emit an event that triggers a pipeline
+eve event emit \
+  --project $PROJECT_ID \
+  --type job.failed \
+  --source system \
+  --json
+
+# Check if pipeline was triggered
+eve run list $PROJECT_ID --json
+```
+
+## Test 8: Git Controls
+
+Tests job-level git configuration.
+
+```bash
+# Create a job with git controls
+eve job create \
+  --project $PROJECT_ID \
+  --title "Test git controls" \
+  --description "Make a small change and commit it" \
+  --git '{"branch": "test-git-controls", "create_branch": "always", "commit": "auto"}' \
+  --json
+
+# Follow the job
+eve job follow <job_id>
+
+# Expected: Job creates branch, makes changes, commits them
+```
+
+## Test 9: Remediation Pipeline (Event-Triggered)
+
+The remediation pipeline triggers on job failures.
+
+```bash
+# 1. Create a job that will fail
+eve job create \
+  --project $PROJECT_ID \
+  --title "Intentional failure" \
+  --description "Exit with an error to test remediation" \
+  --json
+
+# 2. Wait for it to fail
+eve job wait <job_id> --timeout 120
+
+# 3. Check if remediation pipeline was triggered
+eve event list --project $PROJECT_ID --type job.failed --json
+eve run list $PROJECT_ID --json
+
+# Expected: A remediation pipeline run should be created
+```
+
+## Cleanup
+
+```bash
+# Cancel any running jobs
+eve job list --project $PROJECT_ID --phase active
+eve job cancel <job_ids>
+
+# Optionally delete test project
+# eve project delete $PROJECT_ID
+```
+
+## Troubleshooting
+
+### Job stuck in "active" phase
+
+```bash
+# Check runner pods
+kubectl get pods -n eve | grep runner
+
+# Check job logs
+eve job logs <job_id>
+
+# Follow job output
+eve job follow <job_id>
+```
+
+### Permission errors
+
+```bash
+# Verify auth status
+eve auth status --json
+
+# Re-authenticate if needed
+eve auth login
+```
+
+### Pipeline not triggering
+
+```bash
+# Check manifest is synced
+eve project sync
+
+# Verify pipeline definition
+eve pipeline show $PROJECT_ID <pipeline_name> --json
+
+# Check event was emitted
+eve event list --project $PROJECT_ID --json
+```
+
+### Harness errors ("only prompt commands supported")
+
+This error occurred with `permission: 'default'` and has been fixed.
+Jobs now default to `permission: 'yolo'` which works in streaming mode.
+
+If you see this error:
+1. Ensure you're running the latest stack: `./bin/eh k8s deploy`
+2. Check the job's permission policy: `eve job show <id> --json`

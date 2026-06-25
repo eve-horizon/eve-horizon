@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: supabase-auth
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: supabase-auth
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: eve-supabase-auth-cors@kubernetescrd
+spec:
+  rules:
+    - host: auth.eve.lvh.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: supabase-auth
+                port:
+                  number: 9999

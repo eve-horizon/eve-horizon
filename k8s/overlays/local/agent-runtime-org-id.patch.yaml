@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: eve-agent-runtime
+  namespace: eve
+spec:
+  template:
+    spec:
+      serviceAccountName: eve-worker
+      containers:
+        - name: agent-runtime
+          env:
+            - name: AGENT_RUNTIME_MULTI_ORG
+              value: "true"
+            - name: EVE_AGENT_RUNTIME_EXECUTION_MODE
+              value: inline
+            - name: EVE_AGENT_CLI_PATH
+              value: /app/packages/eve-agent-cli/bin/eve-agent-cli.js
+            - name: EVE_RUNNER_IMAGE
+              value: eve-horizon/worker:local
+            - name: EVE_RUNNER_SERVICE_ACCOUNT
+              value: eve-worker
+            - name: EVE_TOOLCHAIN_IMAGE_PREFIX
+              value: "eve-registry.eve.svc.cluster.local:5000/eve-horizon/toolchain-"
+            - name: EVE_TOOLCHAIN_IMAGE_TAG
+              value: "local"
+            - name: EVE_TOOLCHAIN_REGISTRY_INSECURE
+              value: "true"

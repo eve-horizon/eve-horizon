@@ -1,0 +1,7 @@
+project: proj_test123
+
+defaults:
+  env:
+    NODE_ENV: production
+    API_PORT: "3000"
+    LOG_LEVEL: info

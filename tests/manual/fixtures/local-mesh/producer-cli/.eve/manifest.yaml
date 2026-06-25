@@ -1,0 +1,33 @@
+schema: eve/compose/v2
+project: pcli
+registry: none
+
+services:
+  api:
+    image: traefik/whoami:v1.10
+    ports: [80]
+    x-eve:
+      api_spec:
+        type: openapi
+        spec_path: ./openapi.yaml
+        auth: eve
+      cli:
+        name: obs
+        bin: obs
+        image: ghcr.io/example/local-mesh-obs-cli:latest
+
+environments:
+  local: {}
+
+x-eve:
+  app_links:
+    exports:
+      apis:
+        observation:
+          service: api
+          cli: obs
+          scopes: [observations:read]
+          consumers:
+            - project: ccli
+              scopes: [observations:read]
+              envs: [local]

@@ -1,0 +1,23 @@
+schema: eve/compose/v2
+project: ccli
+registry: none
+
+services:
+  api:
+    image: praqma/network-multitool:latest
+    ports: [80]
+
+environments:
+  local: {}
+
+x-eve:
+  app_links:
+    consumes:
+      observation:
+        project: pcli
+        api: observation
+        environment: same
+        scopes: [observations:read]
+        inject_into:
+          services: [api]
+          jobs: true

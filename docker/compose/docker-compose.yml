@@ -1,0 +1,309 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${EVE_DB_USER:-eve}
+      POSTGRES_PASSWORD: ${EVE_DB_PASSWORD:-eve}
+      POSTGRES_DB: ${EVE_DB_NAME:-eve}
+    ports:
+      - "${EVE_DB_PORT:-4703}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${EVE_DB_USER:-eve}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - path: ../../.env
+        required: false
+      - path: ../../system-secrets.env.local
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+      API_PORT: ${EVE_API_PORT:-4701}
+      # Worker URL for environment deployments
+      WORKER_URL: http://worker:${EVE_WORKER_PORT:-4711}
+      EVE_WORKER_URLS: default-worker=http://worker:${EVE_WORKER_PORT:-4711}
+      # Auth signing secret (used by integration docker runs via .env.test)
+      EVE_AUTH_PRIVATE_KEY: ${EVE_AUTH_PRIVATE_KEY:-}
+      EVE_AUTH_PUBLIC_KEY: ${EVE_AUTH_PUBLIC_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+      EVE_BOOTSTRAP_TOKEN: ${EVE_BOOTSTRAP_TOKEN:-}
+      # Secrets encryption (required for API secrets feature)
+      EVE_SECRETS_MASTER_KEY: ${EVE_SECRETS_MASTER_KEY:-}
+      EVE_INTERNAL_API_KEY: ${EVE_INTERNAL_API_KEY:-}
+    ports:
+      - "${EVE_API_PORT:-4701}:${EVE_API_PORT:-4701}"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: apps/orchestrator/Dockerfile
+    volumes:
+      - ../../workspaces:/opt/eve/workspaces
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+      ORCHESTRATOR_PORT: ${EVE_ORCHESTRATOR_PORT:-4702}
+      WORKER_URL: http://worker:${EVE_WORKER_PORT:-4711}
+      EVE_WORKER_URLS: default-worker=http://worker:${EVE_WORKER_PORT:-4711},playwright-worker=http://worker-playwright:${EVE_WORKER_PLAYWRIGHT_PORT:-4721}
+      EVE_AGENT_RUNTIME_URL: http://agent-runtime:${EVE_AGENT_RUNTIME_PORT:-4812}
+      EVE_AGENT_RUNTIME_URLS: agent-runtime=http://agent-runtime:${EVE_AGENT_RUNTIME_PORT:-4812}
+      WORKSPACE_ROOT: /opt/eve/workspaces
+      ORCH_LOOP_INTERVAL_MS: ${ORCH_LOOP_INTERVAL_MS:-1000}
+      EVE_WORKER_POLL_INTERVAL_MS: ${EVE_WORKER_POLL_INTERVAL_MS:-1000}
+      EVE_AGENT_RUNTIME_POLL_INTERVAL_MS: ${EVE_AGENT_RUNTIME_POLL_INTERVAL_MS:-200}
+    ports:
+      - "${EVE_ORCHESTRATOR_PORT:-4702}:${EVE_ORCHESTRATOR_PORT:-4702}"
+    depends_on:
+      db:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: apps/worker/Dockerfile
+      target: ${EVE_WORKER_VARIANT:-full}
+    env_file:
+      - path: ../../.env
+        required: false
+      - path: ../../system-secrets.env.local
+        required: false
+    volumes:
+      - ../../workspaces:/opt/eve/workspaces
+      - org_fs:/org
+    ports:
+      - "${EVE_WORKER_PORT:-4711}:${EVE_WORKER_PORT:-4711}"
+    environment:
+      WORKSPACE_ROOT: /opt/eve/workspaces
+      EVE_API_URL: http://api:${EVE_API_PORT:-4701}
+      DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+      WORKER_PORT: ${EVE_WORKER_PORT:-4711}
+      # Harness API keys - passed from shell env or system-secrets.env.local via env_file
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      Z_AI_API_KEY: ${Z_AI_API_KEY:-}
+      # Claude OAuth - from 'eh auth extract --save' -> system-secrets.env.local
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Codex/Code auth - base64 encoded JSON from system-secrets.env.local
+      CODEX_AUTH_JSON_B64: ${CODEX_AUTH_JSON_B64:-}
+      EVE_ORG_FS_ROOT: /org
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${EVE_WORKER_PORT:-4711}/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  agent-runtime:
+    build:
+      context: ../..
+      dockerfile: apps/agent-runtime/Dockerfile
+    env_file:
+      - path: ../../.env
+        required: false
+      - path: ../../system-secrets.env.local
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+      AGENT_RUNTIME_PORT: ${EVE_AGENT_RUNTIME_PORT:-4812}
+      EVE_API_URL: http://api:${EVE_API_PORT:-4701}
+      EVE_INTERNAL_API_KEY: ${EVE_INTERNAL_API_KEY:-}
+      EVE_ORG_ID: ${EVE_ORG_ID:-}
+      AGENT_RUNTIME_POD_NAME: agent-runtime
+      AGENT_RUNTIME_WORKER_URL: http://worker:${EVE_WORKER_PORT:-4711}
+      EVE_ORG_FS_ROOT: /org
+    volumes:
+      - org_fs:/org
+    ports:
+      - "${EVE_AGENT_RUNTIME_PORT:-4812}:${EVE_AGENT_RUNTIME_PORT:-4812}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${EVE_AGENT_RUNTIME_PORT:-4812}/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  # ============================================================================
+  # Optional Worker Variants for Local Testing
+  # ============================================================================
+  # Uncomment any of the following services to test language-specific workers.
+  # Each variant uses a different Dockerfile target and unique port mapping.
+  #
+  # Usage:
+  #   1. Uncomment the desired worker variant(s) below
+  #   2. Add the variant to EVE_WORKER_URLS in the orchestrator environment
+  #      Example: EVE_WORKER_URLS=default-worker=http://worker:4711,python-worker=http://worker-python:4712
+  #   3. Run: docker compose -f docker/compose/docker-compose.yml up --build
+  #
+  # Note: All variants share the same environment variables and volumes as the main worker
+  # ============================================================================
+
+  # Optional: Python worker variant (uncomment to enable)
+  # worker-python:
+  #   build:
+  #     context: ../..
+  #     dockerfile: apps/worker/Dockerfile
+  #     target: python
+  #   env_file:
+  #     - path: ../../.env
+  #       required: false
+  #     - path: ../../system-secrets.env.local
+  #       required: false
+  #   volumes:
+  #     - ../../workspaces:/opt/eve/workspaces
+  #   ports:
+  #     - "4712:${EVE_WORKER_PORT:-4711}"
+  #   environment:
+  #     WORKER_TYPE: python-worker
+  #     WORKSPACE_ROOT: /opt/eve/workspaces
+  #     EVE_API_URL: http://api:${EVE_API_PORT:-4701}
+  #     DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+  #     WORKER_PORT: ${EVE_WORKER_PORT:-4711}
+  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  #     Z_AI_API_KEY: ${Z_AI_API_KEY:-}
+  #     CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+  #     CODEX_AUTH_JSON_B64: ${CODEX_AUTH_JSON_B64:-}
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:${EVE_WORKER_PORT:-4711}/health || exit 1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 30s
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     orchestrator:
+  #       condition: service_started
+
+  # Optional: Rust worker variant (uncomment to enable)
+  # worker-rust:
+  #   build:
+  #     context: ../..
+  #     dockerfile: apps/worker/Dockerfile
+  #     target: rust
+  #   env_file:
+  #     - path: ../../.env
+  #       required: false
+  #     - path: ../../system-secrets.env.local
+  #       required: false
+  #   volumes:
+  #     - ../../workspaces:/opt/eve/workspaces
+  #   ports:
+  #     - "4713:${EVE_WORKER_PORT:-4711}"
+  #   environment:
+  #     WORKER_TYPE: rust-worker
+  #     WORKSPACE_ROOT: /opt/eve/workspaces
+  #     EVE_API_URL: http://api:${EVE_API_PORT:-4701}
+  #     DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+  #     WORKER_PORT: ${EVE_WORKER_PORT:-4711}
+  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  #     Z_AI_API_KEY: ${Z_AI_API_KEY:-}
+  #     CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+  #     CODEX_AUTH_JSON_B64: ${CODEX_AUTH_JSON_B64:-}
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:${EVE_WORKER_PORT:-4711}/health || exit 1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 30s
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     orchestrator:
+  #       condition: service_started
+
+  # Optional: Java worker variant (uncomment to enable)
+  # worker-java:
+  #   build:
+  #     context: ../..
+  #     dockerfile: apps/worker/Dockerfile
+  #     target: java
+  #   env_file:
+  #     - path: ../../.env
+  #       required: false
+  #     - path: ../../system-secrets.env.local
+  #       required: false
+  #   volumes:
+  #     - ../../workspaces:/opt/eve/workspaces
+  #   ports:
+  #     - "4714:${EVE_WORKER_PORT:-4711}"
+  #   environment:
+  #     WORKER_TYPE: java-worker
+  #     WORKSPACE_ROOT: /opt/eve/workspaces
+  #     EVE_API_URL: http://api:${EVE_API_PORT:-4701}
+  #     DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+  #     WORKER_PORT: ${EVE_WORKER_PORT:-4711}
+  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  #     Z_AI_API_KEY: ${Z_AI_API_KEY:-}
+  #     CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+  #     CODEX_AUTH_JSON_B64: ${CODEX_AUTH_JSON_B64:-}
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:${EVE_WORKER_PORT:-4711}/health || exit 1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 30s
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     orchestrator:
+  #       condition: service_started
+
+  # Optional: Kotlin worker variant (uncomment to enable)
+  # worker-kotlin:
+  #   build:
+  #     context: ../..
+  #     dockerfile: apps/worker/Dockerfile
+  #     target: kotlin
+  #   env_file:
+  #     - path: ../../.env
+  #       required: false
+  #     - path: ../../system-secrets.env.local
+  #       required: false
+  #   volumes:
+  #     - ../../workspaces:/opt/eve/workspaces
+  #   ports:
+  #     - "4715:${EVE_WORKER_PORT:-4711}"
+  #   environment:
+  #     WORKER_TYPE: kotlin-worker
+  #     WORKSPACE_ROOT: /opt/eve/workspaces
+  #     EVE_API_URL: http://api:${EVE_API_PORT:-4701}
+  #     DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
+  #     WORKER_PORT: ${EVE_WORKER_PORT:-4711}
+  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  #     Z_AI_API_KEY: ${Z_AI_API_KEY:-}
+  #     CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+  #     CODEX_AUTH_JSON_B64: ${CODEX_AUTH_JSON_B64:-}
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:${EVE_WORKER_PORT:-4711}/health || exit 1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 30s
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     orchestrator:
+  #       condition: service_started
+
+volumes:
+  db_data:
+  org_fs:

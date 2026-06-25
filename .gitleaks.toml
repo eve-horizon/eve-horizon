@@ -1,0 +1,26 @@
+# gitleaks configuration for Eve Horizon
+# Extends the default ruleset; adds allowlists for known test fixtures and
+# documentation placeholders so the pre-publish secret scan stays signal-rich.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist test fixtures, examples, and documentation placeholders"
+
+paths = [
+  '''\.env\.test$''',
+  '''.*\.example$''',
+  '''.*\.example\..*''',
+  '''manual-tests\.secrets\.example$''',
+]
+
+regexes = [
+  # Test-only auth keypair and dummy secrets in .env.test
+  '''test-master-key''',
+  '''test-supabase-jwt-secret''',
+  # Redacted/placeholder token shapes used in docs
+  '''xoxb-REDACTED.*''',
+  '''sk-ant-(api|oat)[0-9]*-?\.\.\.''',
+  '''ghp_(your|xxx|test)''',
+]

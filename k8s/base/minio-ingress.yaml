@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eve-minio
+  namespace: eve
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  rules:
+    - host: storage.eve.lvh.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eve-minio
+                port:
+                  number: 9000
+    - host: storage-console.eve.lvh.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eve-minio
+                port:
+                  number: 9001

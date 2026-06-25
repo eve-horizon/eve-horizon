@@ -1,0 +1,48 @@
+# Extends docker-compose.yml for local dev
+# Use: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  api:
+    build:
+      target: development
+    volumes:
+      - ../../apps/api/src:/app/apps/api/src:ro
+      - ../../packages/shared/src:/app/packages/shared/src:ro
+      - ../../packages/db/src:/app/packages/db/src:ro
+    command: ["pnpm", "--filter", "@eve/api", "dev"]
+
+  orchestrator:
+    build:
+      target: development
+    environment:
+      WORKER_URL: http://worker:4749
+      EVE_WORKER_URLS: default-worker=http://worker:4749,playwright-worker=http://worker-playwright:4751
+    volumes:
+      - ../../apps/orchestrator/src:/app/apps/orchestrator/src:ro
+
+  worker:
+    build:
+      target: development
+    volumes:
+      - ../../apps/worker/src:/app/apps/worker/src:ro
+      - ../../packages/shared/src:/app/packages/shared/src:ro
+      - ../../packages/db/src:/app/packages/db/src:ro
+      - ../../private-eve-dev-skills:/opt/eve/skill-packs:ro
+      - ../../workspaces:/opt/eve/workspaces
+      - ../../tests/fixtures/repos:/fixtures:ro
+    command: ["pnpm", "--filter", "@eve/worker", "start:dev"]
+
+  agent-runtime:
+    build:
+      target: development
+    volumes:
+      - ../../apps/agent-runtime/src:/app/apps/agent-runtime/src:ro
+      - ../../packages/shared/src:/app/packages/shared/src:ro
+      - ../../packages/db/src:/app/packages/db/src:ro
+      - ../../workspaces:/opt/eve/workspaces
+      - ../../org-fs:/org
+    environment:
+      EVE_ORG_ID: ${EVE_ORG_ID:-}
+      AGENT_RUNTIME_POD_NAME: agent-runtime
+      EVE_ORG_FS_ROOT: /org
+    command: ["pnpm", "--filter", "@eve/agent-runtime", "dev"]

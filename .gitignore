@@ -1,0 +1,124 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.test
+secrets.env
+system-secrets.env.local
+manual-tests.secrets
+*.pem
+*.key
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log
+
+# Test coverage
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# Docker
+docker/compose/.env
+docker/compose/volumes/
+
+# Job workspaces (runtime)
+workspaces/
+.workspaces/
+
+# Eve Horizon instance state
+.eve-mode
+.eve-local-pids
+.eve-horizon.yaml
+
+# Eve Horizon runtime
+.eve/
+!.eve/
+!.eve/services.yaml
+!.eve/hooks/
+!.eve/hooks/*.sh
+!tests/fixtures/repos/**/.eve/
+.eve/profile.yaml
+.eve-harness/
+.eve-horizon.yaml
+
+# Internal-only dev skills (not published)
+private-eve-dev-skills/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Vitest
+.vitest/
+
+# Turbo
+.turbo/
+
+# Package manager locks (keep pnpm-lock.yaml)
+package-lock.json
+yarn.lock
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Claude Code and agent artifacts
+.claude/
+.agent/
+.agents/
+.claude/skills/
+.code/
+
+.pi/
+
+# Terraform
+terraform/staging/*.tfvars
+terraform/staging/.terraform/
+terraform/staging/*.tfstate*
+terraform/staging/.terraform.lock.hcl
+
+# Dolt database files (added by bd init)
+.dolt/
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
+
+# graphify — local knowledge-graph tooling, fully regeneratable
+graphify-out/
+.graphify_*
+
+# Beads / Dolt files (added by bd init)
+.beads/proxieddb/

@@ -1,0 +1,1 @@
+Use the e2e-core__verify skill to confirm skill packs are available.

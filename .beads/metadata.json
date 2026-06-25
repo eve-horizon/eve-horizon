@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "eve_horizon",
+  "project_id": "ec87245f-09ee-4d70-8684-1e44f4b43238"
+}

@@ -1,0 +1,10 @@
+services:
+  - name: db
+    image: postgres:16-alpine
+    env:
+      POSTGRES_USER: eve
+      POSTGRES_PASSWORD: eve
+      POSTGRES_DB: eve
+    ready: pg_isready -U eve
+    provides:
+      DATABASE_URL: postgres://eve:eve@$HOST:$PORT/eve

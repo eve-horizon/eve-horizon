@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-api
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eve-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eve-api
+    spec:
+      serviceAccountName: eve-api
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          securityContext:
+            allowPrivilegeEscalation: false
+          image: eve-horizon/api:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            # Mount all secrets from eve-app (auth tokens, API keys, etc.)
+            - secretRef:
+                name: eve-app
+          env:
+            - name: DATABASE_URL
+              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+            - name: API_PORT
+              value: "4701"
+            - name: WORKER_URL
+              value: http://eve-worker.eve.svc.cluster.local:4749
+            # --- Web Auth (Supabase) ---
+            - name: SUPABASE_AUTH_URL
+              value: "http://supabase-auth.eve.svc.cluster.local:9999"
+            - name: SUPABASE_AUTH_EXTERNAL_URL
+              value: "http://auth.eve.lvh.me"
+            - name: EVE_SSO_URL
+              value: "http://sso.eve.lvh.me"
+            - name: EVE_PUBLIC_API_URL
+              value: "http://api.eve.lvh.me"
+            # --- SMTP (Mailpit locally; staging overrides in infra repo) ---
+            - name: GOTRUE_SMTP_HOST
+              value: "mailpit.eve.svc.cluster.local"
+            - name: GOTRUE_SMTP_PORT
+              value: "1025"
+            - name: GOTRUE_SMTP_ADMIN_EMAIL
+              value: "noreply@eve.local"
+            - name: MAILER_FROM_ADDRESS
+              value: "noreply@eve.local"
+            - name: EVE_GATEWAY_URL
+              value: "http://eve-gateway.eve.svc.cluster.local:4820"
+            - name: EVE_DEFAULT_DOMAIN
+              value: lvh.me
+            # --- Object Storage ---
+            - name: EVE_STORAGE_BACKEND
+              value: "minio"
+            - name: EVE_STORAGE_ENDPOINT
+              value: "http://eve-minio.eve.svc.cluster.local:9000"
+            - name: EVE_STORAGE_PUBLIC_ENDPOINT
+              value: "http://storage.eve.lvh.me"
+            - name: EVE_STORAGE_REGION
+              value: "us-east-1"
+            - name: EVE_STORAGE_ORG_BUCKET_PREFIX
+              value: "eve-org"
+            - name: EVE_STORAGE_INTERNAL_BUCKET
+              value: "eve-internal"
+            - name: EVE_STORAGE_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: access-key
+            - name: EVE_STORAGE_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: secret-key
+          ports:
+            - name: http
+              containerPort: 4701
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10

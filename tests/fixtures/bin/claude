@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Stub harness for e2e testing - outputs expected marker
+# Real harness uses OpenSkills synced to agent config directory
+
+harness="claude"
+timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+echo "{\"type\":\"event\",\"timestamp\":\"$timestamp\",\"content\":{\"message\":\"skill-pack-check core_pack=e2e-core repo_pack=e2e-repo\",\"harness\":\"$harness\"}}"
+echo "{\"type\":\"assistant\",\"model\":\"claude-opus-4-5-20250929\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello from stub claude\"}],\"usage\":{\"input_tokens\":900,\"output_tokens\":210,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\"reasoning_tokens\":0}}}"

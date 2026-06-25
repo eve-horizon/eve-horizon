@@ -1,0 +1,5 @@
+FROM alpine:3.20
+RUN apk add --no-cache curl
+RUN mkdir -p /cli/bin
+COPY bin/obs /cli/bin/obs
+RUN chmod +x /cli/bin/obs

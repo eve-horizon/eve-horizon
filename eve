@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Shim to run the local @eve/cli package during development
+# Automatically configures API URL from .eve-horizon.yaml if present
+# For dev/ops helpers (docker, db, test), use ./bin/eh instead
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source configuration to get EVE_API_PORT
+source "$SCRIPT_DIR/bin/eh-commands/_config.sh" 2>/dev/null || {
+  # Fallback defaults if config not found
+  EVE_API_PORT="${EVE_API_PORT:-4701}"
+}
+
+# Export API URL for CLI if not already set
+export EVE_API_URL="${EVE_API_URL:-http://localhost:$EVE_API_PORT}"
+
+exec node "$SCRIPT_DIR/packages/cli/bin/eve.js" "$@"

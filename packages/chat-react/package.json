@@ -1,0 +1,34 @@
+{
+  "name": "@eve-horizon/chat-react",
+  "version": "0.0.1",
+  "description": "React hooks and panes for Eve embedded app conversations",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eve-horizon/eve-horizon.git",
+    "directory": "packages/chat-react"
+  },
+  "keywords": ["eve", "chat", "react", "agents"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@eve-horizon/chat": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "react": "^18.2.0",
+    "typescript": "^5.7.0"
+  }
+}

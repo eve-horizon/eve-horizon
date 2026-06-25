@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-orchestrator
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: orchestrator
+          env:
+            - name: EVE_MANAGED_DB_RECONCILER_ENABLED
+              value: "true"
+            - name: EVE_MANAGED_DB_LOCAL_SEED
+              value: "true"
+            - name: ORCH_LOOP_INTERVAL_MS
+              value: "1000"
+            - name: EVE_WORKER_POLL_INTERVAL_MS
+              value: "1000"
+            - name: EVE_AGENT_RUNTIME_POLL_INTERVAL_MS
+              value: "200"

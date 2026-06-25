@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eve-sso
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-sso
+spec:
+  rules:
+    - host: sso.eve.lvh.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eve-sso
+                port:
+                  number: 3100

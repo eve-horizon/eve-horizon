@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: eve-gateway
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: eve-gateway
+  ports:
+    - name: http
+      port: 4820
+      targetPort: http

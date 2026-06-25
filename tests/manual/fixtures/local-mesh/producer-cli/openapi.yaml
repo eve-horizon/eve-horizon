@@ -1,0 +1,15 @@
+openapi: 3.0.3
+info:
+  title: Local Mesh Producer CLI
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      responses:
+        "200":
+          description: ok
+  /observations:
+    get:
+      responses:
+        "200":
+          description: observations

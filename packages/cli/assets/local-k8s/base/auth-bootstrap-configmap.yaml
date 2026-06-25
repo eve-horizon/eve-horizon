@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-bootstrap-scripts
+  namespace: eve
+data:
+  bootstrap-auth-role.sh: |
+    #!/bin/sh
+    set -e
+    echo "Bootstrapping auth DB role..."
+
+    # Create or update the eve_auth_admin role with the password from env.
+    # GoTrue auto-creates and manages the 'auth' schema on startup.
+    # This role gets CREATE on the database (needed for schema creation)
+    # but is NOT granted write access to public tables — clean blast radius.
+    psql -v ON_ERROR_STOP=1 <<EOSQL
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'eve_auth_admin') THEN
+        EXECUTE format('CREATE ROLE eve_auth_admin LOGIN PASSWORD %L', '${AUTH_ROLE_PASSWORD}');
+      ELSE
+        EXECUTE format('ALTER ROLE eve_auth_admin PASSWORD %L', '${AUTH_ROLE_PASSWORD}');
+      END IF;
+    END \$\$;
+
+    GRANT CREATE ON DATABASE eve TO eve_auth_admin;
+    -- GoTrue creates a schema_migrations table in public before creating the auth schema.
+    -- It also needs USAGE for cross-schema references.
+    GRANT CREATE, USAGE ON SCHEMA public TO eve_auth_admin;
+
+    -- GoTrue migrations use uuid = text comparisons that need an implicit cast.
+    -- Supabase's custom Postgres has this built in; standard Postgres does not.
+    CREATE OR REPLACE FUNCTION public.uuid_eq_text(uuid, text) RETURNS boolean AS \$fn\$
+      SELECT \$1::text = \$2;
+    \$fn\$ LANGUAGE sql IMMUTABLE;
+    DO \$cast\$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_cast
+        WHERE castsource = 'uuid'::regtype AND casttarget = 'text'::regtype AND castcontext = 'i'
+      ) THEN
+        -- Cannot create implicit casts via SQL, but we can create the function
+        -- GoTrue actually needs the = operator between uuid and text
+        NULL;
+      END IF;
+    END \$cast\$;
+    -- Create a cross-type operator for uuid = text comparisons
+    DROP OPERATOR IF EXISTS = (uuid, text);
+    CREATE OPERATOR = (
+      LEFTARG = uuid,
+      RIGHTARG = text,
+      FUNCTION = public.uuid_eq_text,
+      COMMUTATOR = =
+    );
+
+    -- Pre-create the auth schema owned by eve_auth_admin.
+    -- GoTrue's migrations expect auth.* tables but don't always CREATE SCHEMA first.
+    CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION eve_auth_admin;
+    GRANT ALL ON SCHEMA auth TO eve_auth_admin;
+
+    -- GoTrue migrations reference a 'postgres' role for RLS grants.
+    -- Our DB superuser is 'eve', not 'postgres'. Create a postgres role alias.
+    DO \$pg\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'postgres') THEN
+        CREATE ROLE postgres NOLOGIN;
+      END IF;
+    END \$pg\$;
+    GRANT eve TO postgres;
+    GRANT USAGE ON SCHEMA auth TO postgres;
+    EOSQL
+
+    echo "Auth DB role bootstrapped successfully."

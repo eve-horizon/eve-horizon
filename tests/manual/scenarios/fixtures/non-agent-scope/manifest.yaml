@@ -1,0 +1,93 @@
+# Fixture manifest for scenario 46.
+# Single pipeline `scope-test` with five steps that exercise the
+# script-executor and action-executor token-permission enforcement.
+#
+# Each step declares its own `permissions:` list. The script/action
+# executors mint EVE_JOB_TOKEN with those permissions, write
+# ~/.eve/credentials.json, and the bash command tries an `eve` API call
+# that should be allowed (positive cases) or denied (negative cases).
+#
+# This manifest replaces the example repo's manifest at copy time so the
+# project sync only registers what the scenario needs.
+
+schema: eve/compose/v1
+project: scope-test
+
+services: {}
+
+environments:
+  test: {}
+
+pipelines:
+  scope-test:
+    steps:
+      # --- Script-shape cases -----------------------------------------------
+
+      - name: positive-script-jobs
+        # jobs:read is declared → `eve job current` (which calls GET /jobs/<id>)
+        # is allowed. Exit 0 = pass.
+        permissions: [jobs:read]
+        script:
+          run: |
+            set -e
+            eve job current --json > /tmp/out.json
+            test -s /tmp/out.json
+
+      - name: negative-perm-script-jobs
+        # jobs:read is NOT declared → the same call is denied with 403.
+        # We invert the exit code so this step exits 0 only when the call fails.
+        permissions: [projects:read]
+        script:
+          run: |
+            set +e
+            eve job current --json > /tmp/out 2>&1
+            CODE=$?
+            cat /tmp/out
+            if [ $CODE -eq 0 ]; then
+              echo "EXPECTED FAILURE BUT GOT SUCCESS"
+              exit 1
+            fi
+            grep -qE "(403|forbidden|missing.*permission)" /tmp/out || {
+              echo "EXPECTED 403/forbidden in output"
+              exit 1
+            }
+            echo "Got expected denial"
+
+      - name: backcompat-script-no-decl
+        # No permissions: declared → falls back to DEFAULT_SCRIPT_JOB_PERMISSIONS,
+        # which includes jobs:read. Same call as positive-script-jobs.
+        script:
+          run: |
+            set -e
+            eve job current --json > /tmp/out.json
+            test -s /tmp/out.json
+
+      # --- action-run-shape cases -------------------------------------------
+
+      - name: positive-action-run-jobs
+        permissions: [jobs:read]
+        action:
+          type: run
+          command: |
+            set -e
+            eve job current --json > /tmp/out.json
+            test -s /tmp/out.json
+
+      - name: negative-perm-action-run-jobs
+        permissions: [projects:read]
+        action:
+          type: run
+          command: |
+            set +e
+            eve job current --json > /tmp/out 2>&1
+            CODE=$?
+            cat /tmp/out
+            if [ $CODE -eq 0 ]; then
+              echo "EXPECTED FAILURE BUT GOT SUCCESS"
+              exit 1
+            fi
+            grep -qE "(403|forbidden|missing.*permission)" /tmp/out || {
+              echo "EXPECTED 403/forbidden in output"
+              exit 1
+            }
+            echo "Got expected denial"

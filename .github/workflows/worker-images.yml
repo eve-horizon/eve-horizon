@@ -1,0 +1,137 @@
+name: Build and Publish Worker Images
+
+on:
+  push:
+    tags:
+      - 'worker-images/v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ECR_REGISTRY: public.ecr.aws/w7c4v0w3
+  ECR_NAMESPACE: ${{ vars.ECR_NAMESPACE || 'eve-horizon' }}
+  AWS_ECR_REGION: ${{ vars.AWS_ECR_REGION || 'eu-west-1' }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: base
+            image: worker-base
+            variant_tag: ''
+          - target: python
+            image: worker-python
+            variant_tag: '-py3.11'
+          - target: rust
+            image: worker-rust
+            variant_tag: '-rust1.75'
+          - target: java
+            image: worker-java
+            variant_tag: '-jdk21'
+          - target: kotlin
+            image: worker-kotlin
+            variant_tag: '-kotlin2.0-jdk21'
+          - target: full
+            image: worker-full
+            variant_tag: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials for ECR
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_ECR_REGION }}
+
+      - name: Login to Amazon ECR (public)
+        run: |
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/worker-images/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/worker-images/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "has_version=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_version=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Get build time
+        id: time
+        run: echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Ensure ECR repository exists
+        env:
+          ECR_NAMESPACE: ${{ env.ECR_NAMESPACE }}
+          ECR_IMAGE: ${{ matrix.image }}
+        run: |
+          ECR_REPOSITORY="${ECR_NAMESPACE}/${ECR_IMAGE}"
+          if ! aws ecr-public describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-1 >/dev/null 2>&1; then
+            aws ecr-public create-repository --repository-name "$ECR_REPOSITORY" --region us-east-1 >/dev/null
+          fi
+
+      - name: Build tags
+        id: tags
+        run: |
+          ECR_IMAGE_NAME="${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.image }}"
+
+          VERSION="${{ steps.version.outputs.version }}"
+          HAS_VERSION="${{ steps.version.outputs.has_version }}"
+          VARIANT_TAG="${{ matrix.variant_tag }}"
+          SHORT_SHA="${{ steps.sha.outputs.short }}"
+          declare -a TAGS
+
+          add_tag() {
+            local candidate="$1"
+            for existing in "${TAGS[@]}"; do
+              if [[ "$existing" == "$candidate" ]]; then
+                return
+              fi
+            done
+            TAGS+=("$candidate")
+          }
+
+          if [[ "$HAS_VERSION" == "true" ]]; then
+            add_tag "${ECR_IMAGE_NAME}:${VERSION}${VARIANT_TAG}"
+            if [[ -z "$VARIANT_TAG" ]]; then
+              add_tag "${ECR_IMAGE_NAME}:${VERSION}"
+            fi
+          fi
+          add_tag "${ECR_IMAGE_NAME}:sha-${SHORT_SHA}"
+
+          {
+            echo "value<<EOF"
+            printf '%s\n' "${TAGS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./apps/worker/Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.tags.outputs.value }}
+          build-args: |
+            HARNESS_INSTALL_CACHE_BUST=${{ steps.time.outputs.time }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/worker-cache:${{ matrix.target }}
+          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/worker-cache:${{ matrix.target }},mode=max
+          platforms: linux/amd64,linux/arm64

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eve-tunnels
+  labels:
+    app.kubernetes.io/name: eve-horizon
+    app.kubernetes.io/component: private-endpoints

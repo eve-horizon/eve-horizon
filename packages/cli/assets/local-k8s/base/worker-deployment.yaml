@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-worker
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eve-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eve-worker
+    spec:
+      serviceAccountName: eve-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          securityContext:
+            allowPrivilegeEscalation: false
+          image: eve-horizon/worker:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            # Mount all secrets from eve-app (auth tokens, etc.)
+            - secretRef:
+                name: eve-app
+          env:
+            - name: EVE_RUNTIME
+              value: k8s
+            - name: EVE_K8S_NAMESPACE
+              value: eve
+            - name: EVE_BUILDKIT_ADDR
+              value: tcp://buildkitd.eve.svc:1234
+            # Image used for spawning runner pods in the Kubernetes cluster
+            - name: EVE_RUNNER_IMAGE
+              value: eve-horizon/worker:local
+            - name: EVE_RUNNER_SERVICE_ACCOUNT
+              value: eve-worker
+            - name: EVE_API_URL
+              value: http://eve-api:4701
+            - name: EVE_PUBLIC_API_URL
+              value: http://api.eve.lvh.me
+            - name: EVE_SSO_URL
+              value: http://sso.eve.lvh.me
+            - name: DATABASE_URL
+              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+            - name: WORKER_PORT
+              value: "4749"
+            - name: EVE_DEFAULT_DOMAIN
+              value: lvh.me
+            - name: EVE_ORG_FS_ROOT
+              value: /org
+            - name: EVE_TOOLCHAIN_ROOT
+              value: /opt/eve/toolchains
+            - name: EVE_TOOLCHAIN_IMAGE_PREFIX
+              value: eve-horizon/toolchain-
+            - name: EVE_TOOLCHAIN_IMAGE_TAG
+              value: local
+          ports:
+            - name: http
+              containerPort: 4749
+          volumeMounts:
+            - name: toolchains
+              mountPath: /opt/eve/toolchains
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      volumes:
+        - name: toolchains
+          emptyDir: {}
