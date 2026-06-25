@@ -387,13 +387,15 @@ EOF
     if [[ -n "$EVE_STAGING_OWNER_REPO" ]]; then
       echo "  Owner repo: $EVE_STAGING_OWNER_REPO"
     fi
-    echo "  You CAN: publish release-v* artifacts and operate staging from the deployment instance repo."
+    echo "  You CAN: operate staging from the deployment instance repo."
+    echo "  Source repo release-v* tags publish artifacts only; rollouts are explicit infra-repo work."
   else
     echo -e "${YELLOW}IMPORTANT: You are NOT the Staging owner.${NC}"
     if [[ -n "$EVE_STAGING_OWNER_REPO" ]]; then
       echo "  Owner repo: $EVE_STAGING_OWNER_REPO"
     fi
-    echo "  Avoid release artifact publishing or staging operations without approval."
+    echo "  Do not operate staging from this checkout without approval."
+    echo "  Source repo release artifact publishing is separate from staging ownership."
     echo "  To become owner: ./bin/eh configure --staging-owner"
   fi
   echo ""
