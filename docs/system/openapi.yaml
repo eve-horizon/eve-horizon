@@ -8326,6 +8326,24 @@ paths:
       security: *a82
       summary: Aggregated usage summary for an org (admin)
       tags: *a83
+  /admin/cost/apps:
+    get:
+      operationId: CostController_getAppCosts
+      parameters:
+        - name: month
+          required: false
+          in: query
+          description: UTC month in YYYY-MM format
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      security: &a84
+        - bearer: []
+      summary: Per-app cost report across all orgs (admin)
+      tags: &a85
+        - billing
   /admin/cost/environments:
     get:
       operationId: CostController_listEnvironmentCosts
@@ -8345,11 +8363,9 @@ paths:
       responses:
         "200":
           description: ""
-      security: &a84
-        - bearer: []
+      security: *a84
       summary: List environment cost estimates (admin)
-      tags: &a85
-        - billing
+      tags: *a85
   /admin/cost/cloud:
     get:
       operationId: CostController_getCloudCost
@@ -8390,6 +8406,29 @@ paths:
       security: *a84
       summary: Get bill-backed cloud cost snapshot (admin)
       tags: *a85
+  /orgs/{org_id}/cost/apps:
+    get:
+      operationId: OrgCostController_getAppCosts
+      parameters:
+        - name: org_id
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: month
+          required: false
+          in: query
+          description: UTC month in YYYY-MM format
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      security:
+        - bearer: []
+      summary: Per-app cost report for an org (cloud allocation + LLM spend)
+      tags:
+        - billing
   /internal/registry/token:
     post:
       operationId: RegistryTokenController_issueToken

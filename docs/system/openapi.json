@@ -14418,6 +14418,36 @@
         ]
       }
     },
+    "/admin/cost/apps": {
+      "get": {
+        "operationId": "CostController_getAppCosts",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "UTC month in YYYY-MM format",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Per-app cost report across all orgs (admin)",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/admin/cost/environments": {
       "get": {
         "operationId": "CostController_listEnvironmentCosts",
@@ -14518,6 +14548,44 @@
           }
         ],
         "summary": "Get bill-backed cloud cost snapshot (admin)",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/orgs/{org_id}/cost/apps": {
+      "get": {
+        "operationId": "OrgCostController_getAppCosts",
+        "parameters": [
+          {
+            "name": "org_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "UTC month in YYYY-MM format",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Per-app cost report for an org (cloud allocation + LLM spend)",
         "tags": [
           "billing"
         ]
