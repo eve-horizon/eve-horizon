@@ -42,7 +42,7 @@ show_help() {
   echo ""
   echo "Staging Ownership:"
   echo "  Only one repo should be responsible for staging operations."
-  echo "  Non-owners should avoid tagging release-v* or running staging kubectl."
+  echo "  Non-owners should avoid release artifact publishing or staging operations."
   echo ""
   echo "Examples:"
   echo "  eh configure                    # Interactive setup"
@@ -84,7 +84,7 @@ staging_kubeconfig: $staging_kubeconfig
 # Staging Ownership:
 #   Only one repo should have staging_owner: true
 #   This designates which repo is responsible for staging operations
-#   Non-owners should avoid tagging release-v* or running staging kubectl
+#   Non-owners should avoid release artifact publishing or staging operations
 EOF
 
   echo -e "${GREEN}Configuration saved to .eve-horizon.yaml${NC}"
@@ -196,7 +196,7 @@ if [[ "$NON_INTERACTIVE" == "false" && -z "$ARG_INSTANCE" && -z "$ARG_BASE_PORT"
   # Staging ownership
   echo ""
   echo "Staging Ownership: Only one repo should control staging operations."
-  echo "  - Owners can tag release-v* and run staging kubectl"
+  echo "  - Owners can publish release-v* artifacts and operate staging from the deployment instance repo"
   echo "  - Non-owners should avoid staging changes without approval"
   read -p "Is this repo the staging owner? (y/n) [$NEW_STAGING_OWNER]: " input_staging
   if [[ "$input_staging" =~ ^[Yy] ]]; then

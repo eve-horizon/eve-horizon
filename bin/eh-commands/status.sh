@@ -387,13 +387,13 @@ EOF
     if [[ -n "$EVE_STAGING_OWNER_REPO" ]]; then
       echo "  Owner repo: $EVE_STAGING_OWNER_REPO"
     fi
-    echo "  You CAN: tag release-v* and run staging kubectl commands."
+    echo "  You CAN: publish release-v* artifacts and operate staging from the deployment instance repo."
   else
     echo -e "${YELLOW}IMPORTANT: You are NOT the Staging owner.${NC}"
     if [[ -n "$EVE_STAGING_OWNER_REPO" ]]; then
       echo "  Owner repo: $EVE_STAGING_OWNER_REPO"
     fi
-    echo "  Avoid tagging release-v* or staging kubectl without approval."
+    echo "  Avoid release artifact publishing or staging operations without approval."
     echo "  To become owner: ./bin/eh configure --staging-owner"
   fi
   echo ""

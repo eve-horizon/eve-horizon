@@ -90,17 +90,19 @@ CLI version: `0.2.36`. All releases are tag-driven via GitHub Actions.
 | `@eve-horizon/cli` | `cli-v*` | `publish-cli.yml` |
 | `@eve-horizon/auth` + `auth-react` | `sdk-v*` | `publish-sdk.yml` (lockstep) |
 | `@eve-horizon/chat` + `chat-react` | `chat-v*` | `publish-chat.yml` (lockstep) |
-| Staging deploy (images + infra) | `release-v*` | `publish-images.yml` → infra dispatch |
+| Service images | `release-v*` | `publish-images.yml` (publish only; deployment owners roll out separately) |
 
 ```bash
 git tag <prefix>-v0.1.0 && git push origin <prefix>-v0.1.0
 ```
 
-Hosted deployments use a two-repo model. The source repo builds service images to
-`ghcr.io/eve-horizon/<service>`; deployment instance repos pull those images and
-apply their own manifests, Terraform, secrets, and release policies. Only the
-deployment owner should trigger instance rollouts. Keep instance-specific
-operational details in the private instance repo, not in this public source repo.
+Hosted deployments use a two-repo model. The source repo builds service images;
+deployment instance repos pull those images and apply their own manifests,
+Terraform, secrets, and release policies. Release tags in this source repo must
+not trigger hosted/staging rollouts directly. Only the deployment owner should
+trigger instance rollouts from the deployment instance repo. Keep
+instance-specific operational details in the private instance repo, not in this
+public source repo.
 
 ```bash
 git tag --list 'release-v*' --sort=-version:refname | head -1  # latest tag

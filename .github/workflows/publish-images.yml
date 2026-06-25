@@ -1,5 +1,8 @@
 name: Publish Images
 
+# This workflow publishes release artifacts only. It must not call
+# deployment-instance repos or trigger hosted/staging rollouts. Operators roll
+# out a published release explicitly from their own infra repo.
 on:
   push:
     tags:
