@@ -262,6 +262,21 @@ Recorded before any batch work, on `main` @ `78ae47f1`:
 - `docs/issues/worker-git-auto-commit-not-executing.md` verified **obsolete**: predates invoke-parity (complete 2026-03-11); agent-runtime implements post-execution auto-commit/push (`apps/agent-runtime/src/invoke/invoke.service.ts:1723`) and evskill's daily cron workflow exercises it on staging. Goes into the A1 resolved-issues deletion set.
 - Local instance is k8s owner (`k8s_owner: true`) — k3d verification deploys are unblocked.
 
+## 6b. Execution log
+
+Batches executed so far (main; each verified build + unit + integration 204/0/13, pushed):
+
+| Date | Commit | What | Risk | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-07-03 | `ec398c12` | EVE_K8S_NAMESPACE fix (apps/api) | bug fix | Latent bug, not a deletion |
+| 2026-07-04 | `dc74331d` | **B2 (partial)**: 8 provably-dead files + 3 unused devDeps removed (434 deletions, 19 packages pruned) | LOW | Zero-importer files verified by grep + clean full-workspace build. **Kept @aws-sdk/client-s3/presigner** — audit wrongly flagged them; they back the object-store used by alltrack+fondr |
+| 2026-07-04 | `1d6d8eed` | A3 flake fixes: shield all manual-drive job tests (job-wait ×4, attempts-results) | test-only | Systemic orchestrator-race eliminated at source |
+
+**Executed on best-judgment latitude** (user away; AskUserQuestion returned "proceed using your best judgment"): only the unambiguously-safe, zero-importer, git-reversible, non-feature slice of B2. Everything still pending below genuinely requires the §6 decisions or per-item staging verification, and is held:
+- **B1** (legacy pipeline chain) consolidates a *used* pipeline-run API surface → risks a contract-breaking change → held for approval.
+- **B3** (dead schema fields) needs per-field verification against staging agents.yaml/manifests before removal (removing a schema field could break sync if any app still declares it) → held.
+- **All C-phase feature removals + A1 doc purge** → held on the §6 decisions.
+
 ## 7. Estimated impact
 
 - Code: ~2,600 LOC provably dead (Phase B) + ~4,400 LOC decision-gated (C1-C3) + up to ~7,300 LOC optional features (C4) → **~7k-14k TS LOC removed**, 14 unused deps, smaller worker image.
