@@ -11,7 +11,6 @@
     "openapi:export": "node dist/scripts/export-openapi.js"
   },
   "dependencies": {
-    "@aws-sdk/client-auto-scaling": "^3.1004.0",
     "@aws-sdk/client-s3": "^3.1004.0",
     "@aws-sdk/client-sesv2": "^3.1004.0",
     "@aws-sdk/client-xray": "^3.1039.0",

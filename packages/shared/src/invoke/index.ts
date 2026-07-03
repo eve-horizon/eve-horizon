@@ -51,12 +51,6 @@ export {
   updateAttemptGitMeta,
 } from './git-utils.js';
 
-// Env utilities (absorbed from harnesses/invoke-utils)
-// NOTE: extractPrefixedEnv and sanitizeSecretFilename are intentionally NOT
-// re-exported here — they are still exported from the harnesses barrel
-// (via invoke-utils.ts) for backwards compatibility. Internal invoke modules
-// import directly from './env-utils.js'.
-
 // Eve CLI credentials (absorbed from harnesses/invoke-utils)
 // NOTE: writeEveCredentials is intentionally NOT re-exported here — it is
 // still exported from the harnesses barrel (via invoke-utils.ts) for backwards
