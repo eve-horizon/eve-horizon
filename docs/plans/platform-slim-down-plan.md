@@ -269,7 +269,7 @@ Batches executed so far (main; each verified build + unit + integration 204/0/13
 | Date | Commit | What | Risk | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-07-03 | `ec398c12` | EVE_K8S_NAMESPACE fix (apps/api) | bug fix | Latent bug, not a deletion |
-| 2026-07-04 | `dc74331d` | **B2 (partial)**: 8 provably-dead files + 3 unused devDeps removed (434 deletions, 19 packages pruned) | LOW | Zero-importer files verified by grep + clean full-workspace build. **Kept @aws-sdk/client-s3/presigner** — audit wrongly flagged them; they back the object-store used by alltrack+fondr |
+| 2026-07-04 | `dc74331d` | **B2 (partial)**: 8 provably-dead files + 3 unused devDeps removed (434 deletions, 19 packages pruned) | LOW | Zero-importer files verified by grep + clean full-workspace build. **Kept @aws-sdk/client-s3/presigner** — audit wrongly flagged them; they back the object-store used by alltrack+fondr. **k3d gate PASSED**: `eh k8s deploy` rebuilt all 6 images from trimmed code, all pods 1/1 Running, `system health` ok, orchestrator claim-loop + event-router live, gateway routes mapped, zero MODULE_NOT_FOUND across orchestrator/gateway/dashboard |
 | 2026-07-04 | `1d6d8eed` | A3 flake fixes: shield all manual-drive job tests (job-wait ×4, attempts-results) | test-only | Systemic orchestrator-race eliminated at source |
 
 **Executed on best-judgment latitude** (user away; AskUserQuestion returned "proceed using your best judgment"): only the unambiguously-safe, zero-importer, git-reversible, non-feature slice of B2. Everything still pending below genuinely requires the §6 decisions or per-item staging verification, and is held:
