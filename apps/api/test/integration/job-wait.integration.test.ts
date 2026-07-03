@@ -65,6 +65,9 @@ describe('integration job wait endpoint', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
+    // Far-future defer_until keeps the orchestrator from claiming this job before the test
+    // drives it manually (claim -> submit -> approve -> done). Claim queries exclude
+    // deferred jobs; manual claim/submit/approve ignore defer_until.
     const jobRaw = await runEve([
       'job',
       'create',
@@ -72,6 +75,8 @@ describe('integration job wait endpoint', () => {
       project.id,
       '--description',
       'Job wait endpoint test',
+      '--defer-until',
+      new Date(Date.now() + 3_600_000).toISOString(),
       '--json',
     ]);
     const job = JSON.parse(jobRaw) as { id: string };
@@ -186,7 +191,9 @@ describe('integration job wait endpoint', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
-    // Create a job
+    // Create a job. Far-future defer_until keeps the orchestrator from claiming it in the
+    // window before the test cancels it (claim queries exclude deferred jobs; manual
+    // cancel ignores defer_until), so the cancelled-state assertions stay deterministic.
     const jobRaw = await runEve([
       'job',
       'create',
@@ -194,6 +201,8 @@ describe('integration job wait endpoint', () => {
       project.id,
       '--description',
       'Job wait cancelled test',
+      '--defer-until',
+      new Date(Date.now() + 3_600_000).toISOString(),
       '--json',
     ]);
     const job = JSON.parse(jobRaw) as { id: string };
@@ -247,7 +256,9 @@ describe('integration job wait endpoint', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
-    // Create a job
+    // Create a job. Far-future defer_until keeps the orchestrator from claiming it before
+    // the test moves it to cancelled (claim queries exclude deferred jobs; manual updates
+    // ignore defer_until).
     const jobRaw = await runEve([
       'job',
       'create',
@@ -255,6 +266,8 @@ describe('integration job wait endpoint', () => {
       project.id,
       '--description',
       'Job wait cancelled with reason test',
+      '--defer-until',
+      new Date(Date.now() + 3_600_000).toISOString(),
       '--json',
     ]);
     const job = JSON.parse(jobRaw) as { id: string };
