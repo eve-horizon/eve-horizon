@@ -52,5 +52,7 @@ describe('harness variants from config root', () => {
     });
     expect(mclaudeVariants.map((v) => v.name)).toEqual(['default', 'plan']);
     expect(mclaudeVariantNames).toEqual(['plan']);
-  });
+    // 30s: this test cold-imports the large @eve/shared barrel twice; under full-suite
+    // parallel load the first dynamic import can exceed the 5s default per-test timeout.
+  }, 30000);
 });

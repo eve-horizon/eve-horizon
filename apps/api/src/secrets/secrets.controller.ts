@@ -7,10 +7,12 @@ import {
   Body,
   Param,
   Query,
+  Req,
   DefaultValuePipe,
   ParseIntPipe,
   HttpCode,
   HttpStatus,
+  ForbiddenException,
   UsePipes,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
@@ -298,15 +300,36 @@ export class SystemSecretsController {
 export class UserSecretsController {
   constructor(private readonly secretsService: SecretsService) {}
 
+  /**
+   * User secrets are private to the owning user. A caller may only address their own
+   * user_id unless they are a system admin. Without this check any authenticated user
+   * could read/write/delete another user's secrets via the :user_id path param.
+   */
+  private assertSelfOrAdmin(
+    request: { user?: { user_id?: string; is_admin?: boolean } },
+    userId: string,
+  ): void {
+    const caller = request.user;
+    if (!caller?.user_id) {
+      throw new ForbiddenException('Authentication required');
+    }
+    if (caller.is_admin || caller.user_id === userId) {
+      return;
+    }
+    throw new ForbiddenException('Cannot access another user\'s secrets');
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create user secret' })
   @ApiBody({ schema: zodSchemaToOpenApi(CreateSecretRequestSchema, 'CreateSecretRequest') })
   @ApiCreatedResponse({ schema: zodSchemaToOpenApi(SecretResponseSchema, 'SecretResponse') })
   async create(
+    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
     @Param('user_id') userId: string,
     @Body(new ZodValidationPipe(CreateSecretRequestSchema)) body: CreateSecretRequest,
   ): Promise<SecretResponse> {
+    this.assertSelfOrAdmin(request, userId);
     return this.secretsService.create('user', userId, body);
   }
 
@@ -316,10 +339,12 @@ export class UserSecretsController {
   @ApiQuery({ name: 'offset', required: false })
   @ApiOkResponse({ schema: zodSchemaToOpenApi(SecretListResponseSchema, 'SecretListResponse') })
   async list(
+    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
     @Param('user_id') userId: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
   ): Promise<SecretListResponse> {
+    this.assertSelfOrAdmin(request, userId);
     return this.secretsService.list('user', userId, { limit, offset });
   }
 
@@ -327,9 +352,11 @@ export class UserSecretsController {
   @ApiOperation({ summary: 'Show user secret (masked)' })
   @ApiOkResponse({ schema: zodSchemaToOpenApi(SecretMaskedResponseSchema, 'SecretMaskedResponse') })
   async show(
+    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
     @Param('user_id') userId: string,
     @Param('key') key: string,
   ): Promise<SecretMaskedResponse> {
+    this.assertSelfOrAdmin(request, userId);
     return this.secretsService.showMasked('user', userId, key);
   }
 
@@ -338,10 +365,12 @@ export class UserSecretsController {
   @ApiBody({ schema: zodSchemaToOpenApi(UpdateSecretRequestSchema, 'UpdateSecretRequest') })
   @ApiOkResponse({ schema: zodSchemaToOpenApi(SecretResponseSchema, 'SecretResponse') })
   async update(
+    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
     @Param('user_id') userId: string,
     @Param('key') key: string,
     @Body(new ZodValidationPipe(UpdateSecretRequestSchema)) body: UpdateSecretRequest,
   ): Promise<SecretResponse> {
+    this.assertSelfOrAdmin(request, userId);
     return this.secretsService.update('user', userId, key, body);
   }
 
@@ -349,9 +378,11 @@ export class UserSecretsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete user secret' })
   async remove(
+    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
     @Param('user_id') userId: string,
     @Param('key') key: string,
   ): Promise<void> {
+    this.assertSelfOrAdmin(request, userId);
     await this.secretsService.delete('user', userId, key);
   }
 }

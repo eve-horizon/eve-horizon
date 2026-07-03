@@ -79,6 +79,11 @@ describe('integration job waiting requeue', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
+    // Far-future defer_until on both jobs keeps the orchestrator from claiming the parent
+    // before the test claims it manually (claim queries exclude deferred jobs; manual claim
+    // and the internal requeue path ignore defer_until).
+    const deferUntil = new Date(Date.now() + 3_600_000).toISOString();
+
     const parentRaw = await runEve([
       'job',
       'create',
@@ -86,6 +91,8 @@ describe('integration job waiting requeue', () => {
       project.id,
       '--description',
       'Parent waiting job',
+      '--defer-until',
+      deferUntil,
       '--json',
     ]);
     const parent = JSON.parse(parentRaw) as { id: string };
@@ -97,6 +104,8 @@ describe('integration job waiting requeue', () => {
       project.id,
       '--description',
       'Child waiting job',
+      '--defer-until',
+      deferUntil,
       '--json',
     ]);
     const child = JSON.parse(childRaw) as { id: string };

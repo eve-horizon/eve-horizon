@@ -57,9 +57,10 @@ describe('integration job flow', () => {
     const project = JSON.parse(projectRaw) as { id: string };
 
     // 3. Create a job with the new CLI (description is required, title auto-generated)
-    // Use --phase backlog to prevent the orchestrator from picking up the job during tests.
-    // In k8s mode, the orchestrator would try to execute 'ready' jobs, which would fail
-    // because integration tests use file:// URLs that aren't supported in k8s runtime.
+    // Use --phase backlog AND a far-future --defer-until: this test transitions the job to
+    // 'ready' (step 6), and backlog alone stops protecting once it does. The orchestrator's
+    // claim queries exclude deferred jobs, while manual phase updates ignore defer_until, so
+    // the CRUD flow stays deterministic instead of racing the orchestrator.
     const jobRaw = await runEve([
       'job',
       'create',
@@ -69,6 +70,8 @@ describe('integration job flow', () => {
       'Testing job CRUD operations for integration tests',
       '--phase',
       'backlog',
+      '--defer-until',
+      new Date(Date.now() + 3_600_000).toISOString(),
       '--json',
     ]);
     const job = JSON.parse(jobRaw) as { id: string; phase: string; title: string };

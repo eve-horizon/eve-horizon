@@ -41,7 +41,7 @@ import { ThreadsService } from './threads.service.js';
 export class OrgThreadsController {
   constructor(private readonly threads: ThreadsService) {}
 
-  @RequirePermission('orgs:read')
+  @RequirePermission('threads:write')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create or retrieve an org-scoped thread' })
@@ -103,7 +103,7 @@ export class OrgThreadsController {
     return thread;
   }
 
-  @RequirePermission('orgs:read')
+  @RequirePermission('threads:write')
   @Post(':thread_id/messages')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Post a message to an org thread' })

@@ -1200,7 +1200,7 @@ export interface ManifestCoherenceWarning {
 }
 
 // Valid trigger type keys (top-level keys within a trigger definition)
-const VALID_TRIGGER_TYPES = ['github', 'slack', 'system', 'cron', 'app', 'event', 'manual'] as const;
+const VALID_TRIGGER_TYPES = ['github', 'slack', 'system', 'cron', 'app', 'app_link', 'event', 'manual'] as const;
 
 // GitHub event types that the trigger matcher recognizes
 const VALID_GITHUB_EVENTS = ['push', 'pull_request'] as const;
