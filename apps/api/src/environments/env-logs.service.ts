@@ -79,7 +79,9 @@ export class EnvLogsService {
       throw new BadRequestException('Kubernetes logs are only available in k8s environments');
     }
 
-    let namespace = options.namespace ?? process.env.EVE_NAMESPACE;
+    // Prefer the platform-standard EVE_K8S_NAMESPACE (set on runtime deployments);
+    // fall back to the legacy EVE_NAMESPACE, then the per-project namespace lookup below.
+    let namespace = options.namespace ?? process.env.EVE_K8S_NAMESPACE ?? process.env.EVE_NAMESPACE;
     if (!namespace) {
       const project = await this.projects.findById(projectId, { include_deleted: true });
       if (!project) {

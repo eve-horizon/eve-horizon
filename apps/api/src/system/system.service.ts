@@ -131,7 +131,7 @@ export class SystemService {
 
     try {
       // Get namespace (default: 'eve')
-      const namespace = process.env.EVE_NAMESPACE || 'eve';
+      const namespace = process.env.EVE_K8S_NAMESPACE || process.env.EVE_NAMESPACE || 'eve';
 
       // Get orchestrator deployment
       try {
@@ -203,7 +203,7 @@ export class SystemService {
   ): Promise<LogEntry[]> {
     this.ensureK8sAvailable();
 
-    const namespace = process.env.EVE_NAMESPACE || 'eve';
+    const namespace = process.env.EVE_K8S_NAMESPACE || process.env.EVE_NAMESPACE || 'eve';
 
     // Map service name to pod selector
     const selectorMap: Record<string, string> = {
@@ -481,7 +481,7 @@ export class SystemService {
       throw new ForbiddenException('org_admin cannot view cluster configuration');
     }
 
-    const namespace = process.env.EVE_NAMESPACE || 'eve';
+    const namespace = process.env.EVE_K8S_NAMESPACE || process.env.EVE_NAMESPACE || 'eve';
 
     try {
       // Get cluster version
