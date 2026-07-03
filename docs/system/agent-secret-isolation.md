@@ -22,7 +22,7 @@ Layer 3 — Won't look (LLM)    Security policy in prompts forbids env/file snoo
 
 **Before**: The worker spread its entire `process.env` into the agent harness — `{ ...process.env, ...options.env }`. This leaked `DATABASE_URL`, `EVE_SECRETS_MASTER_KEY`, `EVE_INTERNAL_API_KEY`, Redis URLs, and every other worker-internal secret into the LLM process.
 
-**After**: The worker builds a minimal environment from an explicit allowlist (`apps/worker/src/invoke/env-builder.ts`):
+**After**: The worker builds a minimal environment from an explicit allowlist (`packages/shared/src/harnesses/env-builder.ts`):
 
 ```
 Forwarded (allowlist)              Excluded (everything else)
@@ -133,7 +133,7 @@ The one secret that _must_ remain accessible to the agent process is the LLM pro
 
 | Component | File | Role |
 |-----------|------|------|
-| Env allowlist | `apps/worker/src/invoke/env-builder.ts` | Builds sanitized env from allowlist |
+| Env allowlist | `packages/shared/src/harnesses/env-builder.ts` | Builds sanitized env from allowlist |
 | Security policy text | `packages/shared/src/harnesses/security-policy.ts` | Single source of truth for rules |
 | Preamble injection | `apps/worker/src/invoke/invoke.service.ts:1551` | Prepends `<security-policy>` to prompt |
 | CLAUDE.md injection | `apps/worker/src/invoke/invoke.service.ts:1537-1548` | Writes security rules to config dir |

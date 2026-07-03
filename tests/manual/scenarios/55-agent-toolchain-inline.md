@@ -63,17 +63,8 @@ agents:
       permission_policy: auto_edit
 ```
 
-```yaml
-# agents/teams.yaml
-version: 1
-teams: {}
-```
-
-```yaml
-# agents/chat.yaml
-version: 1
-routes: []
-```
+Stub `teams.yaml`/`chat.yaml` files are no longer required for agents-only
+projects (since 2026-05-19, missing teams/chat config defaults to empty).
 
 Commit the temporary manifest/config repo so `eve project sync --local` can
 record a git SHA, then sync it:

@@ -1,73 +1,39 @@
 # Worker Architecture
 
-> **What**: Executes jobs by running selected agent harnesses against a repo workspace.
+> **What**: Executes builds, deploys, pipeline actions, and script steps.
 > **Why**: Execution is isolated from scheduling and API concerns, reducing risk and complexity.
 
 ## Overview
 
-The worker prepares a JobWorkspace, resolves repo contents (including `file://`), loads OpenSkills, and invokes the
-selected harness. It streams logs and artifacts back to the system of record.
+The worker handles the platform's build/deploy plane: image builds (BuildKit-first), K8s environment
+deploys, pipeline action steps (`build`, `release`, `deploy`, `job`, `run`, `notify`, `create-pr`,
+`env-ensure`, `env-delete`), and `execution_type='script'` steps with on-demand toolchains.
 
-The worker is a single cluster-scoped service per Eve instance (not per environment). It deploys and executes against
-env namespaces but does not live inside them.
+> **CRITICAL — agent jobs do NOT run here.** All agent jobs (chat, manual, scheduled) route to
+> **agent-runtime** because `EVE_AGENT_RUNTIME_URL` is set in every shipped environment. The worker
+> retains a legacy `/invoke` fallback path (`src/invoke/`), which is unreachable in practice and slated
+> for removal — see `docs/plans/platform-slim-down-plan.md` (G1). Harness adapters live in
+> `packages/eve-agent-cli` and `packages/shared/src/harnesses/`, not in the worker.
+
+The worker is a single cluster-scoped service per Eve instance (not per environment). It deploys and
+executes against env namespaces but does not live inside them.
 
 ## Core Responsibilities
 
-- Materialize repo workspaces (clone or local copy).
-- Install skills from `skills.txt` into `.agents/skills/` and resolve them for the harness.
-- Invoke harnesses and stream structured logs.
+- Build images from manifest `services.*.build` (BuildKit in K8s, docker-buildx locally).
+- Deploy releases to env namespaces: manifest interpolation, ingress (aliases, custom domains,
+  timeouts), managed Postgres tenants, object-store buckets, app-link env injection.
+- Execute pipeline action steps and script steps (with toolchain init-container injection).
+- Reap orphaned runner pods (`src/reaper/`).
 
 ## Execution Modes
-
-The worker supports two execution modes:
 
 | Mode | Config | Use Case |
 |------|--------|----------|
 | Docker | `EVE_RUNTIME=docker` | Local development, docker-compose |
-| K8s | `EVE_RUNTIME=k8s` | Kubernetes deployments, integration/E2E |
+| K8s | `EVE_RUNTIME=k8s` | Kubernetes deployments, integration/E2E, production |
 
-## K8s Runner Architecture
-
-When running in Kubernetes mode (`EVE_RUNTIME=k8s`), the worker spawns ephemeral runner pods for isolated job execution. This is the **primary mode for integration testing, E2E validation, and production**.
-
-```
-Worker Service (in-cluster)
-     │
-     ├─ execute()
-     │       │
-     │       ├─ EVE_RUNTIME=k8s?
-     │       │    ↓
-     │       └─ runInvocationInK8s()
-     │            │
-     │            ├─ Build runner pod + PVC manifests
-     │            ├─ Apply manifests to cluster (kubectl apply)
-     │            ├─ Wait for pod ready (readiness probe)
-     │            ├─ Get pod IP (in-cluster networking)
-     │            ├─ HTTP POST /invoke to runner pod
-     │            ├─ Receive result
-     │            └─ Cleanup pod + PVC (kubectl delete)
-     │
-     └─ Return result to orchestrator
-```
-
-### Runner Pod Lifecycle
-
-1. **Pod Creation**: Worker creates a pod with:
-   - Base image: `EVE_RUNNER_IMAGE` (typically `eve-horizon/worker:local`)
-   - Mounted workspace volume (PVC, configurable via `EVE_K8S_WORKSPACE_SIZE`, default 10Gi)
-   - Service account: `EVE_RUNNER_SERVICE_ACCOUNT` (for RBAC)
-   - Environment: secrets, API URL, job context, database URL, harness auth tokens
-
-2. **Execution**: Runner pod starts an HTTP server:
-   - Exposes `/health` readiness probe (initial delay 5s, period 2s, 15 retries)
-   - Accepts `/invoke` POST with HarnessInvocation payload
-   - Clones repo (using git credentials from secrets API)
-   - Invokes harness (mclaude, zai, code, etc.)
-   - Streams JSONL logs to database
-
-3. **Cleanup**: Pod and PVC are deleted after completion (success or failure)
-
-### K8s Environment Variables
+## K8s Environment Variables
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
@@ -76,60 +42,17 @@ Worker Service (in-cluster)
 | `EVE_K8S_NAMESPACE` | Namespace for runner pods | `eve` |
 | `EVE_K8S_WORKSPACE_SIZE` | PVC size for workspace | `10Gi` |
 | `EVE_K8S_POD_READY_TIMEOUT` | Pod readiness timeout | `120s` |
-| `EVE_K8S_RUNNER_RETRIES` | HTTP health check retries | `20` |
 | `EVE_RUNNER_SERVICE_ACCOUNT` | Service account for runner pods | - |
-
-### In-Cluster Service Discovery
-
-Runner pods communicate with services using k8s DNS:
-- API: `http://eve-api.eve.svc.cluster.local:4701`
-- Database: `postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve`
-
-### Local Port Forwarding
-
-For local k3d development, port forwarding provides localhost access:
-```bash
-kubectl port-forward svc/eve-api 4701:4701
-kubectl port-forward svc/eve-worker 4749:4749
-```
-Use `./bin/eh k8s pf` to set up local port-forwarding for the stack.
-
-### Load Balancer Recovery
-
-k3d's load balancer can become stale after sleep/wake. The `k8s.sh` script auto-recovers by restarting `k3d-eve-local-serverlb` on EOF errors.
-
-### Git Authentication
-
-The runner resolves git credentials via the secrets API:
-
-1. Worker calls `prepareGitAuth()` before spawning pod
-2. Checks project secrets for `github_token` or `ssh_key`
-3. Creates authenticated clone URL or SSH config
-4. Runner uses credentials for `git clone`
-
-### Harness Resolution
-
-The worker uses a registry pattern to map harness names to adapters:
-
-- Registry maintained in `harnesses/index.ts`
-- Each adapter (`mclaude`, `code`, `zai`, `gemini`, etc.) implements `WorkerHarnessAdapter`
-- Supports aliases (e.g., `claude` → `mclaude`)
-- Adapters build harness-specific options (auth, model, variant)
-
-### Key Files
-
-- `invoke.service.ts` - Main invocation orchestration, workspace prep, secret resolution
-- `k8s-runner.ts` - Runner pod creation and lifecycle management
-- `harnesses/index.ts` - Registry for resolving harness names to adapters
-- `harnesses/*.ts` - Adapter implementations for each harness
+| `EVE_BUILD_BACKEND` | Image build backend (`buildkit`/`buildx`) | buildkit in K8s |
 
 ## Deployer Service
 
-The worker includes a deployer service for Kubernetes deployments via pipeline actions.
+The deployer applies manifest-declared services to env namespaces via pipeline `deploy` actions.
 
 ### Container Registry Authentication
 
-When deploying components, the deployer creates `imagePullSecrets` using credentials from the manifest's `registry` section:
+When deploying components, the deployer creates `imagePullSecrets` using credentials from the
+manifest's `registry` section:
 
 ```yaml
 registry:
@@ -149,18 +72,23 @@ See [container-registry.md](../../docs/system/container-registry.md) for full de
 
 ### Key Files
 
-- `deployer/deployer.service.ts` - Deployment orchestration, imagePullSecret creation
-- `pipeline-runner/pipeline-runner.service.ts` - Pipeline step execution
+- `deployer/deployer.service.ts` — deployment orchestration, interpolation, ingress, managed DB, buckets
+- `builder/` — image build backends (BuildKit-first) and registry auth
+- `action-executor/action-executor.service.ts` — pipeline action steps
+- `script-executor/script-executor.service.ts` — script steps + toolchains
+- `src/invoke/` — legacy agent-invoke fallback (unreachable; removal planned)
 
 ## Key Decisions (Why)
 
 - **Isolated execution** prevents orchestration from inheriting execution risk.
-- **Repo-local skills** keep skill resolution deterministic and portable.
+- **Agent execution lives in agent-runtime** — worker is builds/pipelines/scripts only
+  ([docs/system/agent-runtime.md](../../docs/system/agent-runtime.md)).
 - **Registry auth via secrets** allows flexible credential management without hardcoding.
 
 ## Navigation
 
-- Skills system: [docs/system/skills.md](../../docs/system/skills.md)
-- Harness design: [docs/system/agent-harness-design.md](../../docs/system/agent-harness-design.md)
+- Builds: [docs/system/builds.md](../../docs/system/builds.md)
+- Deployment: [docs/system/deployment.md](../../docs/system/deployment.md)
+- Pipelines: [docs/system/pipelines.md](../../docs/system/pipelines.md)
 - Container registry: [docs/system/container-registry.md](../../docs/system/container-registry.md)
 - Secrets: [docs/system/secrets.md](../../docs/system/secrets.md)

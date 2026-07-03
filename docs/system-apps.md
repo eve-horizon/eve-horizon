@@ -14,7 +14,7 @@ System apps are the platform components that ship with every Eve Horizon instanc
 | sso | Single sign-on service |
 | dashboard | Platform management UI |
 
-All system apps share a single version tag from `config/platform.yaml` and deploy together.
+All system apps share a single version derived from the `release-v*` git tag (see `.github/workflows/publish-images.yml`) and deploy together.
 
 ## Image Registry
 
@@ -95,6 +95,6 @@ No manual action needed. The `ensure_repo` step in `publish-images.yml` automati
 
 ## Key Conventions
 
-- **Atomic versioning**: all system apps share the version from `config/platform.yaml`. Never version system apps independently.
+- **Atomic versioning**: all system apps share the version from the `release-v*` git tag. Never version system apps independently.
 - **Base manifests use `:local` tags**: overlays patch these to versioned ECR images per environment.
 - **Multi-stage Dockerfiles**: the CI `target` field selects which stage to build. Use `production` for all apps (the `worker` is the sole exception, using `base`).

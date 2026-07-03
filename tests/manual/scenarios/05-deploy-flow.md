@@ -105,7 +105,7 @@ eve pipeline runs deploy-test $PROJECT_ID --json
 The build step now performs real Docker image builds (not stubs). Verify:
 
 - Build outputs should show per-service image digests (e.g., `sha256:abc123...`)
-- Build logs should show Docker Buildx or Kaniko output
+- Build logs should show BuildKit (or Docker Buildx locally) output
 - The build step output should contain `image_digests` field with digest values for each service
 
 #### Inspect Build Records

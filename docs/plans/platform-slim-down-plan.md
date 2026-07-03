@@ -251,6 +251,17 @@ Everything marked USED/PLATFORM in §2, plus: `api_spec` singular, `project:` al
 4. **§3.3** Which zero-usage features to remove: nostr (rec: remove), gemini adapter (rec: remove), cloud-fs (?), private endpoints (?), outbound webhooks (?), embedded chat SDK (?)
 5. Docs: delete shipped plans outright vs move to `docs/archive/`? (recommended: delete)
 
+## 6a. Pre-execution baseline (2026-07-03)
+
+Recorded before any batch work, on `main` @ `78ae47f1`:
+
+- `pnpm install --frozen-lockfile && pnpm build` — **green**
+- `pnpm test` (unit, full workspace) — **green**
+- `./bin/eh test integration --reset-db` — **200/216 passing, 13 intentionally skipped, 3 timing-flaky** (`harness-matrix`, `job-context`, `job-wait` — all pass 8/8 in isolation; they assume jobs linger in `ready`, which fails on a fast clean DB). Without `--reset-db` the shared `eve_test` DB carried a 408-job stale backlog that starved current runs and leaked a `zai` org-default harness into `receipt-v2` — always reset for gate runs. Flake hardening → batch A3.
+- **G2 precondition verified**: `EVE_BUILD_BACKEND`/kaniko appears in neither `incept5-eve-infra` nor `eve-horizon-infra` outside vendored skillpack docs — no deployment instance selects the kaniko backend.
+- `docs/issues/worker-git-auto-commit-not-executing.md` verified **obsolete**: predates invoke-parity (complete 2026-03-11); agent-runtime implements post-execution auto-commit/push (`apps/agent-runtime/src/invoke/invoke.service.ts:1723`) and evskill's daily cron workflow exercises it on staging. Goes into the A1 resolved-issues deletion set.
+- Local instance is k8s owner (`k8s_owner: true`) — k3d verification deploys are unblocked.
+
 ## 7. Estimated impact
 
 - Code: ~2,600 LOC provably dead (Phase B) + ~4,400 LOC decision-gated (C1-C3) + up to ~7,300 LOC optional features (C4) → **~7k-14k TS LOC removed**, 14 unused deps, smaller worker image.

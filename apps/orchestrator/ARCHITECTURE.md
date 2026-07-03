@@ -12,11 +12,16 @@ It owns scheduling policy (priority, dependencies) and uses the database as the 
 
 - Find jobs eligible for execution.
 - Claim/release jobs and manage attempt lifecycle.
-- Coordinate with the worker to run tasks.
+- **Route by execution type**: agent jobs → agent-runtime (`EVE_AGENT_RUNTIME_URL`, set in every
+  shipped environment); action/script/build work → worker. See the CRITICAL routing rule in
+  [CLAUDE.md](../../CLAUDE.md).
+- Match events to pipeline/workflow triggers (github, cron, system, app, app_link).
+- Run platform crons: env health watchdog, managed-DB reconciler/snapshots, cost collectors,
+  usage sweeper, budget suspension.
 
 ## Key Decisions (Why)
 
-- **Policy lives here** so workers stay dumb and execution-focused.
+- **Policy lives here** so execution services stay dumb and execution-focused.
 - **DB-backed coordination** avoids in-memory coupling between services.
 
 ## Navigation

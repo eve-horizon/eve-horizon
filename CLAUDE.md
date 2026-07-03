@@ -75,7 +75,7 @@ For multi-project app-link work on the same local stack, use `eve local mesh`:
 
 **Services** (6): API, orchestrator, worker, agent-runtime, gateway, SSO.
 
-**Capabilities**: full auth (SSH, GoTrue+SSO, service principals, custom roles, access groups), default-deny RBAC, K8s deploys with manifest interpolation, BuildKit builds + releases + pipelines, 6 harnesses (mclaude/claude/zai/gemini/code/codex) via `eve-agent-cli`, provider registry, agents/teams/threads with repo-first sync + AgentPacks, Slack+Nostr gateway, org filesystem sync, org docs, cost tracking (receipts, `llm.call` events, budgets, balance ledger), analytics, webhooks, GPU wake via ASG, app SSO SDK (`@eve-horizon/auth`), embedded chat SDK (`@eve-horizon/chat`).
+**Capabilities**: full auth (SSH, GoTrue+SSO, service principals, custom roles, access groups), default-deny RBAC, K8s deploys with manifest interpolation, BuildKit builds + releases + pipelines, 7 harnesses (mclaude/claude/zai/gemini/code/codex/pi) via `eve-agent-cli`, provider registry, agents/teams/threads with repo-first sync + AgentPacks, Slack+Nostr gateway, org filesystem sync, org docs, cost tracking (receipts, `llm.call` events, budgets, balance ledger), analytics, webhooks, app SSO SDK (`@eve-horizon/auth`), embedded chat SDK (`@eve-horizon/chat`).
 
 **Next**: platform-wide groups with scoped fs/DB ACLs, app compute classes, UI dashboards, Slack interactive approvals.
 
@@ -151,7 +151,7 @@ CLI is a thin REST wrapper; only `EVE_API_URL` needed. Visual: [system-overview.
 
 | Decision | Rationale | Doc |
 | --- | --- | --- |
-| 6 harnesses via eve-agent-cli | Uniform invocation | [harness-execution.md](./docs/system/harness-execution.md) |
+| 7 harnesses via eve-agent-cli | Uniform invocation | [harness-execution.md](./docs/system/harness-execution.md) |
 | Job (not Task) terminology | Avoid cc-mirror Task* tool collision | [job-api.md](./docs/system/job-api.md) |
 | Hierarchical job IDs | `{slug}-{hash8}` root, `{parent}.{n}` children | [job-api.md](./docs/system/job-api.md) |
 | Phase-based lifecycle | idea → backlog → ready → active → review → done | [job-api.md](./docs/system/job-api.md) |

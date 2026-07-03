@@ -15,8 +15,11 @@ This keeps layering clean and allows shared logic to evolve without circular dep
 
 ## Navigation
 
-- CLI: [cli/ARCHITECTURE.md](./cli/ARCHITECTURE.md)
-- DB: [db/ARCHITECTURE.md](./db/ARCHITECTURE.md)
-- Shared: [shared/ARCHITECTURE.md](./shared/ARCHITECTURE.md)
-- Agent CLI: [eve-agent-cli/ARCHITECTURE.md](./eve-agent-cli/ARCHITECTURE.md)
+- CLI: [cli/ARCHITECTURE.md](./cli/ARCHITECTURE.md) — `@eve-horizon/cli`, the `eve` command
+- DB: [db/ARCHITECTURE.md](./db/ARCHITECTURE.md) — queries + migrations
+- Shared: [shared/ARCHITECTURE.md](./shared/ARCHITECTURE.md) — schemas, invoke, harnesses, pricing
+- Agent CLI: [eve-agent-cli/ARCHITECTURE.md](./eve-agent-cli/ARCHITECTURE.md) — uniform harness invocation
+- Auth SDKs: `auth/` + `auth-react/` — app SSO SDK (`@eve-horizon/auth`, `@eve-horizon/auth-react`)
+- Chat SDKs: `chat/` + `chat-react/` — embedded chat SDK (`@eve-horizon/chat`, `@eve-horizon/chat-react`)
+- Migrate: `migrate/` — standalone migration runner image (`@eve-horizon/migrate`)
 - Skillpacks repo: https://github.com/eve-horizon/eve-skillpacks
