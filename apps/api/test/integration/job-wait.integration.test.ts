@@ -135,6 +135,8 @@ describe('integration job wait endpoint', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
+    // Far-future defer_until keeps the orchestrator from claiming (and completing)
+    // the job during the wait window, so the 202/timeout outcome is deterministic.
     const jobRaw = await runEve([
       'job',
       'create',
@@ -142,6 +144,8 @@ describe('integration job wait endpoint', () => {
       project.id,
       '--description',
       'Job wait timeout test',
+      '--defer-until',
+      new Date(Date.now() + 3_600_000).toISOString(),
       '--json',
     ]);
     const job = JSON.parse(jobRaw) as { id: string };

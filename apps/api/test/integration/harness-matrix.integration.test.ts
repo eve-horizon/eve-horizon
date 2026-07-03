@@ -113,13 +113,16 @@ describe('integration harness matrix', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
-    // Create job in backlog phase to avoid orchestrator pickup
-    // In k8s mode, 'ready' jobs would be executed and fail on file:// URLs
+    // Create job in backlog phase with a far-future defer_until so the orchestrator
+    // never claims it, even after the test moves it to 'ready' (claim queries exclude
+    // deferred jobs; manual phase updates and claims ignore defer_until).
+    const deferUntil = new Date(Date.now() + 3_600_000).toISOString();
     const jobRaw = await runEve([
       'job', 'create',
       '--project', project.id,
       '--description', 'Phase transition test - testing lifecycle transitions',
       '--phase', 'backlog',
+      '--defer-until', deferUntil,
       '--json',
     ]);
     const job = JSON.parse(jobRaw) as { id: string; phase: string };

@@ -79,6 +79,11 @@ describe('integration job context endpoint', () => {
     ]);
     const project = JSON.parse(projectRaw) as { id: string };
 
+    // Far-future defer_until keeps the orchestrator from claiming these jobs while
+    // the test drives the claim/submit/reject flow manually (claim queries exclude
+    // deferred jobs; manual claim ignores defer_until).
+    const deferUntil = new Date(Date.now() + 3_600_000).toISOString();
+
     const parentRaw = await runEve([
       'job',
       'create',
@@ -86,6 +91,8 @@ describe('integration job context endpoint', () => {
       project.id,
       '--description',
       'Parent context job',
+      '--defer-until',
+      deferUntil,
       '--json',
     ]);
     const parent = JSON.parse(parentRaw) as { id: string };
@@ -97,6 +104,7 @@ describe('integration job context endpoint', () => {
         body: JSON.stringify({
           description: 'Child context job',
           parent_id: parent.id,
+          defer_until: deferUntil,
         }),
       }
     );
@@ -108,6 +116,8 @@ describe('integration job context endpoint', () => {
       project.id,
       '--description',
       'Blocking job',
+      '--defer-until',
+      deferUntil,
       '--json',
     ]);
     const blocker = JSON.parse(blockerRaw) as { id: string };
