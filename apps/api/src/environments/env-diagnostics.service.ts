@@ -20,6 +20,9 @@ import type {
   Service,
 } from '@eve/shared';
 import {
+  appendK8sSuffix,
+  combineK8sName,
+  toK8sName,
   DEFAULT_INGRESS_MAX_BODY_SIZE,
   DEFAULT_INGRESS_TIMEOUT,
   getServicesFromManifest,
@@ -549,9 +552,9 @@ export class EnvDiagnosticsService {
     const services = getServicesFromManifest(manifest) ?? {};
     const project = await this.projects.findById(projectId, { include_deleted: true });
     const org = project ? await this.orgs.findById(project.org_id) : null;
-    const envSlug = this.toK8sName(envName, 'env');
-    const orgSlug = this.toK8sName(org?.slug ?? 'unknown-org', 'org');
-    const projectSlug = this.toK8sName(project?.slug ?? 'unknown-project', 'project');
+    const envSlug = toK8sName(envName, 'env');
+    const orgSlug = toK8sName(org?.slug ?? 'unknown-org', 'org');
+    const projectSlug = toK8sName(project?.slug ?? 'unknown-project', 'project');
 
     const liveIngressesByComponent = new Map<string, k8s.V1Ingress[]>();
     if (this.k8sAvailable && this.networkingApi) {
@@ -588,7 +591,7 @@ export class EnvDiagnosticsService {
         continue;
       }
 
-      const componentSlug = this.toK8sName(serviceName, 'component');
+      const componentSlug = toK8sName(serviceName, 'component');
       const componentLabel = this.normalizeLabelValue(serviceName, 'component');
       const expectedHosts = [
         `${componentSlug}.${orgSlug}-${projectSlug}-${envSlug}.${domain}`,
@@ -660,17 +663,17 @@ export class EnvDiagnosticsService {
     const platformConfig = loadConfig();
     const project = await this.projects.findById(projectId, { include_deleted: true });
     const org = project ? await this.orgs.findById(project.org_id) : null;
-    const envSlug = this.toK8sName(envName, 'env');
-    const orgSlug = this.toK8sName(org?.slug ?? 'unknown-org', 'org');
-    const projectSlug = this.toK8sName(project?.slug ?? 'unknown-project', 'project');
+    const envSlug = toK8sName(envName, 'env');
+    const orgSlug = toK8sName(org?.slug ?? 'unknown-org', 'org');
+    const projectSlug = toK8sName(project?.slug ?? 'unknown-project', 'project');
     const hostedZone = (platformConfig.EVE_TCP_INGRESS_HOSTED_ZONE ?? platformConfig.EVE_DEFAULT_DOMAIN ?? '').trim().toLowerCase();
 
     const result: EnvTcpIngressInfo[] = [];
     for (const { serviceName, config } of entries) {
       if (!config) continue;
-      const componentSlug = this.toK8sName(serviceName, 'component');
-      const resourceName = this.combineK8sName(envSlug, componentSlug, 'resource');
-      const tcpServiceName = this.appendK8sSuffix(resourceName, 'tcp', 'tcp ingress service');
+      const componentSlug = toK8sName(serviceName, 'component');
+      const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
+      const tcpServiceName = appendK8sSuffix(resourceName, 'tcp', 'tcp ingress service');
       const advertisedHost = hostedZone
         ? (config.hostname
             ? `${config.hostname}.${hostedZone}`
@@ -928,51 +931,6 @@ export class EnvDiagnosticsService {
     }
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  private toK8sName(value: string, label: string): string {
-    const normalized = value
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '')
-      .replace(/--+/g, '-');
-
-    if (!normalized) {
-      throw new Error(`Invalid ${label} name: ${value}`);
-    }
-
-    return normalized.length > 63 ? normalized.slice(0, 63).replace(/-+$/, '') : normalized;
-  }
-
-  private combineK8sName(envSlug: string, componentSlug: string, label: string): string {
-    const combined = `${envSlug}-${componentSlug}`;
-    if (combined.length <= 63) {
-      return combined;
-    }
-
-    const maxEnv = 31;
-    const maxComponent = 31;
-    const trimmedEnv = envSlug.slice(0, maxEnv).replace(/-+$/, '');
-    const trimmedComponent = componentSlug.slice(0, maxComponent).replace(/-+$/, '');
-    const trimmed = `${trimmedEnv}-${trimmedComponent}`.replace(/-+$/, '');
-
-    if (!trimmed) {
-      throw new Error(`Invalid ${label} name from ${envSlug}-${componentSlug}`);
-    }
-
-    return trimmed;
-  }
-
-  private appendK8sSuffix(base: string, suffix: string, label: string): string {
-    const normalizedSuffix = this.toK8sName(suffix, label);
-    const maxBaseLength = 63 - normalizedSuffix.length - 1;
-    const trimmedBase = base.slice(0, maxBaseLength).replace(/-+$/, '');
-    const combined = `${trimmedBase}-${normalizedSuffix}`;
-    if (!trimmedBase || combined.length > 63) {
-      throw new Error(`Invalid ${label} name from ${base}-${suffix}`);
-    }
-    return combined;
   }
 
   private normalizeLabelValue(value: string, label: string): string {

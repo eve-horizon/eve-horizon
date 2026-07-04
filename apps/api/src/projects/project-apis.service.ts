@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { deriveNamespace } from '@eve/shared';
 import type { Db } from '@eve/db';
 import { environmentQueries, orgQueries, projectApiSourceQueries, projectManifestQueries, projectQueries, type ProjectApiSource } from '@eve/db';
 import { type ApiSource, type ApiSourceType, type ApiSpec, type Service, getDefaultSpecUrl, getServicesFromManifest } from '@eve/shared';
@@ -224,7 +225,7 @@ export class ProjectApisService {
     const port = this.resolveServicePort(service, xeve);
     const portSuffix = port ? `:${port}` : '';
 
-    const namespace = `eve-${orgSlug}-${projectSlug}-${envName}`;
+    const namespace = deriveNamespace(orgSlug, projectSlug, envName);
     return `http://${envName}-${componentName}.${namespace}.svc.cluster.local${portSuffix}`;
   }
 

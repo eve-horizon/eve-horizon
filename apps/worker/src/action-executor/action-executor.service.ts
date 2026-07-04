@@ -42,6 +42,7 @@ import {
   type RelayDb,
   type SecretResolveItem,
   type ToolchainCacheEvent,
+  toK8sName,
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { DeployerService } from '../deployer/deployer.service';
@@ -1636,10 +1637,10 @@ export class ActionExecutorService {
     if (!org) {
       return null;
     }
-    const orgSlug = this.toK8sName(org.slug, 'org');
-    const componentSlug = this.toK8sName(publicService, 'component');
-    const projectSlug = this.toK8sName(project.slug, 'project');
-    const envSlug = this.toK8sName(envName, 'environment');
+    const orgSlug = toK8sName(org.slug, 'org');
+    const componentSlug = toK8sName(publicService, 'component');
+    const projectSlug = toK8sName(project.slug, 'project');
+    const envSlug = toK8sName(envName, 'environment');
     const host = `${componentSlug}.${orgSlug}-${projectSlug}-${envSlug}.${domain}`;
 
     return `https://${host}`;
@@ -2184,21 +2185,6 @@ export class ActionExecutorService {
   /**
    * Convert a value to a valid K8s name (lowercase, alphanumeric + hyphens, max 63 chars)
    */
-  private toK8sName(value: string, label: string): string {
-    const normalized = value
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '')
-      .replace(/--+/g, '-');
-
-    if (!normalized) {
-      throw new Error(`Invalid ${label} name: ${value}`);
-    }
-
-    return normalized.length > 63 ? normalized.slice(0, 63).replace(/-+$/, '') : normalized;
-  }
-
   /**
    * Auto-sync manifest from cloned workspace during build.
    *

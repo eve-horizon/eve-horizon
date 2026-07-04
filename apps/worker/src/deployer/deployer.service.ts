@@ -51,6 +51,11 @@ import {
   DEFAULT_INGRESS_MAX_BODY_SIZE,
   DEFAULT_INGRESS_TIMEOUT,
   parseIngressDuration,
+  toK8sName,
+  toK8sLabelValue,
+  combineK8sName,
+  appendK8sSuffix,
+  deriveNamespace,
   type ObjectStoreBucket,
   type ObjectStoreIsolation,
   type TcpIngressConfig,
@@ -337,15 +342,13 @@ export class DeployerService {
       this.validateReleaseImageDigests(release.id, release.image_digests_json, manifest.manifest_yaml);
     }
 
-    const namespace = environment.namespace
-      ? this.toK8sName(environment.namespace, 'namespace')
-      : this.toK8sName(`eve-${org.slug}-${project.slug}-${environment.name}`, 'namespace');
+    const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
 
     await this.k8sService.createNamespace(namespace, {
       'eve.org_id': project.org_id,
       'eve.project_id': project.id,
       'eve.env_id': envId,
-      'eve.env': this.toK8sLabelValue(environment.name, 'env'),
+      'eve.env': toK8sLabelValue(environment.name, 'env'),
     });
 
     const imagePullSecret = await this.ensureImagePullSecret({
@@ -495,8 +498,8 @@ export class DeployerService {
       for (const [serviceName, service] of Object.entries(renderResult.services)) {
         const storage = this.resolvePersistentStorage(service, serviceName);
         if (!storage) continue;
-        const labelEnv = this.toK8sLabelValue(environment.name, 'env');
-        const labelComponent = this.toK8sLabelValue(serviceName, 'component');
+        const labelEnv = toK8sLabelValue(environment.name, 'env');
+        const labelComponent = toK8sLabelValue(serviceName, 'component');
         const labels = {
           'eve.org_id': project.org_id,
           'eve.project_id': project.id,
@@ -596,7 +599,7 @@ export class DeployerService {
     projectId: string;
     envName: string;
   }): Promise<ClusterSnapshot> {
-    const envLabel = this.toK8sLabelValue(params.envName, 'env');
+    const envLabel = toK8sLabelValue(params.envName, 'env');
     const selector = `eve.project_id=${params.projectId},eve.env=${envLabel}`;
     const pods = await this.k8sService.listPodsWithLabel(params.namespace, selector);
 
@@ -687,15 +690,13 @@ export class DeployerService {
       throw new Error(`Org ${project.org_id} not found for project ${project.id}`);
     }
 
-    const namespace = environment.namespace
-      ? this.toK8sName(environment.namespace, 'namespace')
-      : this.toK8sName(`eve-${org.slug}-${project.slug}-${environment.name}`, 'namespace');
+    const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
 
     await this.k8sService.createNamespace(namespace, {
       'eve.org_id': project.org_id,
       'eve.project_id': project.id,
       'eve.env_id': environment.id,
-      'eve.env': this.toK8sLabelValue(environment.name, 'env'),
+      'eve.env': toK8sLabelValue(environment.name, 'env'),
     });
 
     const imagePullSecret = await this.ensureImagePullSecret({
@@ -794,18 +795,18 @@ export class DeployerService {
     );
     const { command, args } = this.resolveServiceCommand(service);
 
-    const envSlug = this.toK8sName(params.envName, 'environment');
-    const serviceSlug = this.toK8sName(params.serviceName, 'service');
-    const attemptSlug = this.toK8sName(params.attemptId.slice(-8), 'job');
-    const jobSlug = this.toK8sName(`${serviceSlug}-${attemptSlug}`, 'job');
-    const jobName = this.combineK8sName(envSlug, jobSlug, 'job');
+    const envSlug = toK8sName(params.envName, 'environment');
+    const serviceSlug = toK8sName(params.serviceName, 'service');
+    const attemptSlug = toK8sName(params.attemptId.slice(-8), 'job');
+    const jobSlug = toK8sName(`${serviceSlug}-${attemptSlug}`, 'job');
+    const jobName = combineK8sName(envSlug, jobSlug, 'job');
 
     const labels = {
       'eve.org_id': project.org_id,
       'eve.project_id': project.id,
       'eve.env_id': environment.id,
-      'eve.env': this.toK8sLabelValue(params.envName, 'env'),
-      'eve.component': this.toK8sLabelValue(params.serviceName, 'component'),
+      'eve.env': toK8sLabelValue(params.envName, 'env'),
+      'eve.component': toK8sLabelValue(params.serviceName, 'component'),
       'eve.release': params.releaseId ?? 'unknown',
     };
 
@@ -1066,7 +1067,7 @@ export class DeployerService {
     const aliasIngresses: AliasIngressCandidate[] = [];
     const customDomainIngresses: CustomDomainIngressCandidate[] = [];
     const desiredTcpIngressServices: string[] = [];
-    const envSlug = this.toK8sName(params.envName, 'environment');
+    const envSlug = toK8sName(params.envName, 'environment');
 
     const serviceAccount = this.buildObjectStoreServiceAccount(objectStorePlan);
     if (serviceAccount) {
@@ -1081,8 +1082,8 @@ export class DeployerService {
         continue;
       }
 
-      const componentSlug = this.toK8sName(name, 'component');
-      const resourceName = this.combineK8sName(envSlug, componentSlug, 'resource');
+      const componentSlug = toK8sName(name, 'component');
+      const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
 
       // Auto-derive image from service key when build config exists but image is not explicit
       const derivedImage = service.image || (service.build ? name : undefined);
@@ -1120,8 +1121,8 @@ export class DeployerService {
         this.validateStableEgressPhase1(name, replicas, ports);
       }
 
-      const labelEnv = this.toK8sLabelValue(params.envName, 'env');
-      const labelComponent = this.toK8sLabelValue(name, 'component');
+      const labelEnv = toK8sLabelValue(params.envName, 'env');
+      const labelComponent = toK8sLabelValue(name, 'component');
       const labels = {
         'eve.org_id': params.orgId,
         'eve.project_id': params.projectId,
@@ -1140,8 +1141,8 @@ export class DeployerService {
         resourceName,
         componentSlug,
         envSlug,
-        orgSlug: this.toK8sName(params.orgSlug, 'org'),
-        projectSlug: this.toK8sName(params.projectSlug, 'project'),
+        orgSlug: toK8sName(params.orgSlug, 'org'),
+        projectSlug: toK8sName(params.projectSlug, 'project'),
         labels,
         selector: {
           'eve.env': labelEnv,
@@ -1360,16 +1361,16 @@ export class DeployerService {
           return;
         }
 
-        const componentSlug = this.toK8sName(name, 'component');
-        const resourceName = this.combineK8sName(envSlug, componentSlug, 'resource');
-        const orgSlug = this.toK8sName(params.orgSlug, 'org');
-        const projectSlug = this.toK8sName(params.projectSlug, 'project');
+        const componentSlug = toK8sName(name, 'component');
+        const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
+        const orgSlug = toK8sName(params.orgSlug, 'org');
+        const projectSlug = toK8sName(params.projectSlug, 'project');
 
         // URL pattern: {component}.{orgSlug}-{project}-{env}.{domain}
         // Example: web.acme-fstack-test.lvh.me, api.acme-myapp-staging.apps.example.com
         const host = `${componentSlug}.${orgSlug}-${projectSlug}-${envSlug}.${domain}`;
-        const labelEnv = this.toK8sLabelValue(params.envName, 'env');
-        const labelComponent = this.toK8sLabelValue(name, 'component');
+        const labelEnv = toK8sLabelValue(params.envName, 'env');
+        const labelComponent = toK8sLabelValue(name, 'component');
         const labels = {
           'eve.org_id': params.orgId,
           'eve.project_id': params.projectId,
@@ -1430,7 +1431,7 @@ export class DeployerService {
         const serviceDomains = this.resolveIngressDomains(ingressConfig);
         for (const hostname of serviceDomains) {
           const hostnameSlug = hostname.replace(/\./g, '-');
-          const domainResourceName = this.toK8sName(
+          const domainResourceName = toK8sName(
             `${resourceName}-cd-${hostnameSlug}`,
             'resource'
           );
@@ -1452,7 +1453,7 @@ export class DeployerService {
               labels: {
                 ...labels,
                 'eve.custom_domain': 'true',
-                'eve.domain_hostname': this.toK8sLabelValue(hostname, 'hostname'),
+                'eve.domain_hostname': toK8sLabelValue(hostname, 'hostname'),
               },
               annotations: Object.keys(domainAnnotations).length > 0
                 ? domainAnnotations : undefined,
@@ -1491,7 +1492,7 @@ export class DeployerService {
           return;
         }
 
-        const aliasResourceName = this.toK8sName(`${resourceName}-alias-${alias}`, 'resource');
+        const aliasResourceName = toK8sName(`${resourceName}-alias-${alias}`, 'resource');
         const aliasHost = `${alias}.${domain}`;
         const aliasLabels = {
           ...labels,
@@ -1689,7 +1690,7 @@ export class DeployerService {
     const publicHost = tcpIngress.hostname
       ? `${tcpIngress.hostname}.${hostedZone}`
       : `${params.componentSlug}.${params.orgSlug}-${params.projectSlug}-${params.envSlug}.${hostedZone}`;
-    const tcpServiceName = this.appendK8sSuffix(params.resourceName, 'tcp', 'tcp ingress service');
+    const tcpServiceName = appendK8sSuffix(params.resourceName, 'tcp', 'tcp ingress service');
     const annotations = params.provider === 'aws-nlb'
       ? {
           'service.beta.kubernetes.io/aws-load-balancer-type': 'external',
@@ -2616,7 +2617,7 @@ export class DeployerService {
       }
 
       const port = await this.resolveProducerServicePort(grant.producer_project_id, grant.service_name);
-      const namespace = this.toK8sName(`eve-${producerOrg.slug}-${producerProject.slug}-${producerEnv}`, 'namespace');
+      const namespace = deriveNamespace(producerOrg.slug, producerProject.slug, producerEnv);
       const baseUrl = `http://${producerEnv}-${grant.service_name}.${namespace}.svc.cluster.local${port ? `:${port}` : ''}`;
       const token = await mintAppLinkToken({
         subscriptionId: subscription.id,
@@ -3103,7 +3104,7 @@ export class DeployerService {
         );
       }
 
-      const volumeName = this.toK8sName(`${serviceName}-vol-${index + 1}`, 'volume');
+      const volumeName = toK8sName(`${serviceName}-vol-${index + 1}`, 'volume');
       volumes.push({ name: volumeName, emptyDir: {} });
       volumeMounts.push({
         name: volumeName,
@@ -3182,8 +3183,8 @@ export class DeployerService {
       ? storageRecord.name.trim()
       : `${serviceName}-data`;
 
-    const volumeBase = this.toK8sName(nameOverride, 'volume');
-    const pvcName = this.toK8sName(`${nameOverride}-pvc`, 'pvc');
+    const volumeBase = toK8sName(nameOverride, 'volume');
+    const pvcName = toK8sName(`${nameOverride}-pvc`, 'pvc');
 
     return {
       mountPath,
@@ -3308,7 +3309,7 @@ export class DeployerService {
       }
 
       const sourcePath = join(repoPath, source);
-      const configMapName = this.toK8sName(`${resourcePrefix}-files-${index}`, 'configmap');
+      const configMapName = toK8sName(`${resourcePrefix}-files-${index}`, 'configmap');
 
       try {
         const data = await this.readFilesForConfigMap(sourcePath);
@@ -3351,7 +3352,7 @@ export class DeployerService {
     const { namespace, envName, services, timeoutMs } = params;
     if (!services || Object.keys(services).length === 0) return;
 
-    const envSlug = this.toK8sName(envName, 'environment');
+    const envSlug = toK8sName(envName, 'environment');
     const healthyDeps = new Set<string>();
 
     for (const [, service] of Object.entries(services)) {
@@ -3368,8 +3369,8 @@ export class DeployerService {
     const sortedServices = this.topologicalSort(services as Record<string, any>);
     for (const { name } of sortedServices) {
       if (healthyDeps.has(name)) {
-        const componentSlug = this.toK8sName(name, 'component');
-        const resourceName = this.combineK8sName(envSlug, componentSlug, 'resource');
+        const componentSlug = toK8sName(name, 'component');
+        const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
         this.logger.log(`Waiting for ${name} to become healthy (required by dependents)`);
         await this.waitForComponentHealth(namespace, resourceName, timeoutMs);
       }
@@ -3390,13 +3391,13 @@ export class DeployerService {
     const deps = service.depends_on as Record<string, { condition?: string }> | undefined;
     if (!deps) return;
 
-    const envSlug = this.toK8sName(envName, 'environment');
+    const envSlug = toK8sName(envName, 'environment');
     for (const [depName, depConfig] of Object.entries(deps)) {
       if (!services[depName]) continue;
       const condition = typeof depConfig?.condition === 'string' ? depConfig.condition : 'service_started';
       if (['service_started', 'started', 'service_healthy', 'healthy'].includes(condition)) {
-        const componentSlug = this.toK8sName(depName, 'component');
-        const resourceName = this.combineK8sName(envSlug, componentSlug, 'resource');
+        const componentSlug = toK8sName(depName, 'component');
+        const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
         this.logger.log(`Waiting for dependency ${depName} before running job ${serviceName}`);
         await this.waitForComponentHealth(namespace, resourceName, timeoutMs);
       }
@@ -3646,66 +3647,6 @@ export class DeployerService {
     return undefined;
   }
 
-  private toK8sName(value: string, label: string): string {
-    const normalized = value
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '')
-      .replace(/--+/g, '-');
-
-    if (!normalized) {
-      throw new Error(`Invalid ${label} name: ${value}`);
-    }
-
-    return normalized.length > 63 ? normalized.slice(0, 63).replace(/-+$/, '') : normalized;
-  }
-
-  private toK8sLabelValue(value: string, label: string): string {
-    const normalized = value
-      .toLowerCase()
-      .replace(/[^a-z0-9-_.]+/g, '-')
-      .replace(/^[^a-z0-9]+/, '')
-      .replace(/[^a-z0-9]+$/, '')
-      .replace(/-+$/, '');
-
-    if (!normalized) {
-      throw new Error(`Invalid ${label} label value: ${value}`);
-    }
-
-    return normalized.length > 63 ? normalized.slice(0, 63).replace(/[-_.]+$/, '') : normalized;
-  }
-
-  private combineK8sName(envSlug: string, componentSlug: string, label: string): string {
-    const combined = `${envSlug}-${componentSlug}`;
-    if (combined.length <= 63) {
-      return combined;
-    }
-
-    const maxEnv = 31;
-    const maxComponent = 31;
-    const trimmedEnv = envSlug.slice(0, maxEnv).replace(/-+$/, '');
-    const trimmedComponent = componentSlug.slice(0, maxComponent).replace(/-+$/, '');
-    const trimmed = `${trimmedEnv}-${trimmedComponent}`.replace(/-+$/, '');
-
-    if (!trimmed) {
-      throw new Error(`Invalid ${label} name from ${envSlug}-${componentSlug}`);
-    }
-
-    return trimmed;
-  }
-
-  private appendK8sSuffix(base: string, suffix: string, label: string): string {
-    const normalizedSuffix = this.toK8sName(suffix, label);
-    const reserved = normalizedSuffix.length + 1;
-    const maxBaseLength = 63 - reserved;
-    const trimmedBase = base.slice(0, maxBaseLength).replace(/-+$/, '');
-    const combined = `${trimmedBase}-${normalizedSuffix}`;
-    if (!trimmedBase || combined.length > 63) {
-      throw new Error(`Invalid ${label} name from ${base}-${suffix}`);
-    }
-    return combined;
-  }
 
   /**
    * Interpolate manifest variables in a string value.
@@ -3951,9 +3892,7 @@ export class DeployerService {
       throw new Error(`Org ${project.org_id} not found for project ${project.id}`);
     }
 
-    const namespace = environment.namespace
-      ? this.toK8sName(environment.namespace, 'namespace')
-      : this.toK8sName(`eve-${org.slug}-${project.slug}-${environment.name}`, 'namespace');
+    const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
     return { namespace, environment, project, org };
   }
 

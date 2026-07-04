@@ -30,6 +30,8 @@ import {
   type ResolvedGitMetadata,
   type SecretResolveItem,
   type ToolchainCacheEvent,
+  toK8sName,
+  deriveNamespace,
 } from '@eve/shared';
 import { runStreamingCommand } from '../execution/streaming-command.js';
 
@@ -942,19 +944,10 @@ export class ScriptExecutorService {
     `;
 
     if (envRow?.namespace) {
-      return this.toK8sName(envRow.namespace);
+      return toK8sName(envRow.namespace, 'namespace');
     }
 
-    return this.toK8sName(`eve-${orgSlug}-${projectSlug}-${envName}`);
-  }
-
-  private toK8sName(value: string): string {
-    return value
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '')
-      .replace(/--+/g, '-');
+    return deriveNamespace(orgSlug, projectSlug, envName);
   }
 
   /**

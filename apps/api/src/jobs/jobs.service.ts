@@ -4,7 +4,7 @@ import { switchMap, concatMap, takeWhile, share } from 'rxjs/operators';
 import type { Db } from '@eve/db';
 import { jobQueries, projectQueries, executionLogQueries, gateQueries, projectManifestQueries, threadMessageQueries, spendQueries, environmentQueries, agentQueries, batchJobQueries, projectApiSourceQueries, orgQueries, agentConfigQueries, appLinkSubscriptionQueries, type Job, type JobAttempt, type JobHints, type AttemptResultData, type JobGitConfig, type JobWorkspaceConfig, type JobAttemptGitMeta } from '@eve/db';
 import type { AccessBindingScope, JobGit, JobWorkspace, JobHarnessOptions, JobCompareResponse, JobTarget, ResourceRef, CreateBatchRequest, CreateBatchResponse, BatchValidateResponse, BatchValidationError, InlineProfileBundle } from '@eve/shared';
-import { parseResourceUri, defaultMountPathForUri, isValidMountPath, generateBatchId, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
+import { deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, generateBatchId, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
 import * as yaml from 'yaml';
 import { buildApiError } from '../system/api-errors.js';
 
@@ -400,7 +400,7 @@ export class JobsService {
         throw new BadRequestException(`Producer org ${producerProject.org_id} not found for app link "${alias}"`);
       }
       const port = await this.resolveAppLinkServicePort(grant.producer_project_id, grant.service_name);
-      const namespace = `eve-${producerOrg.slug}-${producerProject.slug}-${producerEnv}`;
+      const namespace = deriveNamespace(producerOrg.slug, producerProject.slug, producerEnv);
       const baseUrl = `http://${producerEnv}-${grant.service_name}.${namespace}.svc.cluster.local${port ? `:${port}` : ''}`;
       resolved.push({
         name: grant.export_name,
@@ -481,7 +481,7 @@ export class JobsService {
           }
         }
 
-        const namespace = `eve-${org.slug}-${project.slug}-${activeEnv.name}`;
+        const namespace = deriveNamespace(org.slug, project.slug, activeEnv.name);
         const baseUrl = `http://${activeEnv.name}-${name}.${namespace}.svc.cluster.local${portSuffix}`;
         availableApis.set(name, { type: 'openapi', base_url: baseUrl, ...(cliInfo ? { cli: cliInfo } : {}) });
       }

@@ -1,3 +1,4 @@
+import { deriveNamespace } from '@eve/shared';
 import {
   Inject,
   Injectable,
@@ -91,7 +92,7 @@ export class EnvLogsService {
       if (!org) {
         throw new NotFoundException(`Org ${project.org_id} not found for project ${projectId}`);
       }
-      namespace = `eve-${org.slug}-${project.slug}-${envName}`;
+      namespace = deriveNamespace(org.slug, project.slug, envName);
     }
     const selector = EnvLogsService.buildLabelSelector(projectId, envName, service);
 

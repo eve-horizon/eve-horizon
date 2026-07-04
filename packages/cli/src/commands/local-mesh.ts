@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { toK8sName } from '@eve/shared';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -922,7 +923,7 @@ async function probeSubscription(
   }
 
   const serviceName = subscription.inject_into_services[0]!;
-  const deploymentName = toK8sName(`${workspace.env}-${serviceName}`);
+  const deploymentName = toK8sName(`${workspace.env}-${serviceName}`, 'deployment');
   const deployment = kubectl(['-n', namespace, 'get', 'deployment', deploymentName, '-o', 'json'], undefined, true);
   if (deployment.status !== 0) {
     return { status: 'failed', message: deployment.stderr || deployment.stdout || `deployment/${deploymentName} not found` };
@@ -941,7 +942,7 @@ async function probeSubscription(
     return { status: 'failed', message: `deployment/${deploymentName} has no ${prefix}_* env vars` };
   }
 
-  const jobName = toK8sName(`eve-link-probe-${subscription.local_alias}-${Date.now().toString(36)}`).slice(0, 63);
+  const jobName = toK8sName(`eve-link-probe-${subscription.local_alias}-${Date.now().toString(36)}`, 'job');
   const command = `curl -fsS -H "Authorization: Bearer $${prefix}_TOKEN" "$${prefix}_API_URL/health"`;
   const job = {
     apiVersion: 'batch/v1',
@@ -1040,14 +1041,6 @@ function normalizeOrgSlug(value: string): string {
   if (!slug) slug = 'localmesh';
   if (!/^[a-z]/.test(slug)) slug = `o${slug}`;
   return slug.slice(0, 12);
-}
-
-function toK8sName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-{2,}/g, '-');
 }
 
 function appLinkEnvPrefix(alias: string): string {

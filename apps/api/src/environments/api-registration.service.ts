@@ -1,4 +1,5 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
+import { deriveNamespace } from '@eve/shared';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '@eve/db';
@@ -133,7 +134,7 @@ export class ApiRegistrationService {
     const portSuffix = port ? `:${port}` : '';
 
     return {
-      internal_base_url: `http://${envName}-${componentName}.eve-${orgSlug}-${projectSlug}-${envName}.svc.cluster.local${portSuffix}`,
+      internal_base_url: `http://${envName}-${componentName}.${deriveNamespace(orgSlug, projectSlug, envName)}.svc.cluster.local${portSuffix}`,
       external_base_url: `http://${componentName}.${orgSlug}-${projectSlug}-${envName}.${domain}`,
     };
   }

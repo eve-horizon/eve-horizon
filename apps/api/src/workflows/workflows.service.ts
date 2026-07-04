@@ -1,7 +1,7 @@
 import { Injectable, Inject, Optional, BadRequestException, NotFoundException, RequestTimeoutException } from '@nestjs/common';
 import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
-import { ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, interpolateValue, isValidPermission, mergeEnvOverrides, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
+import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, interpolateValue, isValidPermission, mergeEnvOverrides, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
 import * as yaml from 'yaml';
 
@@ -498,7 +498,7 @@ export class WorkflowsService {
         throw new BadRequestException(`Producer org ${producerProject.org_id} not found for app link "${alias}"`);
       }
       const port = await this.resolveAppLinkServicePort(grant.producer_project_id, grant.service_name);
-      const namespace = `eve-${producerOrg.slug}-${producerProject.slug}-${producerEnv}`;
+      const namespace = deriveNamespace(producerOrg.slug, producerProject.slug, producerEnv);
       const baseUrl = `http://${producerEnv}-${grant.service_name}.${namespace}.svc.cluster.local${port ? `:${port}` : ''}`;
       resolved.push({
         name: grant.export_name,
@@ -581,7 +581,7 @@ export class WorkflowsService {
         }
 
         // Construct internal K8s URL from naming convention
-        const namespace = `eve-${org.slug}-${project.slug}-${activeEnv.name}`;
+        const namespace = deriveNamespace(org.slug, project.slug, activeEnv.name);
         const baseUrl = `http://${activeEnv.name}-${name}.${namespace}.svc.cluster.local${portSuffix}`;
         console.warn(`[with_apis fallback] Resolved ${name} → ${baseUrl}${cliInfo ? ` (CLI: ${cliInfo.name})` : ''}`);
 

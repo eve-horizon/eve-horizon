@@ -11,6 +11,8 @@ import {
   executeSnapshot,
   resolveManagedDbSnapshotRetention,
   snapshotRetentionToExpiresAt,
+  toK8sName,
+  deriveNamespace,
 } from '@eve/shared';
 import * as crypto from 'crypto';
 import * as yaml from 'yaml';
@@ -651,12 +653,10 @@ export class EnvDbService {
     namespace: string | null,
     serviceName: string,
   ): string {
-    const envSlug = this.toK8sName(envName);
-    const componentSlug = this.toK8sName(serviceName);
+    const envSlug = toK8sName(envName, 'environment');
+    const componentSlug = toK8sName(serviceName, 'service');
     const resourceName = `${envSlug}-${componentSlug}`;
-    const namespaceName = namespace
-      ? this.toK8sName(namespace)
-      : this.toK8sName(`eve-${orgSlug}-${projectSlug}-${envName}`);
+    const namespaceName = deriveNamespace(orgSlug, projectSlug, envName, namespace);
     return `${resourceName}.${namespaceName}.svc.cluster.local`;
   }
 
@@ -837,8 +837,4 @@ export class EnvDbService {
     };
   }
 
-  private toK8sName(value: string): string {
-    const normalized = value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    return normalized.replace(/^-+/, '').replace(/-+$/, '').slice(0, 63) || 'eve';
-  }
 }

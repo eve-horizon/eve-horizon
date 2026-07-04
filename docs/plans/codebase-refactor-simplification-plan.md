@@ -1,6 +1,6 @@
 # Codebase Refactor & Simplification Plan
 
-> **Status**: Draft — awaiting approval (no refactors until approved)
+> **Status**: In progress — executing batches R-A → R-D (approved 2026-07-04; Phase R-E held on §5 decisions)
 > **Created**: 2026-07-04
 > **Goal**: A simpler, more elegant eve-horizon codebase. Decompose god files, collapse duplication, converge inconsistent patterns — in the code that *stays*.
 > **Companion doc**: [platform-slim-down-plan.md](./platform-slim-down-plan.md) owns *deletion* (dead code, zero-usage features, legacy shims, docs purge). This plan owns *structure*. Where a slim-down batch removes code this plan would otherwise refactor, the slim-down batch wins and the item here is marked as gated on it.
@@ -250,3 +250,10 @@ Everything the slim-down plan owns (its §3-4): dead code, zero-usage features, 
 ## 7. Estimated impact
 
 Rough, assuming slim-down G1/C-phase land first: the five god files (deployer 4,195, loop 3,516, cli job 5,002, cli help 3,238, sso main 1,829 = 17,780 LOC) decompose into focused modules with no file over ~600 lines; CLI-1/2 alone deletes ~3,000+ lines of hand-maintained metadata and fixes the three commands (`identity`, `ingest`, `providers`) whose `--help` is broken and which are undiscoverable today; dedup batches (R-B*) remove roughly 1,500-2,500 duplicated lines and, more importantly, single-source the k8s naming, migration state, auth-client, and harness-enum contracts that currently have split-brain potential. Test seams appear as a side effect (pure formatters, decomposed query factories, mockable `requestStream`), making the thin-coverage areas (cli, db) cheaply testable.
+
+## 8. Execution log
+
+Gates per entry: B = `pnpm build`, U = `pnpm test`, I = `./bin/eh test integration --reset-db`, K = k3d (named). Each batch = one bd issue + commit(s); an entry lands only when all its gates are green.
+
+| Date | Batch | Commit | What | Gates | Notes |
+| --- | --- | --- | --- | --- | --- |

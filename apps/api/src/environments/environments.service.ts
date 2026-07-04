@@ -19,6 +19,8 @@ import {
   type DeleteEnvironmentRequest,
   type UndeployEnvironmentRequest,
   getServicesFromManifest,
+  toK8sName,
+  deriveNamespace,
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { ApiRegistrationService } from './api-registration.service.js';
@@ -73,7 +75,7 @@ export class EnvironmentsService {
     // Normalize user-supplied namespace so it matches the actual K8s namespace
     // (which is always lowercased). Sentinel + deployer both query K8s with
     // exact-case matching.
-    const namespace = data.namespace ? this.toK8sName(data.namespace, 'namespace') : null;
+    const namespace = data.namespace ? toK8sName(data.namespace, 'namespace') : null;
     const environment = await this.environments.create({
       id: environmentId,
       project_id: projectId,
@@ -156,8 +158,7 @@ export class EnvironmentsService {
       throw new NotFoundException(`Org ${project.org_id} not found for project ${projectId}`);
     }
 
-    const baseNamespace = environment.namespace ?? `eve-${org.slug}-${project.slug}-${environment.name}`;
-    return this.toK8sName(baseNamespace, 'namespace');
+    return deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
   }
 
   private async resolveNamespaceById(environmentId: string): Promise<string> {
@@ -168,7 +169,7 @@ export class EnvironmentsService {
     // Always normalize: a previously-stored mixed-case value would otherwise
     // be returned as-is, causing K8s lookups (which are case-sensitive) to miss.
     if (environment.namespace) {
-      return this.toK8sName(environment.namespace, 'namespace');
+      return toK8sName(environment.namespace, 'namespace');
     }
     const project = await this.projects.findById(environment.project_id);
     if (!project) {
@@ -178,7 +179,7 @@ export class EnvironmentsService {
     if (!org) {
       throw new NotFoundException(`Org ${project.org_id} not found`);
     }
-    return this.toK8sName(`eve-${org.slug}-${project.slug}-${environment.name}`, 'namespace');
+    return deriveNamespace(org.slug, project.slug, environment.name);
   }
 
   async update(
@@ -765,8 +766,7 @@ export class EnvironmentsService {
       return;
     }
 
-    // Namespace follows pattern: eve-{orgSlug}-{projectSlug}-{envName}
-    const namespace = `eve-${orgSlug}-${projectSlug}-${envName}`;
+    const namespace = deriveNamespace(orgSlug, projectSlug, envName);
 
     for (const apiSpec of apiSpecs) {
       // Only register if on_deploy is true (default)
@@ -1204,21 +1204,6 @@ export class EnvironmentsService {
       created_at: environment.created_at.toISOString(),
       updated_at: environment.updated_at.toISOString(),
     };
-  }
-
-  private toK8sName(value: string, label: string): string {
-    const normalized = value
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '')
-      .replace(/--+/g, '-');
-
-    if (!normalized) {
-      throw new Error(`Invalid ${label} name: ${value}`);
-    }
-
-    return normalized.length > 63 ? normalized.slice(0, 63).replace(/-+$/, '') : normalized;
   }
 
   private async loadEnvironmentAliases(
