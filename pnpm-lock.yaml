@@ -383,6 +383,10 @@ importers:
         version: 5.9.3
 
   packages/auth-react:
+    dependencies:
+      '@eve-horizon/auth':
+        specifier: workspace:*
+        version: link:../auth
     devDependencies:
       '@types/react':
         specifier: ^18.2.0

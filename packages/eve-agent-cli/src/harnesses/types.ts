@@ -1,14 +1,5 @@
-export type HarnessName =
-  | 'claude'
-  | 'mclaude'
-  | 'zai'
-  | 'gemini'
-  | 'code'
-  | 'coder'
-  | 'codex'
-  | 'pi';
-
-export type PermissionPolicy = 'default' | 'auto_edit' | 'never' | 'yolo';
+export type { HarnessName, PermissionPolicy } from '@eve/shared';
+import type { HarnessName, PermissionPolicy } from '@eve/shared';
 
 export type CliContext = {
   harness: HarnessName;

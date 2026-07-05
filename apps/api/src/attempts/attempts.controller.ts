@@ -11,6 +11,7 @@ import {
   DefaultValuePipe,
   NotFoundException,
 } from '@nestjs/common';
+import { parseBoolean } from '../common/query-params.js';
 import {
   ApiBody,
   ApiCreatedResponse,
@@ -36,11 +37,6 @@ import {
 } from '@eve/shared';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
-
-function parseBoolean(value?: string): boolean {
-  if (!value) return false;
-  return ['true', '1', 'yes', 'y', 'on'].includes(value.toLowerCase());
-}
 
 /**
  * Attempts Controller - Adapted for the new Jobs schema

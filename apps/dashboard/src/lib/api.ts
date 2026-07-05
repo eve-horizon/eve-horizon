@@ -1,16 +1,10 @@
-const BASE = '/api';
+import { getStoredToken } from '@eve-horizon/auth-react';
 
-function getToken(): string | null {
-  try {
-    return sessionStorage.getItem('eve_access_token');
-  } catch {
-    return null;
-  }
-}
+const BASE = '/api';
 
 function headers(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
-  const token = getToken();
+  const token = getStoredToken();
   if (token) h['Authorization'] = `Bearer ${token}`;
   return h;
 }
@@ -39,7 +33,7 @@ export class ApiError extends Error {
 
 // SSE helper for streaming logs
 export function createEventSource(path: string): EventSource {
-  const token = getToken();
+  const token = getStoredToken();
   const url = token ? `${BASE}${path}?token=${encodeURIComponent(token)}` : `${BASE}${path}`;
   return new EventSource(url);
 }

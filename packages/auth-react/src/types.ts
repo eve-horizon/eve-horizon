@@ -33,22 +33,9 @@ export interface EveAuthState {
   config: AuthConfig | null;
 }
 
-export interface EveAppAccessOrg {
-  id: string;
-  slug: string;
-  name: string;
-  role: 'owner' | 'admin' | 'member';
-  capabilities: {
-    enter_app: boolean;
-    invite_members: boolean;
-  };
-}
-
-export interface EveAppAccess {
-  project_id: string;
-  orgs: EveAppAccessOrg[];
-  admin_orgs: Array<Omit<EveAppAccessOrg, 'capabilities'>>;
-}
+// Server contract types are defined once in @eve-horizon/auth (the packages
+// publish in lockstep); re-exported here so existing imports keep working.
+export type { EveAppAccess, EveAppAccessOrg } from '@eve-horizon/auth';
 
 export interface EveAppInviteResult {
   status: 'invited' | 'pending' | 'already_member';

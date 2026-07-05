@@ -17,6 +17,7 @@ import {
   BadRequestException,
   Req,
 } from '@nestjs/common';
+import { parseBoolean, parseOptionalDate } from '../common/query-params.js';
 import { ApiBody, ApiCreatedResponse, ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ProjectsService } from './projects.service.js';
 import {
@@ -77,19 +78,6 @@ import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
 
-function parseBoolean(value?: string): boolean {
-  if (!value) return false;
-  return ['true', '1', 'yes', 'y', 'on'].includes(value.toLowerCase());
-}
-
-function parseOptionalDate(value?: string): Date | undefined {
-  if (!value) return undefined;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) {
-    throw new BadRequestException(`Invalid date: ${value}`);
-  }
-  return d;
-}
 
 @ApiTags('projects')
 @ApiBearerAuth()
