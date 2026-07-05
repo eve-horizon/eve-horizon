@@ -58,6 +58,7 @@ import {
   type Job,
   type JobAttempt,
   type PipelineRun,
+  type Project,
 } from '@eve/db';
 import { WorkerService } from '../worker/worker.service';
 import * as yaml from 'yaml';
@@ -370,6 +371,29 @@ function deriveOrgFsMountContextFromTokenScope(scope: AccessBindingScope | null 
  * dispatch running as a background promise (fire-and-forget from tick's
  * perspective).
  */
+/**
+ * Result of dispatching a claimed job and completing its attempt.
+ *
+ * 'completed' — the attempt was completed by this orchestrator; the caller
+ * finalizes the job from the worker result.
+ * 'externally_finalized' — the attempt was finalized by another path (e.g.
+ * pod shutdown drain); the job phase has already been recovered and the
+ * caller must stop processing with the recorded attempt outcome.
+ */
+type JobDispatchOutcome =
+  | {
+      kind: 'completed';
+      result: HarnessResult;
+      eveControl: ReturnType<typeof extractEveControl>;
+      outcome: EveControlStatus;
+      completedAttempt: JobAttempt;
+    }
+  | {
+      kind: 'externally_finalized';
+      attemptSucceeded: boolean;
+      lastErrorMessage: string | null;
+    };
+
 @Injectable()
 export class LoopService implements OnModuleInit, OnModuleDestroy {
   private readonly config = loadConfig();
@@ -1379,57 +1403,9 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     try {
       // Step 1b: Acquire gates if job requires them
-      if (requiredGates.length > 0) {
-        const ttlSeconds = Math.ceil(
-          resolveWorkerPollTimeoutMs(job, job.execution_type ?? 'agent') / 1000,
-        );
-        const gateResult = await gates.acquireGates(job.id, requiredGates, ttlSeconds, {
-          orchestrator: true,
-          env_name: job.env_name,
-        });
-
-        if (!gateResult.success) {
-          // Gates blocked - update blocked_on_gates and release job back to ready
-          await gates.updateBlockedOnGates(job.id, gateResult.blocked_by);
-
-          // Build descriptive message about which gates are blocked
-          const envGateBlocked = gateResult.blocked_by.some(g => g.startsWith('env:'));
-          const branchGateBlocked = gateResult.blocked_by.some(g => g.startsWith('git:branch:'));
-          let logMsg: string;
-          if (envGateBlocked) {
-            logMsg = `Job ${job.id} blocked on environment gate (another job is deploying to ${job.env_name}): ${gateResult.blocked_by.join(', ')}`;
-          } else if (branchGateBlocked) {
-            logMsg = `Job ${job.id} blocked on branch gate (another job is writing to the same branch): ${gateResult.blocked_by.join(', ')}`;
-          } else {
-            logMsg = `Job ${job.id} blocked on gates: ${gateResult.blocked_by.join(', ')}`;
-          }
-          console.log(logMsg);
-
-          // Mark the attempt as failed with a gate-specific message
-          await jobs.completeAttempt(attempt.id, 'failed', {
-            exitCode: 0,
-            errorMessage: `Blocked on gates: ${gateResult.blocked_by.join(', ')}`,
-          });
-
-          // Requeue with a short defer to prevent a hot-loop of rapid
-          // claim/fail/requeue cycles while the gate remains occupied.
-          await jobs.requeueReady(job.id, 'orchestrator', {
-            reason: 'Blocked on gates',
-            deferUntil: new Date(Date.now() + WAITING_BACKOFF_MS),
-          });
-          return;
-        }
-
-        // Gates acquired - clear any previous blocked_on_gates
-        await gates.clearBlockedOnGates(job.id);
-
-        // Log which gates were acquired, highlighting environment and branch gates
-        const gatesList = requiredGates.map(g => {
-          if (g.startsWith('env:')) return `${g} (environment lock)`;
-          if (g.startsWith('git:branch:')) return `${g} (branch lock)`;
-          return g;
-        }).join(', ');
-        console.log(`Acquired gates for job ${job.id}: ${gatesList}`);
+      const gateOutcome = await this.acquireJobGates(job, attempt, jobs, gates, requiredGates);
+      if (gateOutcome === 'blocked') {
+        return;
       }
       // Step 2: Parse job ID to get project_id
       // New Job IDs are like: project-slug-hash or project-slug-hash.1
@@ -1439,521 +1415,778 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       console.log(`Using attempt ${attempt.id} (number: ${attempt.attempt_number})`);
 
       // Step 4: Create workspace directory
-      // Job ID format: slug-hash or slug-hash.1.2
-      const jobIdParts = job.id.split('-');
-      const projectSlug = jobIdParts[0];
-      workspacePath = path.join(
-        this.config.WORKSPACE_ROOT,
-        projectSlug,
-        job.id,
-        attempt.attempt_number.toString(),
-      );
-
-      await fs.mkdir(workspacePath, { recursive: true });
-      console.log(`Workspace at ${workspacePath}`);
+      workspacePath = this.resolveWorkspacePath(job, attempt);
+      await this.prepareJobWorkspace(workspacePath);
 
       // Step 5a: Enrich workflow step jobs with prior step results
-      let enrichedDescription = job.description ?? '';
-      if (job.hints?.workflow_name) {
-        try {
-          const deps = await jobs.getDependencies(job.id);
-          const priorResults: string[] = [];
-          for (const dep of deps) {
-            if (dep.phase === 'done') {
-              const depAttempt = await jobs.getLatestAttempt(dep.id);
-              if (depAttempt?.result_text) {
-                const resultText = depAttempt.result_text.length > 50_000
-                  ? depAttempt.result_text.slice(0, 50_000) + '\n\n[truncated — result exceeded 50KB]'
-                  : depAttempt.result_text;
-                const stepName = dep.hints?.step_name ?? dep.id;
-                priorResults.push(`### Step: ${stepName} (${dep.id})\n\n${resultText}`);
-              }
-            }
-          }
-          if (priorResults.length > 0) {
-            enrichedDescription += '\n\n---\n## Prior Step Results\n\n' + priorResults.join('\n\n---\n\n');
-          }
-        } catch (err) {
-          console.warn(`Failed to enrich prior step results for ${job.id}:`, err);
-        }
+      const enrichedDescription = await this.enrichWorkflowStep(job, jobs);
+
+      // Steps 5b + 6: Execute worker and complete the attempt with result data
+      const dispatched = await this.dispatchAndAwait(job, attempt, jobs, {
+        projectId,
+        workspacePath,
+        enrichedDescription,
+      });
+      if (dispatched.kind === 'externally_finalized') {
+        attemptSucceeded = dispatched.attemptSucceeded;
+        lastErrorMessage = dispatched.lastErrorMessage;
+        return;
       }
+      // Steps 6b-8: receipts and charges, coordination relay, staged-council
+      // promotion, and job status update from the worker result
+      const finalized = await this.finalizeJobResult(job, attempt, jobs, dispatched);
+      attemptSucceeded = finalized.attemptSucceeded;
+      lastErrorMessage = finalized.lastErrorMessage;
+    } catch (error) {
+      // If anything goes wrong during execution, mark both attempt and job as failed
+      const failure = await this.handleProcessJobError(job, attempt, jobs, error);
+      attemptSucceeded = failure.attemptSucceeded;
+      lastErrorMessage = failure.lastErrorMessage;
+    } finally {
+      await this.releaseJobResources({
+        job,
+        gates,
+        requiredGates,
+        workspacePath,
+        attemptSucceeded,
+        lastErrorMessage,
+        cleanupOnSuccess,
+        cleanupOnFailure,
+      });
+    }
+  }
 
-      // Step 5b: Execute worker
-      console.log(`Executing worker for job ${job.id}, attempt ${attempt.id}`);
+  /**
+   * Finally path of processJob: release held gates, clean the workspace when
+   * configured, and sync pipeline-run / ingest-record / workflow-root state
+   * once the attempt reaches a terminal outcome (attemptSucceeded non-null).
+   */
+  private async releaseJobResources(params: {
+    job: Job;
+    gates: ReturnType<typeof gateQueries>;
+    requiredGates: string[];
+    workspacePath: string | undefined;
+    attemptSucceeded: boolean | null;
+    lastErrorMessage: string | null;
+    cleanupOnSuccess: boolean;
+    cleanupOnFailure: boolean;
+  }): Promise<void> {
+    const {
+      job,
+      gates,
+      requiredGates,
+      workspacePath,
+      attemptSucceeded,
+      lastErrorMessage,
+      cleanupOnSuccess,
+      cleanupOnFailure,
+    } = params;
 
-      const project = await projectQueries(this.db).findById(projectId);
-      if (!project) {
-        throw new Error(`Project ${projectId} not found for job ${job.id}`);
+    // Always release gates when job completes (success or failure)
+    if (requiredGates.length > 0) {
+      const released = await gates.releaseGates(job.id);
+      if (released > 0) {
+        console.log(`Released ${released} gate(s) for job ${job.id}`);
       }
+    }
 
-      const executionType = job.execution_type ?? 'agent';
-      const workerImage = await this.resolveWorkerImage(job);
+    const shouldCleanup =
+      workspacePath &&
+      attemptSucceeded !== null &&
+      (attemptSucceeded ? cleanupOnSuccess : cleanupOnFailure);
 
-      const jobTimeoutMs = resolveWorkerPollTimeoutMs(job, executionType);
-
-      let result: HarnessResult;
-
-      if (executionType === 'action') {
-        result = await this.workerService.executeAction(job.id, attempt.id as AttemptId, projectId, {
-          workerImage,
-          timeoutMs: jobTimeoutMs,
-        });
-      } else if (executionType === 'script') {
-        result = await this.workerService.executeScript(job.id, attempt.id as AttemptId, projectId, {
-          workerImage,
-          timeoutMs: jobTimeoutMs,
-        });
-      } else {
-        // NOTE: New Jobs system uses 'title' and 'description' instead of 'text'
-        // Worker execution needs adaptation for the new job format
-        const manifestDefaults = await this.getManifestDefaults(job.project_id);
-        const systemPreference = await this.getSystemHarnessPreference();
-
-        // Resolve secrets from all scopes (system -> org -> project -> user) for harness selection
-        const resolvedSecrets = await this.resolveSecretsForHarnessSelection(job.project_id);
-
-        const selection = selectAvailableHarness({
-          explicit: attempt.harness ?? job.harness ?? undefined,
-          projectPreference: manifestDefaults?.harness_preference as string[] | undefined,
-          systemPreference,
-          env: resolvedSecrets,
-        });
-
-        const harnessSpec = selection.harness;
-        console.log(
-          `Harness: ${selection.harness} (source: ${selection.source}, checked: ${selection.checked.join(', ')})`
-        );
-
-        // F4: Persist routing decision as execution log for diagnostics.
-        // Includes per-job harness profile attribution (plan §3.6) so analytics
-        // can group cost by inline_override vs agent_default without reading
-        // the job row. Never include plaintext secrets — we only log the
-        // stable hash over the normalized inputs.
-        const profileHash = (job as { harness_profile_hash?: string | null }).harness_profile_hash ?? null;
-        const profileSource = (job as { harness_profile_source?: string | null }).harness_profile_source ?? null;
-        executionLogQueries(this.db).appendLog(attempt.id, 'routing', {
-          execution_type: executionType,
-          target: process.env.EVE_AGENT_RUNTIME_URL ? 'agent-runtime' : 'worker',
-          harness: selection.harness,
-          harness_source: selection.source,
-          harness_checked: selection.checked,
-          harness_profile_name: job.harness_profile ?? null,
-          harness_profile_source: profileSource,
-          harness_profile_hash: profileHash,
-          effective_harness: selection.harness,
-          effective_model: (job.harness_options as { model?: string } | null)?.model ?? null,
-          effective_effort: (job.harness_options as { reasoning_effort?: string } | null)?.reasoning_effort ?? null,
-          agent_id: attempt.agent_id,
-          budget: {
-            max_tokens: (job.hints as Record<string, unknown>)?.max_tokens,
-            max_cost: (job.hints as Record<string, unknown>)?.max_cost,
-          },
-        }).catch(err => console.warn(`Failed to log routing decision: ${err}`));
-
-        const { harness, variant: parsedVariant } = parseHarnessSpec(harnessSpec);
-        const harnessOptions = job.harness_options ?? undefined;
-        const variant = harnessOptions?.variant ?? parsedVariant;
-
-        // Extract permission policy from job hints
-        const permission = job.hints?.permission_policy as
-          | 'default'
-          | 'auto_edit'
-          | 'never'
-          | 'yolo'
-          | undefined;
-
-        // Extract git and workspace configuration from job
-        const git: JobGitConfig | undefined = job.git_json ?? undefined;
-        const workspace: JobWorkspaceConfig | undefined = job.workspace_json ?? undefined;
-        const { orgFsMount, tokenScope } = await this.resolveJobScope(job, project.org_id);
-        const invocationData: Record<string, unknown> = {
-          orgfs_mount: orgFsMount,
-        };
-        if (tokenScope) {
-          invocationData.__eve_job_scope = tokenScope;
-        }
-        if (Array.isArray(job.token_permissions) && job.token_permissions.length > 0) {
-          invocationData.__eve_job_permissions = job.token_permissions;
-        }
-        if (job.actor_user_id) {
-          invocationData.user_id = job.actor_user_id;
-        }
-        if (typeof job.hints?.skill_mode === 'string') {
-          invocationData.skill_mode = job.hints.skill_mode;
-        }
-        // Forward chat file attachments from job hints
-        if (Array.isArray(job.hints?.chat_files) && job.hints.chat_files.length > 0) {
-          invocationData.chat_files = job.hints.chat_files;
-        }
-
-        // Resolve toolchains from job hints
-        const toolchains = Array.isArray(job.hints?.toolchains) ? job.hints.toolchains as string[] : [];
-
-        // Env overrides travel with the invocation in placeholder form; the
-        // shared invoke module resolves ${secret.KEY} against the materialized
-        // project secrets at spawn time (never here, never on the API).
-        const envOverrides =
-          (job as { env_overrides?: Record<string, string> | null }).env_overrides ?? undefined;
-
-        const invocation = {
-          attemptId: attempt.id as AttemptId,
-          agentId: attempt.agent_id,
-          jobId: job.id as JobId,
-          parentJobId: job.parent_id ?? null,
-          projectId: projectId as ProjectId,
-          text: job.title + (enrichedDescription ? '\n\n' + enrichedDescription : ''),
-          workspacePath,
-          repoUrl: project.repo_url,
-          repoBranch: project.branch,
-          skillPacks: null, // New Jobs system doesn't have skill_packs on job
-          data: invocationData,
-          harness,
-          variant,
-          harness_options: harnessOptions ?? undefined,
-          permission,
-          resource_refs: (job.resource_refs ?? []) as ResourceRef[],
-          git,
-          workspace,
-          ...(toolchains.length > 0 ? { toolchains } : {}),
-          ...(envOverrides && Object.keys(envOverrides).length > 0 ? { env_overrides: envOverrides } : {}),
-          ...(profileSource ? { harness_profile_source: profileSource as HarnessProfileSource } : {}),
-          ...(profileHash ? { harness_profile_hash: profileHash } : {}),
-          ...(job.harness_profile ? { harness_profile_name: job.harness_profile } : {}),
-        };
-
-        if (process.env.EVE_AGENT_RUNTIME_URL) {
-          result = await this.workerService.executeAgentRuntime(invocation, {
-            workerImage,
-            timeoutMs: jobTimeoutMs,
-          });
-        } else {
-          result = await this.workerService.execute(invocation, {
-            workerImage,
-            timeoutMs: jobTimeoutMs,
-          });
-        }
+    if (shouldCleanup && workspacePath) {
+      try {
+        await fs.rm(workspacePath, { recursive: true, force: true });
+        console.log(`Cleaned workspace at ${workspacePath}`);
+      } catch (cleanupError) {
+        const errMsg =
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        console.warn(`Failed to clean workspace ${workspacePath}: ${errMsg}`);
       }
+    }
 
-      const eveControl = extractEveControl(result.resultJson);
-      const outcome = resolveOrchestrationOutcome(result, eveControl.status);
+    // Sync parent pipeline run status when a job reaches a terminal state
+    if (job.run_id && attemptSucceeded !== null) {
+      await this.syncPipelineRunStatus(job.run_id);
+    }
 
-      if (eveControl.status && outcome !== (result.success ? 'success' : 'failed')) {
-        console.warn(
-          `Worker status override for job ${job.id}: ${result.success ? 'success' : 'failed'} -> ${outcome}`,
-        );
-      }
+    // Sync ingest record status when a triggered job completes
+    if (attemptSucceeded !== null) {
+      await this.syncIngestRecordStatus(job, attemptSucceeded, lastErrorMessage);
+    }
 
-      // Step 6: Complete the attempt with result data from worker
-      const attemptStatus = outcome === 'failed' ? 'failed' : 'succeeded';
-      const completedAttempt = await jobs.completeAttempt(
-        attempt.id,
-        attemptStatus,
-        {
-          exitCode: result.exitCode,
-          resultText: result.resultText,
-          resultJson: result.resultJson,
-          resultSummary: eveControl.summary,
-          durationMs: result.durationMs,
-          tokenInput: result.tokenInput,
-          tokenOutput: result.tokenOutput,
-          errorMessage: result.error,
-        },
-      );
+    // Close workflow root when all children reach terminal state
+    if (attemptSucceeded !== null && job.parent_id) {
+      await this.tryCloseWorkflowRoot(job.parent_id);
+    }
+  }
+
+  /**
+   * Error path of processJob: mark both the attempt and the job as failed
+   * after an unexpected execution error, emitting failure events and staged
+   * cleanup. Returns the attempt outcome consumed by processJob's finally
+   * block (the attempt may already have been finalized externally, in which
+   * case the job's terminal phase determines the outcome).
+   */
+  private async handleProcessJobError(
+    job: Job,
+    attempt: JobAttempt,
+    jobs: ReturnType<typeof jobQueries>,
+    error: unknown,
+  ): Promise<{ attemptSucceeded: boolean | null; lastErrorMessage: string | null }> {
+    let attemptSucceeded: boolean | null = null;
+    let lastErrorMessage: string | null = null;
+
+    console.error(`Error processing job ${job.id}:`, error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+
+    // Ensure the attempt is marked as failed (it may still be in 'running' state)
+    try {
+      const completedAttempt = await jobs.completeAttempt(attempt.id, 'failed', {
+        exitCode: 1,
+        errorMessage: errMsg,
+      });
       if (!completedAttempt) {
-        // Attempt was finalized by another path (e.g., pod shutdown drain).
-        // We MUST still transition the job phase — leaving it 'active' permanently
-        // is the root cause of stuck jobs after agent-runtime pod restarts.
-        const latestAttempt = await jobs.getLatestAttempt(job.id);
+        // Attempt already finalized by another path — still transition the job.
         const currentJob = await jobs.findById(job.id);
-
         if (currentJob && (currentJob.phase === 'done' || currentJob.phase === 'cancelled')) {
           attemptSucceeded = currentJob.phase === 'done';
           console.log(
-            `Job ${job.id} already in terminal phase '${currentJob.phase}' after external finalization`,
+            `Job ${job.id} already in terminal phase '${currentJob.phase}' after external finalization (error path)`,
           );
-          return;
+          return { attemptSucceeded, lastErrorMessage };
         }
-
-        const externalError = latestAttempt?.error_message ?? result.error ?? 'Attempt terminated externally';
         console.warn(
-          `Attempt ${attempt.id} for job ${job.id} was externally finalized (status=${latestAttempt?.status}); recovering job phase`,
+          `Attempt ${attempt.id} for job ${job.id} already finalized; still transitioning job phase`,
         );
-
-        if (latestAttempt?.status === 'succeeded') {
-          await jobs.markJobDone(job.id);
-          attemptSucceeded = true;
-        } else {
-          await jobs.markJobFailed(job.id, externalError);
-          await this.emitJobFailureEvent(job, attempt, {
-            errorMessage: externalError,
-            errorCode: 'pod_terminated',
-            exitCode: latestAttempt?.exit_code ?? 1,
-          });
-          attemptSucceeded = false;
-          lastErrorMessage = externalError;
-        }
-
-        return;
-      }
-      console.log(`Completed attempt ${attempt.id} with exit code ${result.exitCode}`);
-
-      await this.tryPersistAttemptReceipt(job, completedAttempt);
-      await this.tryChargeForReceipt(job, completedAttempt);
-
-      await this.updatePipelineStepOutputs(job, result.resultJson);
-
-      // Step 6b: Relay summary to coordination thread (if parent has one)
-      await this.relayToCoordinationThread(job, eveControl.summary, attempt.id);
-
-      // Step 7: Staged council — lead signals "prepared" → promote backlog children
-      if (
-        outcome === 'prepared' &&
-        (job.hints as Record<string, unknown> | null)?.staged === true
-      ) {
-        const promoted = await this.db<{ id: string }[]>`
-          UPDATE jobs
-          SET phase = 'ready', updated_at = NOW()
-          WHERE parent_id = ${job.id}
-            AND phase = 'backlog'
-          RETURNING id
-        `;
-        console.log(`Staged dispatch: promoted ${promoted.length} children for job ${job.id}`);
-
-        const currentHints = (job.hints ?? {}) as Record<string, unknown>;
-        if (promoted.length === 0) {
-          // No children to wait on — requeue lead immediately
-          await this.db`
-            UPDATE jobs
-            SET hints = ${this.db.json({ ...currentHints, staged: false } as never)}, updated_at = NOW()
-            WHERE id = ${job.id}
-          `;
-          await jobs.requeueReady(job.id, 'orchestrator', {
-            reason: 'Staged dispatch fallback: no children to run',
-          });
-        } else {
-          // Requeue lead with children.all_done wake condition
-          await this.db`
-            UPDATE jobs SET
-              hints = ${this.db.json({
-                ...currentHints,
-                staged: false,
-                wait: { wake_on: ['children.all_done'] },
-              } as never)},
-              updated_at = NOW()
-            WHERE id = ${job.id}
-          `;
-          await jobs.requeueReady(job.id, 'orchestrator', {
-            reason: 'Staged dispatch: waiting for members',
-          });
-        }
-
-        attemptSucceeded = true;
-        return;
-      }
-
-      // Step 8: Update job status based on result
-      if (outcome === 'waiting') {
-        // Store wake_on in job hints if present
-        if (eveControl.wakeOn && eveControl.wakeOn.length > 0) {
-          const currentHints = job.hints ?? {};
-          await this.db`
-            UPDATE jobs SET
-              hints = ${this.db.json({ ...currentHints, wait: { wake_on: eveControl.wakeOn } } as never)},
-              updated_at = NOW()
-            WHERE id = ${job.id}
-          `;
-          console.log(`Stored wake_on [${eveControl.wakeOn.join(', ')}] for job ${job.id}`);
-        }
-
-        const isBlocked = await jobs.isBlocked(job.id);
-        const deferUntil = computeWaitingDeferUntil(isBlocked);
-        const requeueOptions = { reason: 'Worker requested waiting' } as {
-          reason: string;
-          deferUntil?: Date | null;
-        };
-
-        if (!isBlocked) {
-          console.warn(
-            `Job ${job.id} requested waiting without blockers; deferring for ${WAITING_BACKOFF_MS}ms`,
-          );
-          requeueOptions.deferUntil = deferUntil;
-        }
-
-        await jobs.requeueReady(job.id, 'orchestrator', requeueOptions);
-        console.log(`Requeued job ${job.id} to ready`);
-        attemptSucceeded = true;
-        return;
-      }
-
-      if (outcome === 'success') {
-        console.log(`Worker succeeded for job ${job.id}`);
-
-        // Promote resolved git metadata from attempt to job
-        const latestAttempt = await jobs.getLatestAttempt(job.id);
-        if (latestAttempt?.git_json) {
-          await jobs.updateResolvedGit(job.id, latestAttempt.git_json);
-        }
-
-        await jobs.markJobDone(job.id);
-        console.log(`Marked job ${job.id} as done`);
-        attemptSucceeded = true;
-
-        // Emit completion event for post-session review (learning loop)
-        await this.emitJobAttemptCompletedEvent(job, attempt, {
-          status: 'succeeded',
-          durationMs: result.durationMs,
-        });
-
-        // Staged cleanup: if lead completed without "prepared", cancel backlog children
-        await this.cancelStagedBacklogChildren(job, 'Parent completed without promotion');
-
-        // Deliver result to chat thread if this was a chat-originated job
-        void this.deliverChatResult(job, result);
       } else {
-        console.log(`Worker failed for job ${job.id}: ${result.error}`);
-
-        // Check retry policy before marking as permanently failed
-        const retryPolicy = (job.hints as Record<string, any>)?.retry;
-        const maxAttempts = retryPolicy?.max_attempts ?? 1;
-        const currentAttempt = attempt.attempt_number;
-
-        if (retryPolicy && currentAttempt < maxAttempts) {
-          const retryableErrors = retryPolicy?.retryable_errors as string[] | undefined;
-          const errorCode = `${job.execution_type ?? 'agent'}_failed`;
-          const isRetryable = !retryableErrors || retryableErrors.includes(errorCode)
-            || (retryableErrors.includes('attempt_timeout') && errorCode.includes('timeout'))
-            || (retryableErrors.includes('attempt_stale') && errorCode.includes('stale'));
-
-          if (isRetryable) {
-            const backoffBase = retryPolicy?.backoff_seconds ?? 60;
-            const multiplier = retryPolicy?.backoff_multiplier ?? 2;
-            const delaySec = backoffBase * Math.pow(multiplier, currentAttempt - 1);
-            const deferUntil = new Date(Date.now() + delaySec * 1000);
-
-            console.log(
-              `Job ${job.id}: scheduling auto-retry #${currentAttempt + 1}/${maxAttempts} in ${delaySec}s`,
-            );
-
-            // Requeue the job for retry with backoff
-            await jobs.requeueReady(job.id, 'orchestrator', {
-              reason: `Auto-retry #${currentAttempt + 1} after ${result.error ?? 'failure'} (backoff: ${delaySec}s)`,
-              deferUntil,
-            });
-
-            lastErrorMessage = result.error ?? 'Worker failed';
-            attemptSucceeded = false;
-            return; // Don't mark job as failed yet
-          }
-        }
-
-        // Max retries exhausted or non-retryable error
-        await jobs.markJobFailed(job.id, result.error);
-        await this.emitJobFailureEvent(job, attempt, {
-          errorMessage: result.error ?? 'Worker failed',
-          errorCode: `${job.execution_type ?? 'agent'}_failed`,
-          exitCode: result.exitCode,
-        });
-        await this.emitJobAttemptCompletedEvent(job, attempt, {
-          status: 'failed',
-          durationMs: result.durationMs,
-        });
-        console.log(`Marked job ${job.id} as failed (retries exhausted or non-retryable)`);
-
-        // Staged cleanup: cancel backlog children on lead failure
-        await this.cancelStagedBacklogChildren(job, 'Parent failed without promotion');
-
-        lastErrorMessage = result.error ?? 'Worker failed';
-        attemptSucceeded = false;
+        console.log(`Marked attempt ${attempt.id} as failed due to error`);
+        await this.tryPersistAttemptReceipt(job, completedAttempt);
+        await this.tryChargeForReceipt(job, completedAttempt);
       }
-    } catch (error) {
-      // If anything goes wrong during execution, mark both attempt and job as failed
-      console.error(`Error processing job ${job.id}:`, error);
-      const errMsg = error instanceof Error ? error.message : String(error);
+    } catch (attemptError) {
+      // Log but don't throw - we still want to mark the job as failed
+      console.error(`Failed to mark attempt ${attempt.id} as failed:`, attemptError);
+    }
 
-      // Ensure the attempt is marked as failed (it may still be in 'running' state)
+    await jobs.markJobFailed(job.id, errMsg);
+    await this.emitJobFailureEvent(job, attempt, {
+      errorMessage: errMsg,
+      errorCode: 'orchestrator_error',
+      exitCode: 1,
+    });
+    await this.emitJobAttemptCompletedEvent(job, attempt, {
+      status: 'failed',
+    });
+
+    // Staged cleanup: cancel backlog children on orchestrator error
+    await this.cancelStagedBacklogChildren(job, 'Parent failed (orchestrator error)');
+
+    lastErrorMessage = errMsg;
+    attemptSucceeded = false;
+    return { attemptSucceeded, lastErrorMessage };
+  }
+
+  /**
+   * Step 5a of processJob: enrich workflow step jobs with prior step results.
+   * Returns the job description, appending completed dependency results for
+   * workflow steps (best-effort — enrichment failures fall back to the plain
+   * description).
+   */
+  private async enrichWorkflowStep(
+    job: Job,
+    jobs: ReturnType<typeof jobQueries>,
+  ): Promise<string> {
+    let enrichedDescription = job.description ?? '';
+    if (job.hints?.workflow_name) {
       try {
-        const completedAttempt = await jobs.completeAttempt(attempt.id, 'failed', {
-          exitCode: 1,
-          errorMessage: errMsg,
-        });
-        if (!completedAttempt) {
-          // Attempt already finalized by another path — still transition the job.
-          const currentJob = await jobs.findById(job.id);
-          if (currentJob && (currentJob.phase === 'done' || currentJob.phase === 'cancelled')) {
-            attemptSucceeded = currentJob.phase === 'done';
-            console.log(
-              `Job ${job.id} already in terminal phase '${currentJob.phase}' after external finalization (error path)`,
-            );
-            return;
+        const deps = await jobs.getDependencies(job.id);
+        const priorResults: string[] = [];
+        for (const dep of deps) {
+          if (dep.phase === 'done') {
+            const depAttempt = await jobs.getLatestAttempt(dep.id);
+            if (depAttempt?.result_text) {
+              const resultText = depAttempt.result_text.length > 50_000
+                ? depAttempt.result_text.slice(0, 50_000) + '\n\n[truncated — result exceeded 50KB]'
+                : depAttempt.result_text;
+              const stepName = dep.hints?.step_name ?? dep.id;
+              priorResults.push(`### Step: ${stepName} (${dep.id})\n\n${resultText}`);
+            }
           }
-          console.warn(
-            `Attempt ${attempt.id} for job ${job.id} already finalized; still transitioning job phase`,
-          );
-        } else {
-          console.log(`Marked attempt ${attempt.id} as failed due to error`);
-          await this.tryPersistAttemptReceipt(job, completedAttempt);
-          await this.tryChargeForReceipt(job, completedAttempt);
         }
-      } catch (attemptError) {
-        // Log but don't throw - we still want to mark the job as failed
-        console.error(`Failed to mark attempt ${attempt.id} as failed:`, attemptError);
+        if (priorResults.length > 0) {
+          enrichedDescription += '\n\n---\n## Prior Step Results\n\n' + priorResults.join('\n\n---\n\n');
+        }
+      } catch (err) {
+        console.warn(`Failed to enrich prior step results for ${job.id}:`, err);
+      }
+    }
+    return enrichedDescription;
+  }
+
+  /**
+   * Steps 6b-8 of processJob: persist receipts and charges, relay the summary
+   * to the coordination thread, handle staged-council promotion, and update
+   * the job phase from the worker result (waiting / success / failure with
+   * retry policy). Returns the attempt outcome consumed by processJob's
+   * finally block.
+   */
+  private async finalizeJobResult(
+    job: Job,
+    attempt: JobAttempt,
+    jobs: ReturnType<typeof jobQueries>,
+    completed: Extract<JobDispatchOutcome, { kind: 'completed' }>,
+  ): Promise<{ attemptSucceeded: boolean | null; lastErrorMessage: string | null }> {
+    const { result, eveControl, outcome, completedAttempt } = completed;
+    let attemptSucceeded: boolean | null = null;
+    let lastErrorMessage: string | null = null;
+
+    await this.tryPersistAttemptReceipt(job, completedAttempt);
+    await this.tryChargeForReceipt(job, completedAttempt);
+
+    await this.updatePipelineStepOutputs(job, result.resultJson);
+
+    // Step 6b: Relay summary to coordination thread (if parent has one)
+    await this.relayToCoordinationThread(job, eveControl.summary, attempt.id);
+
+    // Step 7: Staged council — lead signals "prepared" → promote backlog children
+    if (
+      outcome === 'prepared' &&
+      (job.hints as Record<string, unknown> | null)?.staged === true
+    ) {
+      const promoted = await this.db<{ id: string }[]>`
+        UPDATE jobs
+        SET phase = 'ready', updated_at = NOW()
+        WHERE parent_id = ${job.id}
+          AND phase = 'backlog'
+        RETURNING id
+      `;
+      console.log(`Staged dispatch: promoted ${promoted.length} children for job ${job.id}`);
+
+      const currentHints = (job.hints ?? {}) as Record<string, unknown>;
+      if (promoted.length === 0) {
+        // No children to wait on — requeue lead immediately
+        await this.db`
+          UPDATE jobs
+          SET hints = ${this.db.json({ ...currentHints, staged: false } as never)}, updated_at = NOW()
+          WHERE id = ${job.id}
+        `;
+        await jobs.requeueReady(job.id, 'orchestrator', {
+          reason: 'Staged dispatch fallback: no children to run',
+        });
+      } else {
+        // Requeue lead with children.all_done wake condition
+        await this.db`
+          UPDATE jobs SET
+            hints = ${this.db.json({
+              ...currentHints,
+              staged: false,
+              wait: { wake_on: ['children.all_done'] },
+            } as never)},
+            updated_at = NOW()
+          WHERE id = ${job.id}
+        `;
+        await jobs.requeueReady(job.id, 'orchestrator', {
+          reason: 'Staged dispatch: waiting for members',
+        });
       }
 
-      await jobs.markJobFailed(job.id, errMsg);
+      attemptSucceeded = true;
+      return { attemptSucceeded, lastErrorMessage };
+    }
+
+    // Step 8: Update job status based on result
+    if (outcome === 'waiting') {
+      // Store wake_on in job hints if present
+      if (eveControl.wakeOn && eveControl.wakeOn.length > 0) {
+        const currentHints = job.hints ?? {};
+        await this.db`
+          UPDATE jobs SET
+            hints = ${this.db.json({ ...currentHints, wait: { wake_on: eveControl.wakeOn } } as never)},
+            updated_at = NOW()
+          WHERE id = ${job.id}
+        `;
+        console.log(`Stored wake_on [${eveControl.wakeOn.join(', ')}] for job ${job.id}`);
+      }
+
+      const isBlocked = await jobs.isBlocked(job.id);
+      const deferUntil = computeWaitingDeferUntil(isBlocked);
+      const requeueOptions = { reason: 'Worker requested waiting' } as {
+        reason: string;
+        deferUntil?: Date | null;
+      };
+
+      if (!isBlocked) {
+        console.warn(
+          `Job ${job.id} requested waiting without blockers; deferring for ${WAITING_BACKOFF_MS}ms`,
+        );
+        requeueOptions.deferUntil = deferUntil;
+      }
+
+      await jobs.requeueReady(job.id, 'orchestrator', requeueOptions);
+      console.log(`Requeued job ${job.id} to ready`);
+      attemptSucceeded = true;
+      return { attemptSucceeded, lastErrorMessage };
+    }
+
+    if (outcome === 'success') {
+      console.log(`Worker succeeded for job ${job.id}`);
+
+      // Promote resolved git metadata from attempt to job
+      const latestAttempt = await jobs.getLatestAttempt(job.id);
+      if (latestAttempt?.git_json) {
+        await jobs.updateResolvedGit(job.id, latestAttempt.git_json);
+      }
+
+      await jobs.markJobDone(job.id);
+      console.log(`Marked job ${job.id} as done`);
+      attemptSucceeded = true;
+
+      // Emit completion event for post-session review (learning loop)
+      await this.emitJobAttemptCompletedEvent(job, attempt, {
+        status: 'succeeded',
+        durationMs: result.durationMs,
+      });
+
+      // Staged cleanup: if lead completed without "prepared", cancel backlog children
+      await this.cancelStagedBacklogChildren(job, 'Parent completed without promotion');
+
+      // Deliver result to chat thread if this was a chat-originated job
+      void this.deliverChatResult(job, result);
+    } else {
+      console.log(`Worker failed for job ${job.id}: ${result.error}`);
+
+      // Check retry policy before marking as permanently failed
+      const retryPolicy = (job.hints as Record<string, any>)?.retry;
+      const maxAttempts = retryPolicy?.max_attempts ?? 1;
+      const currentAttempt = attempt.attempt_number;
+
+      if (retryPolicy && currentAttempt < maxAttempts) {
+        const retryableErrors = retryPolicy?.retryable_errors as string[] | undefined;
+        const errorCode = `${job.execution_type ?? 'agent'}_failed`;
+        const isRetryable = !retryableErrors || retryableErrors.includes(errorCode)
+          || (retryableErrors.includes('attempt_timeout') && errorCode.includes('timeout'))
+          || (retryableErrors.includes('attempt_stale') && errorCode.includes('stale'));
+
+        if (isRetryable) {
+          const backoffBase = retryPolicy?.backoff_seconds ?? 60;
+          const multiplier = retryPolicy?.backoff_multiplier ?? 2;
+          const delaySec = backoffBase * Math.pow(multiplier, currentAttempt - 1);
+          const deferUntil = new Date(Date.now() + delaySec * 1000);
+
+          console.log(
+            `Job ${job.id}: scheduling auto-retry #${currentAttempt + 1}/${maxAttempts} in ${delaySec}s`,
+          );
+
+          // Requeue the job for retry with backoff
+          await jobs.requeueReady(job.id, 'orchestrator', {
+            reason: `Auto-retry #${currentAttempt + 1} after ${result.error ?? 'failure'} (backoff: ${delaySec}s)`,
+            deferUntil,
+          });
+
+          lastErrorMessage = result.error ?? 'Worker failed';
+          attemptSucceeded = false;
+          return { attemptSucceeded, lastErrorMessage }; // Don't mark job as failed yet
+        }
+      }
+
+      // Max retries exhausted or non-retryable error
+      await jobs.markJobFailed(job.id, result.error);
       await this.emitJobFailureEvent(job, attempt, {
-        errorMessage: errMsg,
-        errorCode: 'orchestrator_error',
-        exitCode: 1,
+        errorMessage: result.error ?? 'Worker failed',
+        errorCode: `${job.execution_type ?? 'agent'}_failed`,
+        exitCode: result.exitCode,
       });
       await this.emitJobAttemptCompletedEvent(job, attempt, {
         status: 'failed',
+        durationMs: result.durationMs,
       });
+      console.log(`Marked job ${job.id} as failed (retries exhausted or non-retryable)`);
 
-      // Staged cleanup: cancel backlog children on orchestrator error
-      await this.cancelStagedBacklogChildren(job, 'Parent failed (orchestrator error)');
+      // Staged cleanup: cancel backlog children on lead failure
+      await this.cancelStagedBacklogChildren(job, 'Parent failed without promotion');
 
-      lastErrorMessage = errMsg;
+      lastErrorMessage = result.error ?? 'Worker failed';
       attemptSucceeded = false;
-    } finally {
-      // Always release gates when job completes (success or failure)
-      if (requiredGates.length > 0) {
-        const released = await gates.releaseGates(job.id);
-        if (released > 0) {
-          console.log(`Released ${released} gate(s) for job ${job.id}`);
-        }
-      }
+    }
 
-      const shouldCleanup =
-        workspacePath &&
-        attemptSucceeded !== null &&
-        (attemptSucceeded ? cleanupOnSuccess : cleanupOnFailure);
+    return { attemptSucceeded, lastErrorMessage };
+  }
 
-      if (shouldCleanup && workspacePath) {
-        try {
-          await fs.rm(workspacePath, { recursive: true, force: true });
-          console.log(`Cleaned workspace at ${workspacePath}`);
-        } catch (cleanupError) {
-          const errMsg =
-            cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-          console.warn(`Failed to clean workspace ${workspacePath}: ${errMsg}`);
-        }
-      }
+  /**
+   * Steps 5b + 6 of processJob: execute the claimed job (worker action/script,
+   * or harness invocation routed to the agent runtime when
+   * EVE_AGENT_RUNTIME_URL is set) and complete its attempt with the result
+   * data. See JobDispatchOutcome for the two ways this can resolve.
+   */
+  private async dispatchAndAwait(
+    job: Job,
+    attempt: JobAttempt,
+    jobs: ReturnType<typeof jobQueries>,
+    context: { projectId: string; workspacePath: string; enrichedDescription: string },
+  ): Promise<JobDispatchOutcome> {
+    const { projectId, workspacePath, enrichedDescription } = context;
+    let attemptSucceeded: boolean | null = null;
+    let lastErrorMessage: string | null = null;
 
-      // Sync parent pipeline run status when a job reaches a terminal state
-      if (job.run_id && attemptSucceeded !== null) {
-        await this.syncPipelineRunStatus(job.run_id);
-      }
+    // Step 5b: Execute worker
+    console.log(`Executing worker for job ${job.id}, attempt ${attempt.id}`);
 
-      // Sync ingest record status when a triggered job completes
-      if (attemptSucceeded !== null) {
-        await this.syncIngestRecordStatus(job, attemptSucceeded, lastErrorMessage);
-      }
+    const project = await projectQueries(this.db).findById(projectId);
+    if (!project) {
+      throw new Error(`Project ${projectId} not found for job ${job.id}`);
+    }
 
-      // Close workflow root when all children reach terminal state
-      if (attemptSucceeded !== null && job.parent_id) {
-        await this.tryCloseWorkflowRoot(job.parent_id);
+    const executionType = job.execution_type ?? 'agent';
+    const workerImage = await this.resolveWorkerImage(job);
+
+    const jobTimeoutMs = resolveWorkerPollTimeoutMs(job, executionType);
+
+    let result: HarnessResult;
+
+    if (executionType === 'action') {
+      result = await this.workerService.executeAction(job.id, attempt.id as AttemptId, projectId, {
+        workerImage,
+        timeoutMs: jobTimeoutMs,
+      });
+    } else if (executionType === 'script') {
+      result = await this.workerService.executeScript(job.id, attempt.id as AttemptId, projectId, {
+        workerImage,
+        timeoutMs: jobTimeoutMs,
+      });
+    } else {
+      // NOTE: New Jobs system uses 'title' and 'description' instead of 'text'
+      // Worker execution needs adaptation for the new job format
+      const routing = await this.selectHarnessAndRoute(job, attempt, executionType);
+      const invocation = await this.buildInvocation(
+        job,
+        attempt,
+        project,
+        projectId,
+        workspacePath,
+        enrichedDescription,
+        routing,
+      );
+
+      if (process.env.EVE_AGENT_RUNTIME_URL) {
+        result = await this.workerService.executeAgentRuntime(invocation, {
+          workerImage,
+          timeoutMs: jobTimeoutMs,
+        });
+      } else {
+        result = await this.workerService.execute(invocation, {
+          workerImage,
+          timeoutMs: jobTimeoutMs,
+        });
       }
     }
+
+    const eveControl = extractEveControl(result.resultJson);
+    const outcome = resolveOrchestrationOutcome(result, eveControl.status);
+
+    if (eveControl.status && outcome !== (result.success ? 'success' : 'failed')) {
+      console.warn(
+        `Worker status override for job ${job.id}: ${result.success ? 'success' : 'failed'} -> ${outcome}`,
+      );
+    }
+
+    // Step 6: Complete the attempt with result data from worker
+    const attemptStatus = outcome === 'failed' ? 'failed' : 'succeeded';
+    const completedAttempt = await jobs.completeAttempt(
+      attempt.id,
+      attemptStatus,
+      {
+        exitCode: result.exitCode,
+        resultText: result.resultText,
+        resultJson: result.resultJson,
+        resultSummary: eveControl.summary,
+        durationMs: result.durationMs,
+        tokenInput: result.tokenInput,
+        tokenOutput: result.tokenOutput,
+        errorMessage: result.error,
+      },
+    );
+    if (!completedAttempt) {
+      // Attempt was finalized by another path (e.g., pod shutdown drain).
+      // We MUST still transition the job phase — leaving it 'active' permanently
+      // is the root cause of stuck jobs after agent-runtime pod restarts.
+      const latestAttempt = await jobs.getLatestAttempt(job.id);
+      const currentJob = await jobs.findById(job.id);
+
+      if (currentJob && (currentJob.phase === 'done' || currentJob.phase === 'cancelled')) {
+        attemptSucceeded = currentJob.phase === 'done';
+        console.log(
+          `Job ${job.id} already in terminal phase '${currentJob.phase}' after external finalization`,
+        );
+        return { kind: 'externally_finalized', attemptSucceeded, lastErrorMessage };
+      }
+
+      const externalError = latestAttempt?.error_message ?? result.error ?? 'Attempt terminated externally';
+      console.warn(
+        `Attempt ${attempt.id} for job ${job.id} was externally finalized (status=${latestAttempt?.status}); recovering job phase`,
+      );
+
+      if (latestAttempt?.status === 'succeeded') {
+        await jobs.markJobDone(job.id);
+        attemptSucceeded = true;
+      } else {
+        await jobs.markJobFailed(job.id, externalError);
+        await this.emitJobFailureEvent(job, attempt, {
+          errorMessage: externalError,
+          errorCode: 'pod_terminated',
+          exitCode: latestAttempt?.exit_code ?? 1,
+        });
+        attemptSucceeded = false;
+        lastErrorMessage = externalError;
+      }
+
+      return { kind: 'externally_finalized', attemptSucceeded, lastErrorMessage };
+    }
+    console.log(`Completed attempt ${attempt.id} with exit code ${result.exitCode}`);
+
+    return { kind: 'completed', result, eveControl, outcome, completedAttempt };
+  }
+
+  /**
+   * Step 5b of processJob (agent jobs): select the harness for this attempt
+   * and persist the routing decision (agent-runtime vs worker target, harness
+   * source, profile attribution) as an execution log for diagnostics.
+   */
+  private async selectHarnessAndRoute(
+    job: Job,
+    attempt: JobAttempt,
+    executionType: string,
+  ): Promise<{ harnessSpec: string; profileHash: string | null; profileSource: string | null }> {
+    const manifestDefaults = await this.getManifestDefaults(job.project_id);
+    const systemPreference = await this.getSystemHarnessPreference();
+
+    // Resolve secrets from all scopes (system -> org -> project -> user) for harness selection
+    const resolvedSecrets = await this.resolveSecretsForHarnessSelection(job.project_id);
+
+    const selection = selectAvailableHarness({
+      explicit: attempt.harness ?? job.harness ?? undefined,
+      projectPreference: manifestDefaults?.harness_preference as string[] | undefined,
+      systemPreference,
+      env: resolvedSecrets,
+    });
+
+    const harnessSpec = selection.harness;
+    console.log(
+      `Harness: ${selection.harness} (source: ${selection.source}, checked: ${selection.checked.join(', ')})`
+    );
+
+    // F4: Persist routing decision as execution log for diagnostics.
+    // Includes per-job harness profile attribution (plan §3.6) so analytics
+    // can group cost by inline_override vs agent_default without reading
+    // the job row. Never include plaintext secrets — we only log the
+    // stable hash over the normalized inputs.
+    const profileHash = (job as { harness_profile_hash?: string | null }).harness_profile_hash ?? null;
+    const profileSource = (job as { harness_profile_source?: string | null }).harness_profile_source ?? null;
+    executionLogQueries(this.db).appendLog(attempt.id, 'routing', {
+      execution_type: executionType,
+      target: process.env.EVE_AGENT_RUNTIME_URL ? 'agent-runtime' : 'worker',
+      harness: selection.harness,
+      harness_source: selection.source,
+      harness_checked: selection.checked,
+      harness_profile_name: job.harness_profile ?? null,
+      harness_profile_source: profileSource,
+      harness_profile_hash: profileHash,
+      effective_harness: selection.harness,
+      effective_model: (job.harness_options as { model?: string } | null)?.model ?? null,
+      effective_effort: (job.harness_options as { reasoning_effort?: string } | null)?.reasoning_effort ?? null,
+      agent_id: attempt.agent_id,
+      budget: {
+        max_tokens: (job.hints as Record<string, unknown>)?.max_tokens,
+        max_cost: (job.hints as Record<string, unknown>)?.max_cost,
+      },
+    }).catch(err => console.warn(`Failed to log routing decision: ${err}`));
+
+    return { harnessSpec, profileHash, profileSource };
+  }
+
+  /**
+   * Step 5b of processJob (agent jobs): assemble the harness invocation from
+   * the job, attempt, project, and routing decision. The invocation carries
+   * org-fs mount context, job scope/permissions, toolchains, and env override
+   * placeholders resolved later by the shared invoke module.
+   */
+  private async buildInvocation(
+    job: Job,
+    attempt: JobAttempt,
+    project: Project,
+    projectId: string,
+    workspacePath: string,
+    enrichedDescription: string,
+    routing: { harnessSpec: string; profileHash: string | null; profileSource: string | null },
+  ) {
+    const { harnessSpec, profileHash, profileSource } = routing;
+
+    const { harness, variant: parsedVariant } = parseHarnessSpec(harnessSpec);
+    const harnessOptions = job.harness_options ?? undefined;
+    const variant = harnessOptions?.variant ?? parsedVariant;
+
+    // Extract permission policy from job hints
+    const permission = job.hints?.permission_policy as
+      | 'default'
+      | 'auto_edit'
+      | 'never'
+      | 'yolo'
+      | undefined;
+
+    // Extract git and workspace configuration from job
+    const git: JobGitConfig | undefined = job.git_json ?? undefined;
+    const workspace: JobWorkspaceConfig | undefined = job.workspace_json ?? undefined;
+    const { orgFsMount, tokenScope } = await this.resolveJobScope(job, project.org_id);
+    const invocationData: Record<string, unknown> = {
+      orgfs_mount: orgFsMount,
+    };
+    if (tokenScope) {
+      invocationData.__eve_job_scope = tokenScope;
+    }
+    if (Array.isArray(job.token_permissions) && job.token_permissions.length > 0) {
+      invocationData.__eve_job_permissions = job.token_permissions;
+    }
+    if (job.actor_user_id) {
+      invocationData.user_id = job.actor_user_id;
+    }
+    if (typeof job.hints?.skill_mode === 'string') {
+      invocationData.skill_mode = job.hints.skill_mode;
+    }
+    // Forward chat file attachments from job hints
+    if (Array.isArray(job.hints?.chat_files) && job.hints.chat_files.length > 0) {
+      invocationData.chat_files = job.hints.chat_files;
+    }
+
+    // Resolve toolchains from job hints
+    const toolchains = Array.isArray(job.hints?.toolchains) ? job.hints.toolchains as string[] : [];
+
+    // Env overrides travel with the invocation in placeholder form; the
+    // shared invoke module resolves ${secret.KEY} against the materialized
+    // project secrets at spawn time (never here, never on the API).
+    const envOverrides =
+      (job as { env_overrides?: Record<string, string> | null }).env_overrides ?? undefined;
+
+    const invocation = {
+      attemptId: attempt.id as AttemptId,
+      agentId: attempt.agent_id,
+      jobId: job.id as JobId,
+      parentJobId: job.parent_id ?? null,
+      projectId: projectId as ProjectId,
+      text: job.title + (enrichedDescription ? '\n\n' + enrichedDescription : ''),
+      workspacePath,
+      repoUrl: project.repo_url,
+      repoBranch: project.branch,
+      skillPacks: null, // New Jobs system doesn't have skill_packs on job
+      data: invocationData,
+      harness,
+      variant,
+      harness_options: harnessOptions ?? undefined,
+      permission,
+      resource_refs: (job.resource_refs ?? []) as ResourceRef[],
+      git,
+      workspace,
+      ...(toolchains.length > 0 ? { toolchains } : {}),
+      ...(envOverrides && Object.keys(envOverrides).length > 0 ? { env_overrides: envOverrides } : {}),
+      ...(profileSource ? { harness_profile_source: profileSource as HarnessProfileSource } : {}),
+      ...(profileHash ? { harness_profile_hash: profileHash } : {}),
+      ...(job.harness_profile ? { harness_profile_name: job.harness_profile } : {}),
+    };
+
+    return invocation;
+  }
+
+  /**
+   * Step 4 of processJob: resolve the per-attempt workspace directory path.
+   */
+  private resolveWorkspacePath(job: Job, attempt: JobAttempt): string {
+    // Job ID format: slug-hash or slug-hash.1.2
+    const jobIdParts = job.id.split('-');
+    const projectSlug = jobIdParts[0];
+    return path.join(
+      this.config.WORKSPACE_ROOT,
+      projectSlug,
+      job.id,
+      attempt.attempt_number.toString(),
+    );
+  }
+
+  /**
+   * Step 4 of processJob: create the workspace directory for the attempt.
+   */
+  private async prepareJobWorkspace(workspacePath: string): Promise<void> {
+    await fs.mkdir(workspacePath, { recursive: true });
+    console.log(`Workspace at ${workspacePath}`);
+  }
+
+  /**
+   * Step 1b of processJob: acquire required gates for a claimed job.
+   *
+   * Returns 'blocked' when the gates are held elsewhere — the attempt has been
+   * failed with a gate-specific message and the job requeued with a short defer,
+   * so the caller must stop processing this job. Returns 'acquired' when all
+   * required gates are held (or none are required).
+   */
+  private async acquireJobGates(
+    job: Job,
+    attempt: JobAttempt,
+    jobs: ReturnType<typeof jobQueries>,
+    gates: ReturnType<typeof gateQueries>,
+    requiredGates: string[],
+  ): Promise<'acquired' | 'blocked'> {
+    if (requiredGates.length > 0) {
+      const ttlSeconds = Math.ceil(
+        resolveWorkerPollTimeoutMs(job, job.execution_type ?? 'agent') / 1000,
+      );
+      const gateResult = await gates.acquireGates(job.id, requiredGates, ttlSeconds, {
+        orchestrator: true,
+        env_name: job.env_name,
+      });
+
+      if (!gateResult.success) {
+        // Gates blocked - update blocked_on_gates and release job back to ready
+        await gates.updateBlockedOnGates(job.id, gateResult.blocked_by);
+
+        // Build descriptive message about which gates are blocked
+        const envGateBlocked = gateResult.blocked_by.some(g => g.startsWith('env:'));
+        const branchGateBlocked = gateResult.blocked_by.some(g => g.startsWith('git:branch:'));
+        let logMsg: string;
+        if (envGateBlocked) {
+          logMsg = `Job ${job.id} blocked on environment gate (another job is deploying to ${job.env_name}): ${gateResult.blocked_by.join(', ')}`;
+        } else if (branchGateBlocked) {
+          logMsg = `Job ${job.id} blocked on branch gate (another job is writing to the same branch): ${gateResult.blocked_by.join(', ')}`;
+        } else {
+          logMsg = `Job ${job.id} blocked on gates: ${gateResult.blocked_by.join(', ')}`;
+        }
+        console.log(logMsg);
+
+        // Mark the attempt as failed with a gate-specific message
+        await jobs.completeAttempt(attempt.id, 'failed', {
+          exitCode: 0,
+          errorMessage: `Blocked on gates: ${gateResult.blocked_by.join(', ')}`,
+        });
+
+        // Requeue with a short defer to prevent a hot-loop of rapid
+        // claim/fail/requeue cycles while the gate remains occupied.
+        await jobs.requeueReady(job.id, 'orchestrator', {
+          reason: 'Blocked on gates',
+          deferUntil: new Date(Date.now() + WAITING_BACKOFF_MS),
+        });
+        return 'blocked';
+      }
+
+      // Gates acquired - clear any previous blocked_on_gates
+      await gates.clearBlockedOnGates(job.id);
+
+      // Log which gates were acquired, highlighting environment and branch gates
+      const gatesList = requiredGates.map(g => {
+        if (g.startsWith('env:')) return `${g} (environment lock)`;
+        if (g.startsWith('git:branch:')) return `${g} (branch lock)`;
+        return g;
+      }).join(', ');
+      console.log(`Acquired gates for job ${job.id}: ${gatesList}`);
+    }
+    return 'acquired';
   }
 
   /**
