@@ -1,12 +1,9 @@
 import { defineConfig } from 'vitest/config';
+import { sharedTestConfig } from '../../vitest.shared.js';
 
 export default defineConfig({
   test: {
-    globals: true,
-    environment: 'node',
+    ...sharedTestConfig,
     include: ['src/**/*.spec.ts', 'test/unit/**/*.test.ts'],
-    testTimeout: 30000,
-    hookTimeout: 30000,
-    passWithNoTests: true,
   },
 });

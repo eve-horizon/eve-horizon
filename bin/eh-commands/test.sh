@@ -411,3 +411,7 @@ fi
 cd "$PROJECT_ROOT"
 pnpm --filter @eve/shared build
 pnpm --filter @eve/api exec vitest run -c "$VITEST_CONFIG" ${TEST_TARGET:-}
+# Agent-runtime integration suite (DB-backed placement tests) shares the test DB
+if [[ -z "${TEST_TARGET:-}" ]]; then
+  DATABASE_URL="postgres://${EVE_DB_USER}:${EVE_DB_PASSWORD}@localhost:$EVE_DB_PORT/${EVE_DB_NAME_TEST}"     pnpm --filter @eve/agent-runtime exec vitest run -c vitest.integration.config.ts
+fi
