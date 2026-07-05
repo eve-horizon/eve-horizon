@@ -34,6 +34,8 @@ import {
   type RateCardV1,
   type HarnessProfileSource,
   type AccessBindingScope,
+  readPositiveTimeoutSeconds,
+  parseWorkerUrlMapping,
 } from '@eve/shared';
 import {
   accessRoleQueries,
@@ -73,17 +75,6 @@ function readPositiveNumber(value: unknown): number | null {
 function readPositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function readPositiveTimeoutSeconds(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  if (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value.trim())) {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }
-  return null;
 }
 
 export function resolveWorkerPollTimeoutMs(job: Job, executionType: string): number {
@@ -2992,7 +2983,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     const workerType = hinted ?? await this.resolveDefaultWorkerType(job.project_id, job.env_name ?? null);
     if (!workerType) return undefined;
 
-    const mapping = this.parseWorkerUrlMapping(process.env.EVE_WORKER_URLS ?? '');
+    const mapping = parseWorkerUrlMapping(process.env.EVE_WORKER_URLS ?? '');
     if (mapping.has(workerType)) {
       return workerType;
     }
@@ -3028,17 +3019,6 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     const type = (defaultWorker as Record<string, unknown>).type;
     return typeof type === 'string' && type.length > 0 ? type : null;
-  }
-
-  private parseWorkerUrlMapping(value: string): Map<string, string> {
-    const entries = value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .map((entry) => entry.split('=').map((part) => part.trim()))
-      .filter((parts) => parts.length === 2 && parts[0] && parts[1]);
-
-    return new Map(entries as Array<[string, string]>);
   }
 
   private async copyPipelineOutputToRootJob(

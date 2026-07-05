@@ -1,4 +1,5 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, ConflictException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { resolveWorkerUrl } from '../common/worker-url';
 import { randomBytes } from 'crypto';
 import type { Db } from '@eve/db';
 import { orgQueries, type Org, membershipQueries, userQueries, agentQueries, spendQueries, projectQueries, environmentQueries, orgInviteQueries } from '@eve/db';
@@ -580,7 +581,7 @@ export class OrgsService {
   ): Promise<void> {
     let workerUrl: string;
     try {
-      workerUrl = this.resolveWorkerUrl();
+      workerUrl = resolveWorkerUrl('delete environment deployments');
     } catch {
       this.logger.warn(`[org-delete] Worker URL unavailable, skipping deployment teardown for env ${envId}`);
       return;
@@ -628,36 +629,6 @@ export class OrgsService {
       const message = error instanceof Error ? error.message : String(error);
       throw new ServiceUnavailableException(`Failed to teardown environment deployment: ${message}`);
     }
-  }
-
-  private resolveWorkerUrl(): string {
-    const mapping = process.env.EVE_WORKER_URLS ?? '';
-    if (mapping.trim().length > 0) {
-      const entries = mapping
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-        .map((entry) => {
-          const [name, url] = entry.split('=');
-          return { name: name?.trim() ?? '', url: url?.trim() ?? '' };
-        })
-        .filter((entry) => entry.name && entry.url);
-
-      const defaultEntry = entries.find((entry) => entry.name === 'default-worker');
-      if (defaultEntry) {
-        return defaultEntry.url;
-      }
-
-      if (entries.length > 0) {
-        return entries[0].url;
-      }
-    }
-
-    if (process.env.WORKER_URL) {
-      return process.env.WORKER_URL;
-    }
-
-    throw new ServiceUnavailableException('WORKER_URL or EVE_WORKER_URLS must be set to delete environment deployments');
   }
 
   private toResponse(org: Org): OrgResponse {

@@ -43,6 +43,7 @@ import {
   type SecretResolveItem,
   type ToolchainCacheEvent,
   toK8sName,
+  readPositiveTimeoutSeconds,
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { DeployerService } from '../deployer/deployer.service';
@@ -128,17 +129,6 @@ interface ActionInput {
   tag?: string;
   build_id?: string;
   force_rebuild?: boolean;
-}
-
-function readPositiveTimeoutSeconds(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  if (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value.trim())) {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }
-  return null;
 }
 
 function resolveRunTimeoutSeconds(

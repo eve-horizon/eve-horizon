@@ -13,6 +13,9 @@ export * from './lib/overlay-merge.js';
 export * from './lib/resource-uris.js';
 export * from './lib/manifest-references.js';
 export * from './lib/levenshtein.js';
+export * from './lib/errors.js';
+export * from './lib/timing.js';
+export * from './lib/worker-routing.js';
 export * from './providers/index.js';
 
 export * from './pricing/index.js';

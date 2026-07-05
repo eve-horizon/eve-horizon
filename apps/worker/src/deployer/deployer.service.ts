@@ -56,6 +56,7 @@ import {
   combineK8sName,
   appendK8sSuffix,
   deriveNamespace,
+  waitFor,
   type ObjectStoreBucket,
   type ObjectStoreIsolation,
   type TcpIngressConfig,
@@ -4016,19 +4017,11 @@ export class DeployerService {
     resourceName: string,
     timeoutMs: number = 120000
   ): Promise<void> {
-    const startTime = Date.now();
-    const pollInterval = 2000;
-
-    while (Date.now() - startTime < timeoutMs) {
-      const status = await this.k8sService.getDeploymentStatus(namespace, resourceName);
-      if (status.ready) {
-        this.logger.log(`Component ${resourceName} is healthy`);
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-    }
-
-    throw new Error(`Component ${resourceName} failed to become healthy within ${timeoutMs}ms`);
+    await waitFor(
+      async () => (await this.k8sService.getDeploymentStatus(namespace, resourceName)).ready,
+      { timeoutMs, intervalMs: 2000, label: `component ${resourceName} health` },
+    );
+    this.logger.log(`Component ${resourceName} is healthy`);
   }
 
   /**

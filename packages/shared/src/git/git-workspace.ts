@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { redactRepoUrl } from '../invoke/git-utils.js';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -75,22 +76,6 @@ function getLocalRepoPath(repoUrl: string): string | null {
     return fileURLToPath(url);
   } catch {
     return null;
-  }
-}
-
-/**
- * Redact credentials from repo URL for logging.
- */
-function redactRepoUrl(repoUrl: string): string {
-  try {
-    const url = new URL(repoUrl);
-    if (url.username || url.password) {
-      url.username = '***';
-      url.password = '';
-    }
-    return url.toString();
-  } catch {
-    return repoUrl;
   }
 }
 
