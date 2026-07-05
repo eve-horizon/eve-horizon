@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ExecutionModeSchema } from './common.js';
 import {
   JobGitSchema,
   JobWorkspaceSchema,
@@ -209,7 +210,7 @@ export const CreateJobRequestSchema = z.object({
   git: JobGitSchema.optional(),
   workspace: JobWorkspaceSchema.optional(),
   env_name: z.string().nullable().optional(),
-  execution_mode: z.enum(['persistent', 'ephemeral']).optional(),
+  execution_mode: ExecutionModeSchema.optional(),
   target: JobTargetSchema.optional(),
   resource_refs: z.array(ResourceRefSchema).optional(),
 });
@@ -234,7 +235,7 @@ export const UpdateJobRequestSchema = z.object({
   git: JobGitSchema.optional(),
   workspace: JobWorkspaceSchema.optional(),
   env_name: z.string().nullable().optional(),
-  execution_mode: z.enum(['persistent', 'ephemeral']).optional(),
+  execution_mode: ExecutionModeSchema.optional(),
 });
 
 export type UpdateJobRequest = z.infer<typeof UpdateJobRequestSchema>;
@@ -273,7 +274,7 @@ export const JobResponseSchema = z.object({
   workspace: JobWorkspaceSchema.optional(),
   blocked_on_gates: z.array(z.string()),
   env_name: z.string().nullable().optional(),
-  execution_mode: z.enum(['persistent', 'ephemeral']),
+  execution_mode: ExecutionModeSchema,
   execution_type: z.enum(['agent', 'script', 'action']),
   run_id: z.string().nullable().optional(),
   step_name: z.string().nullable().optional(),

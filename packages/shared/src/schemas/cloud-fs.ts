@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AccessModeSchema } from './common.js';
 
 // ---------------------------------------------------------------------------
 // Mount responses
@@ -12,7 +13,7 @@ export const CloudFsMountResponseSchema = z.object({
   provider: z.string(),
   root_folder_id: z.string(),
   root_folder_path: z.string().nullable(),
-  mode: z.enum(['read_only', 'write_only', 'read_write']),
+  mode: AccessModeSchema,
   auto_index: z.boolean(),
   label: z.string().nullable(),
   created_by: z.string().nullable(),
@@ -38,7 +39,7 @@ export const CreateCloudFsMountRequestSchema = z.object({
   root_folder_id: z.string().min(1),
   root_folder_path: z.string().optional(),
   project_id: z.string().optional(),
-  mode: z.enum(['read_only', 'write_only', 'read_write']).default('read_write'),
+  mode: AccessModeSchema.default('read_write'),
   auto_index: z.boolean().default(true),
   label: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -51,7 +52,7 @@ export type CreateCloudFsMountRequest = z.infer<typeof CreateCloudFsMountRequest
 // ---------------------------------------------------------------------------
 
 export const UpdateCloudFsMountRequestSchema = z.object({
-  mode: z.enum(['read_only', 'write_only', 'read_write']).optional(),
+  mode: AccessModeSchema.optional(),
   auto_index: z.boolean().optional(),
   label: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),

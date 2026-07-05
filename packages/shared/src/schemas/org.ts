@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PaginationSchema } from './common.js';
+import { PaginationSchema, MemberRoleSchema } from './common.js';
 
 export const OrgIdSchema = z.string().regex(/^org_[a-zA-Z0-9]+$/, 'Invalid org_id format');
 
@@ -47,7 +47,7 @@ export const OrgListResponseSchema = z.object({
 
 export type OrgListResponse = z.infer<typeof OrgListResponseSchema>;
 
-export const OrgMemberRoleSchema = z.enum(['owner', 'admin', 'member']);
+export const OrgMemberRoleSchema = MemberRoleSchema;
 
 export const OrgMemberRequestSchema = z.object({
   user_id: z.string().optional(),

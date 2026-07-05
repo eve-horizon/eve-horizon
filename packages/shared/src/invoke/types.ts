@@ -167,15 +167,26 @@ export interface ThreadMessageRow {
   body: string;
 }
 
-/** DB facade for coordination inbox + thread context. */
-export interface CoordinationDb {
-  /** SELECT hints FROM jobs WHERE id = parentJobId */
+/** Reads a job's hints via an explicit hints query. */
+export interface JobHintsReader {
+  /** SELECT hints FROM jobs WHERE id = jobId */
   queryJobHints(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
-  /** List thread messages for a given thread, newest first. */
-  listThreadMessages(threadId: string, opts: { limit: number }): Promise<ThreadMessageRow[]>;
-  /** Find a job by ID and return its hints. */
+}
+
+/** Reads a job row (hints subset) by ID. Same data as {@link JobHintsReader};
+ * kept as a separate name until the worker invoke fallback is deleted
+ * (slim-down G1), after which the pair collapses to one `getJobHints`. */
+export interface JobByIdReader {
   findJobById(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
 }
+
+/** Lists thread messages, newest first. */
+export interface ThreadMessageReader {
+  listThreadMessages(threadId: string, opts: { limit: number }): Promise<ThreadMessageRow[]>;
+}
+
+/** DB facade for coordination inbox + thread context. */
+export interface CoordinationDb extends JobHintsReader, JobByIdReader, ThreadMessageReader {}
 
 /** Org document row shape (subset). */
 export interface OrgDocumentRow {
@@ -191,19 +202,15 @@ export interface JobAttachmentRow {
 }
 
 /** DB facade for carryover context materialisation. */
-export interface CarryoverContextDb {
-  findJobById(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
+export interface CarryoverContextDb extends JobHintsReader, JobByIdReader, ThreadMessageReader {
   findProjectById(projectId: string): Promise<{ org_id: string } | undefined>;
   listOrgDocsByPrefix(orgId: string, prefix: string, limit: number): Promise<OrgDocumentRow[]>;
   findOrgDocByPath(orgId: string, path: string): Promise<{ content: string } | undefined>;
   findJobAttachment(jobId: string, name: string): Promise<{ content: string } | undefined>;
-  queryJobHints(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
-  listThreadMessages(threadId: string, opts: { limit: number }): Promise<ThreadMessageRow[]>;
 }
 
 /** DB facade for EveMessageRelay. */
-export interface RelayDb {
-  queryJobHints(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
+export interface RelayDb extends JobHintsReader {
   createThreadMessage(msg: {
     id: string;
     thread_id: string;
@@ -216,8 +223,7 @@ export interface RelayDb {
 }
 
 /** DB facade for budget enforcement. */
-export interface BudgetDb {
-  findJobById(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
+export interface BudgetDb extends JobByIdReader {
   getSystemSetting(key: string): Promise<{ value: string } | undefined>;
   findLatestRateCard(name: string, at: Date): Promise<{
     name: string;

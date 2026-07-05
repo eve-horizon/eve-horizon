@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createApiListResponseSchema } from './common.js';
+import { createApiListResponseSchema, MemberRoleSchema, OrgProjectScopeSchema } from './common.js';
 import { ProjectAuthConfigSchema, ProjectBrandingSchema } from './manifest.js';
 import { AccessBindingScopeSchema } from './access-scope.js';
 export {
@@ -42,7 +42,7 @@ export const AuthStatusResponseSchema = z.object({
     org_slug: z.string().optional(),
   })).optional(),
   /** Project-level role when X-Eve-Project-Id header is provided */
-  project_role: z.enum(['owner', 'admin', 'member']).nullable().optional(),
+  project_role: MemberRoleSchema.nullable().optional(),
 });
 
 export type AuthStatusResponse = z.infer<typeof AuthStatusResponseSchema>;
@@ -165,7 +165,7 @@ export const AuthMintResponseSchema = z.object({
   created: z.boolean(),
   org_id: z.string(),
   project_id: z.string().nullable(),
-  role: z.enum(['owner', 'admin', 'member']),
+  role: MemberRoleSchema,
 });
 
 export type AuthMintResponse = z.infer<typeof AuthMintResponseSchema>;
@@ -271,7 +271,7 @@ export const AppAccessOrgSchema = z.object({
   id: z.string(),
   slug: z.string(),
   name: z.string(),
-  role: z.enum(['owner', 'admin', 'member']),
+  role: MemberRoleSchema,
   capabilities: z.object({
     enter_app: z.boolean(),
     invite_members: z.boolean(),
@@ -328,7 +328,7 @@ export type MagicLinkResponse = z.infer<typeof MagicLinkResponseSchema>;
 
 export const OrgInviteCreateRequestSchema = z.object({
   org_id: z.string(),
-  role: z.enum(['owner', 'admin', 'member']).default('member'),
+  role: MemberRoleSchema.default('member'),
   provider_hint: z.string().optional(),
   identity_hint: z.string().optional(),
   expires_in_days: z.coerce.number().int().min(1).max(365).optional(),
@@ -338,7 +338,7 @@ export type OrgInviteCreateRequest = z.infer<typeof OrgInviteCreateRequestSchema
 
 export const OrgScopedInviteRequestSchema = z.object({
   email: z.string().email(),
-  role: z.enum(['owner', 'admin', 'member']).default('member'),
+  role: MemberRoleSchema.default('member'),
   send_email: z.boolean().default(true),
   redirect_to: z.string().optional(),
   app_context: z.record(z.unknown()).optional(),
@@ -452,7 +452,7 @@ export type MintServicePrincipalTokenResponse = z.infer<typeof MintServicePrinci
 
 export const CreateAccessRoleRequestSchema = z.object({
   name: z.string().min(1).max(100).regex(/^[a-z0-9_]+$/),
-  scope: z.enum(['org', 'project']),
+  scope: OrgProjectScopeSchema,
   permissions: z.array(z.string()).min(1),
   description: z.string().max(500).optional(),
 });
@@ -470,7 +470,7 @@ export const AccessRoleResponseSchema = z.object({
   id: z.string(),
   org_id: z.string(),
   name: z.string(),
-  scope: z.enum(['org', 'project']),
+  scope: OrgProjectScopeSchema,
   permissions: z.array(z.string()),
   description: z.string().nullable(),
   created_by: z.string().nullable(),
@@ -619,10 +619,10 @@ export const AccessExplainResponseSchema = z.object({
 export type AccessExplainResponse = z.infer<typeof AccessExplainResponseSchema>;
 
 export const AccessMembershipBaseSchema = z.object({
-  org_role: z.enum(['owner', 'admin', 'member']).nullable(),
+  org_role: MemberRoleSchema.nullable(),
   project_roles: z.array(z.object({
     project_id: z.string(),
-    role: z.enum(['owner', 'admin', 'member']),
+    role: MemberRoleSchema,
   })),
   token_scopes: z.array(z.string()),
 });
@@ -682,7 +682,7 @@ export type AccessPrincipalMembershipsResponse = z.infer<typeof AccessPrincipalM
 // ---------------------------------------------------------------------------
 
 export const AccessYamlRoleSchema = z.object({
-  scope: z.enum(['org', 'project']),
+  scope: OrgProjectScopeSchema,
   description: z.string().optional(),
   permissions: z.array(z.string()).min(1),
 });

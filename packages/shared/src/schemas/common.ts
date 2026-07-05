@@ -47,3 +47,23 @@ export const GitShaSchema = z
     message:
       'git_sha must be a 40-character lowercase hex SHA. Did you pass a branch name or uppercase SHA? Use the CLI to resolve refs automatically.',
   });
+
+/** Org/project membership role — the platform-wide member-role value set. */
+export const MemberRoleSchema = z.enum(['owner', 'admin', 'member']);
+export type MemberRole = z.infer<typeof MemberRoleSchema>;
+
+/** File/mount access mode. */
+export const AccessModeSchema = z.enum(['read_only', 'write_only', 'read_write']);
+export type AccessMode = z.infer<typeof AccessModeSchema>;
+
+/** Job execution persistence mode. */
+export const ExecutionModeSchema = z.enum(['persistent', 'ephemeral']);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
+
+/** Org-or-project scoping selector. */
+export const OrgProjectScopeSchema = z.enum(['org', 'project']);
+export type OrgProjectScope = z.infer<typeof OrgProjectScopeSchema>;
+
+/** Org document lifecycle status. */
+export const DocLifecycleStatusSchema = z.enum(['active', 'stale', 'archived', 'expired']);
+export type DocLifecycleStatus = z.infer<typeof DocLifecycleStatusSchema>;

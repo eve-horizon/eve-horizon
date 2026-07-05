@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DocLifecycleStatusSchema } from './common.js';
 
 // ============================================================================
 // Constants
@@ -19,7 +20,7 @@ export const CreateOrgDocumentRequestSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   review_due: z.string().datetime().optional(),
   expires_at: z.string().datetime().optional(),
-  lifecycle_status: z.enum(['active', 'stale', 'archived', 'expired']).optional(),
+  lifecycle_status: DocLifecycleStatusSchema.optional(),
 });
 
 export type CreateOrgDocumentRequest = z.infer<typeof CreateOrgDocumentRequestSchema>;
@@ -30,7 +31,7 @@ export const UpdateOrgDocumentRequestSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   review_due: z.string().datetime().nullable().optional(),
   expires_at: z.string().datetime().nullable().optional(),
-  lifecycle_status: z.enum(['active', 'stale', 'archived', 'expired']).optional(),
+  lifecycle_status: DocLifecycleStatusSchema.optional(),
   embedding_model: z.string().nullable().optional(),
   embedding_json: z.record(z.unknown()).nullable().optional(),
   embedded_at: z.string().datetime().nullable().optional(),
@@ -68,7 +69,7 @@ export const OrgDocumentResponseSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   review_due: z.string().nullable().optional(),
   expires_at: z.string().nullable().optional(),
-  lifecycle_status: z.enum(['active', 'stale', 'archived', 'expired']).optional(),
+  lifecycle_status: DocLifecycleStatusSchema.optional(),
   embedding_model: z.string().nullable().optional(),
   embedding_json: z.record(z.unknown()).nullable().optional(),
   embedded_at: z.string().nullable().optional(),

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PaginationSchema } from './common.js';
+import { PaginationSchema, MemberRoleSchema } from './common.js';
 import { EnvironmentResponseSchema } from './environment.js';
 
 const SSH_GIT_URL_RE = /^[\w.-]+@[\w.-]+:[\w./-]+$/;
@@ -72,7 +72,7 @@ export type ProjectListResponse = z.infer<typeof ProjectListResponseSchema>;
 
 // ── Project member schemas ─────────────────────────────────────────
 
-export const ProjectMemberRoleSchema = z.enum(['owner', 'admin', 'member']);
+export const ProjectMemberRoleSchema = MemberRoleSchema;
 
 export const ProjectMemberRequestSchema = z.object({
   user_id: z.string().optional(),

@@ -711,64 +711,32 @@ export const ManifestSchema = z.object({
 
 export type Manifest = z.infer<typeof ManifestSchema>;
 
-function getXeveDefaults(manifest: Manifest): Record<string, unknown> | null {
+function getXeveField<K extends keyof ManifestXeve>(manifest: Manifest, key: K): NonNullable<ManifestXeve[K]> | null {
   const xEve = manifest['x-eve'] ?? manifest.x_eve;
-  if (xEve && typeof xEve === 'object' && 'defaults' in xEve) {
-    return (xEve as ManifestXeve).defaults ?? null;
-  }
-  return null;
-}
-
-function getXeveAgents(manifest: Manifest): Record<string, unknown> | null {
-  const xEve = manifest['x-eve'] ?? manifest.x_eve;
-  if (xEve && typeof xEve === 'object' && 'agents' in xEve) {
-    return (xEve as ManifestXeve).agents ?? null;
-  }
-  return null;
-}
-
-function getXeveBranding(manifest: Manifest): ProjectBranding | null {
-  const xEve = manifest['x-eve'] ?? manifest.x_eve;
-  if (xEve && typeof xEve === 'object' && 'branding' in xEve) {
-    return (xEve as ManifestXeve).branding ?? null;
-  }
-  return null;
-}
-
-function getXeveAuthConfig(manifest: Manifest): ProjectAuthConfig | null {
-  const xEve = manifest['x-eve'] ?? manifest.x_eve;
-  if (xEve && typeof xEve === 'object' && 'auth' in xEve) {
-    return (xEve as ManifestXeve).auth ?? null;
-  }
-  return null;
-}
-
-function getXeveAppLinks(manifest: Manifest): AppLinks | null {
-  const xEve = manifest['x-eve'] ?? manifest.x_eve;
-  if (xEve && typeof xEve === 'object' && 'app_links' in xEve) {
-    return (xEve as ManifestXeve).app_links ?? null;
+  if (xEve && typeof xEve === 'object' && key in xEve) {
+    return ((xEve as ManifestXeve)[key] ?? null) as NonNullable<ManifestXeve[K]> | null;
   }
   return null;
 }
 
 export function getManifestDefaults(manifest: Manifest): Record<string, unknown> | null {
-  return getXeveDefaults(manifest);
+  return getXeveField(manifest, 'defaults');
 }
 
 export function getManifestAgents(manifest: Manifest): Record<string, unknown> | null {
-  return getXeveAgents(manifest);
+  return getXeveField(manifest, 'agents');
 }
 
 export function getManifestBranding(manifest: Manifest): ProjectBranding | null {
-  return getXeveBranding(manifest);
+  return getXeveField(manifest, 'branding');
 }
 
 export function getManifestAuthConfig(manifest: Manifest): ProjectAuthConfig | null {
-  return getXeveAuthConfig(manifest);
+  return getXeveField(manifest, 'auth');
 }
 
 export function getManifestAppLinks(manifest: Manifest): AppLinks | null {
-  return getXeveAppLinks(manifest);
+  return getXeveField(manifest, 'app_links');
 }
 
 export function getServicesFromManifest(manifest: Manifest): Record<string, Service> | null {
