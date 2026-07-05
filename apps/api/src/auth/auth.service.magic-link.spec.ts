@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { MagicLinkService } from './magic-link.service';
+import { AppAuthService } from './app-auth.service';
+import { TokenVerifierService } from './token-verifier.service';
+import { BootstrapService } from './bootstrap.service';
 import type { MailerService } from '../mailer/mailer.service';
 import { EmailSuppressedError } from '../mailer/errors';
 import type { IdentityProviderRegistry } from './providers/index.js';
@@ -47,7 +51,36 @@ vi.mock('@eve/db', () => ({
 
 describe('AuthService app magic-link login', () => {
   let service: AuthService;
+  let magicLink: MagicLinkService;
   let mailerService: Pick<MailerService, 'send'>;
+
+  function buildService(appAuthPolicy?: unknown): AuthService {
+    magicLink = new MagicLinkService(
+      {} as never,
+      mailerService as MailerService,
+      appAuthPolicy as never,
+    );
+    const appAuth = new AppAuthService(
+      {} as never,
+      magicLink,
+      appAuthPolicy as never,
+    );
+    const tokenVerifier = new TokenVerifierService(
+      {} as never,
+      appAuth,
+      magicLink,
+    );
+    const bootstrap = new BootstrapService({} as never, appAuth);
+    return new AuthService(
+      {} as never,
+      {} as IdentityProviderRegistry,
+      magicLink,
+      appAuth,
+      tokenVerifier,
+      bootstrap,
+      appAuthPolicy as never,
+    );
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -61,11 +94,7 @@ describe('AuthService app magic-link login', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    service = new AuthService(
-      {} as never,
-      {} as IdentityProviderRegistry,
-      mailerService as MailerService,
-    );
+    service = buildService();
 
     mocks.projects.findById.mockResolvedValue({
       id: 'proj_123',
@@ -126,7 +155,7 @@ describe('AuthService app magic-link login', () => {
   it('sends branded magic-link email for an existing org member', async () => {
     mocks.users.findByEmail.mockResolvedValue({ id: 'user_123', email: 'User@Example.com' });
     mocks.memberships.findOrgMembership.mockResolvedValue({ id: 'mem_123' });
-    const generate = vi.spyOn(service, 'generateAuthActionLink')
+    const generate = vi.spyOn(magicLink, 'generateAuthActionLink')
       .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
     await expect(service.sendAppMagicLink({
@@ -155,7 +184,7 @@ describe('AuthService app magic-link login', () => {
     });
 
     it('writes a wrap row and puts the wrap URL — not the GoTrue URL — into the magic-link email', async () => {
-      vi.spyOn(service, 'generateAuthActionLink')
+      vi.spyOn(magicLink, 'generateAuthActionLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=raw-magic-otp');
 
       await service.sendAppMagicLink({
@@ -181,13 +210,8 @@ describe('AuthService app magic-link login', () => {
       const appAuthPolicy = {
         assertCanInvite: vi.fn().mockResolvedValue(undefined),
       };
-      service = new AuthService(
-        {} as never,
-        {} as IdentityProviderRegistry,
-        mailerService as MailerService,
-        appAuthPolicy as never,
-      );
-      vi.spyOn(service, 'generateInviteLink')
+      service = buildService(appAuthPolicy);
+      vi.spyOn(magicLink, 'generateInviteLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=raw-invite-otp');
 
       mocks.users.findByEmail.mockResolvedValue(null);
@@ -212,7 +236,7 @@ describe('AuthService app magic-link login', () => {
     });
 
     it('generateWrappedInviteLink wraps a raw invite link', async () => {
-      vi.spyOn(service, 'generateInviteLink')
+      vi.spyOn(magicLink, 'generateInviteLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=raw-invite');
 
       const wrapped = await service.generateWrappedInviteLink({
@@ -276,7 +300,7 @@ describe('AuthService app magic-link login', () => {
   });
 
   it('does not create or email unknown users when self-signup is disabled', async () => {
-    const generate = vi.spyOn(service, 'generateAuthActionLink');
+    const generate = vi.spyOn(magicLink, 'generateAuthActionLink');
 
     await expect(service.sendAppMagicLink({
       email: 'unknown@example.com',
@@ -298,7 +322,7 @@ describe('AuthService app magic-link login', () => {
         invite_requires_password: false,
       },
     });
-    const generate = vi.spyOn(service, 'generateAuthActionLink')
+    const generate = vi.spyOn(magicLink, 'generateAuthActionLink')
       .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
     await expect(service.sendAppMagicLink({
@@ -330,7 +354,7 @@ describe('AuthService app magic-link login', () => {
     });
     mocks.users.findByEmail.mockResolvedValue({ id: 'user_123', email: 'user@example.com' });
     mocks.memberships.findProjectMembership.mockResolvedValue({ id: 'pmem_123' });
-    const generate = vi.spyOn(service, 'generateAuthActionLink')
+    const generate = vi.spyOn(magicLink, 'generateAuthActionLink')
       .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
     await expect(service.sendAppMagicLink({
@@ -353,7 +377,7 @@ describe('AuthService app magic-link login', () => {
     mocks.orgInvites.findPendingByIdentityHintForOrgs.mockResolvedValue([
       { app_context: { project_id: 'proj_123' } },
     ]);
-    const generate = vi.spyOn(service, 'generateAuthActionLink');
+    const generate = vi.spyOn(magicLink, 'generateAuthActionLink');
 
     await expect(service.sendAppMagicLink({
       email: 'invitee@example.com',
@@ -386,13 +410,8 @@ describe('AuthService app magic-link login', () => {
     const appAuthPolicy = {
       assertCanInvite: vi.fn().mockResolvedValue(undefined),
     };
-    service = new AuthService(
-      {} as never,
-      {} as IdentityProviderRegistry,
-      mailerService as MailerService,
-      appAuthPolicy as never,
-    );
-    const generate = vi.spyOn(service, 'generateInviteLink')
+    service = buildService(appAuthPolicy);
+    const generate = vi.spyOn(magicLink, 'generateInviteLink')
       .mockResolvedValue('http://auth.eve.lvh.me/verify?token=invite');
 
     await expect(service.createAppInvite({
@@ -436,7 +455,7 @@ describe('AuthService app magic-link login', () => {
   it('preserves {sent:true} when SES suppression drops the magic-link email', async () => {
     mocks.users.findByEmail.mockResolvedValue({ id: 'user_123', email: 'admin@example.com' });
     mocks.memberships.findOrgMembership.mockResolvedValue({ id: 'mem_123' });
-    vi.spyOn(service, 'generateAuthActionLink')
+    vi.spyOn(magicLink, 'generateAuthActionLink')
       .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
     (mailerService.send as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new EmailSuppressedError('admin@example.com', 'BOUNCE', '2026-05-11T09:28:17.364Z'),
@@ -490,17 +509,12 @@ describe('AuthService app magic-link login', () => {
           { domain: 'partner.example', target_org: 'org_partner', role: 'member' },
         ]),
       };
-      service = new AuthService(
-        {} as never,
-        {} as IdentityProviderRegistry,
-        mailerService as MailerService,
-        appAuthPolicy as never,
-      );
+      service = buildService(appAuthPolicy);
       mocks.projects.findById.mockResolvedValue(domainSignupProject);
     });
 
     it('writes a system invite tagged with the matched rule and target_org', async () => {
-      const generate = vi.spyOn(service, 'generateAuthActionLink')
+      const generate = vi.spyOn(magicLink, 'generateAuthActionLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
       await expect(service.sendAppMagicLink({
@@ -527,7 +541,7 @@ describe('AuthService app magic-link login', () => {
     });
 
     it('routes a different domain to its own target_org', async () => {
-      vi.spyOn(service, 'generateAuthActionLink')
+      vi.spyOn(magicLink, 'generateAuthActionLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
       await expect(service.sendAppMagicLink({
@@ -545,7 +559,7 @@ describe('AuthService app magic-link login', () => {
     });
 
     it('matches wildcard subdomain rule', async () => {
-      vi.spyOn(service, 'generateAuthActionLink')
+      vi.spyOn(magicLink, 'generateAuthActionLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
       await expect(service.sendAppMagicLink({
@@ -569,7 +583,7 @@ describe('AuthService app magic-link login', () => {
         { domain: 'acme.com', target_org: 'org_acme', role: 'member' },
         { domain: '*.acme.com', target_org: 'org_partner', role: 'member' },
       ]);
-      vi.spyOn(service, 'generateAuthActionLink')
+      vi.spyOn(magicLink, 'generateAuthActionLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
       await expect(service.sendAppMagicLink({
@@ -586,7 +600,7 @@ describe('AuthService app magic-link login', () => {
     });
 
     it('returns generic success without writing invite for non-matching domain', async () => {
-      const generate = vi.spyOn(service, 'generateAuthActionLink');
+      const generate = vi.spyOn(magicLink, 'generateAuthActionLink');
 
       await expect(service.sendAppMagicLink({
         email: 'attacker@evil.example',
@@ -610,7 +624,7 @@ describe('AuthService app magic-link login', () => {
           },
         },
       ]);
-      vi.spyOn(service, 'generateAuthActionLink')
+      vi.spyOn(magicLink, 'generateAuthActionLink')
         .mockResolvedValue('http://auth.eve.lvh.me/verify?token=magic');
 
       await expect(service.sendAppMagicLink({
@@ -633,7 +647,7 @@ describe('AuthService app magic-link login', () => {
           },
         },
       ]);
-      const generate = vi.spyOn(service, 'generateAuthActionLink');
+      const generate = vi.spyOn(magicLink, 'generateAuthActionLink');
 
       await expect(service.sendAppMagicLink({
         email: 'someone@acme.com',
@@ -647,7 +661,7 @@ describe('AuthService app magic-link login', () => {
 
     it('skips Path C and falls through when resolveDomainSignup returns null', async () => {
       appAuthPolicy.resolveDomainSignup.mockResolvedValue(null);
-      const generate = vi.spyOn(service, 'generateAuthActionLink');
+      const generate = vi.spyOn(magicLink, 'generateAuthActionLink');
 
       await expect(service.sendAppMagicLink({
         email: 'someone@acme.com',
@@ -664,15 +678,10 @@ describe('AuthService app magic-link login', () => {
     const appAuthPolicy = {
       assertCanInvite: vi.fn().mockResolvedValue(undefined),
     };
-    service = new AuthService(
-      {} as never,
-      {} as IdentityProviderRegistry,
-      mailerService as MailerService,
-      appAuthPolicy as never,
-    );
+    service = buildService(appAuthPolicy);
     mocks.users.findByEmail.mockResolvedValue({ id: 'user_existing', email: 'member@example.com' });
     mocks.memberships.findOrgMembership.mockResolvedValue({ id: 'mem_existing' });
-    const generate = vi.spyOn(service, 'generateInviteLink');
+    const generate = vi.spyOn(magicLink, 'generateInviteLink');
 
     await expect(service.createAppInvite({
       project_id: 'proj_123',

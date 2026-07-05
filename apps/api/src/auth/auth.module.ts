@@ -12,6 +12,10 @@ import { AccessController } from './auth.access.controller.js';
 import { AccessRolesController } from './auth.access-roles.controller.js';
 import { AccessGroupsController } from './auth.access-groups.controller.js';
 import { AuthService } from './auth.service.js';
+import { MagicLinkService } from './magic-link.service.js';
+import { AppAuthService } from './app-auth.service.js';
+import { TokenVerifierService } from './token-verifier.service.js';
+import { BootstrapService } from './bootstrap.service.js';
 import { AuthKeysController } from './auth.keys.controller.js';
 import { RbacService } from './rbac.service.js';
 import { AccessService } from './access.service.js';
@@ -36,6 +40,10 @@ const MAGIC_LINK_WRAP_RETENTION_MS = 24 * 60 * 60 * 1000; // 24 hours
   controllers: [AuthController, AuthInternalController, AuthKeysController, AuthInvitesController, AuthAccessRequestsController, ServicePrincipalsController, AccessController, AccessRolesController, AccessGroupsController],
   providers: [
     AuthService,
+    MagicLinkService,
+    AppAuthService,
+    TokenVerifierService,
+    BootstrapService,
     RbacService,
     AccessService,
     ScopedAccessService,
