@@ -16,13 +16,9 @@ spec:
         app.kubernetes.io/name: eve-api
     spec:
       serviceAccountName: eve-api
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
+      # securityContext + probes injected by base kustomization patches/
       containers:
         - name: api
-          securityContext:
-            allowPrivilegeEscalation: false
           image: eve-horizon/api:local
           imagePullPolicy: IfNotPresent
           envFrom:
@@ -30,8 +26,13 @@ spec:
             - secretRef:
                 name: eve-app
           env:
+            # Shared cluster values come from the eve-cluster-config ConfigMap.
+            # (No envFrom here: the api must not inherit EVE_API_URL from it.)
             - name: DATABASE_URL
-              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: DATABASE_URL
             - name: API_PORT
               value: "4701"
             - name: WORKER_URL
@@ -42,9 +43,15 @@ spec:
             - name: SUPABASE_AUTH_EXTERNAL_URL
               value: "http://auth.eve.lvh.me"
             - name: EVE_SSO_URL
-              value: "http://sso.eve.lvh.me"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_SSO_URL
             - name: EVE_PUBLIC_API_URL
-              value: "http://api.eve.lvh.me"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_PUBLIC_API_URL
             # --- SMTP (Mailpit locally; staging overrides in infra repo) ---
             - name: GOTRUE_SMTP_HOST
               value: "mailpit.eve.svc.cluster.local"
@@ -57,20 +64,41 @@ spec:
             - name: EVE_GATEWAY_URL
               value: "http://eve-gateway.eve.svc.cluster.local:4820"
             - name: EVE_DEFAULT_DOMAIN
-              value: lvh.me
-            # --- Object Storage ---
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_DEFAULT_DOMAIN
+            # --- Object Storage (credentials from minio-credentials Secret) ---
             - name: EVE_STORAGE_BACKEND
-              value: "minio"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_BACKEND
             - name: EVE_STORAGE_ENDPOINT
-              value: "http://eve-minio.eve.svc.cluster.local:9000"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_ENDPOINT
             - name: EVE_STORAGE_PUBLIC_ENDPOINT
-              value: "http://storage.eve.lvh.me"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_PUBLIC_ENDPOINT
             - name: EVE_STORAGE_REGION
-              value: "us-east-1"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_REGION
             - name: EVE_STORAGE_ORG_BUCKET_PREFIX
-              value: "eve-org"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_ORG_BUCKET_PREFIX
             - name: EVE_STORAGE_INTERNAL_BUCKET
-              value: "eve-internal"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_INTERNAL_BUCKET
             - name: EVE_STORAGE_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -84,16 +112,3 @@ spec:
           ports:
             - name: http
               containerPort: 4701
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 20
-            periodSeconds: 10

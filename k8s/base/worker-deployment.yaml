@@ -24,16 +24,19 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      # container securityContext + probes injected by base kustomization patches/
       containers:
         - name: worker
-          securityContext:
-            allowPrivilegeEscalation: false
           image: eve-horizon/worker:local
           imagePullPolicy: IfNotPresent
           envFrom:
             # Mount all secrets from eve-app (auth tokens, etc.)
             - secretRef:
                 name: eve-app
+            # Cluster-wide config (DATABASE_URL, service URLs, EVE_STORAGE_*).
+            # Inline env entries below override these if names collide.
+            - configMapRef:
+                name: eve-cluster-config
           env:
             - name: EVE_RUNTIME
               value: k8s
@@ -46,18 +49,8 @@ spec:
               value: eve-horizon/worker:local
             - name: EVE_RUNNER_SERVICE_ACCOUNT
               value: eve-worker
-            - name: EVE_API_URL
-              value: http://eve-api:4701
-            - name: EVE_PUBLIC_API_URL
-              value: http://api.eve.lvh.me
-            - name: EVE_SSO_URL
-              value: http://sso.eve.lvh.me
-            - name: DATABASE_URL
-              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
             - name: WORKER_PORT
               value: "4749"
-            - name: EVE_DEFAULT_DOMAIN
-              value: lvh.me
             - name: EVE_ORG_FS_ROOT
               value: /org
             - name: EVE_TOOLCHAIN_ROOT
@@ -66,19 +59,7 @@ spec:
               value: eve-horizon/toolchain-
             - name: EVE_TOOLCHAIN_IMAGE_TAG
               value: local
-            # --- Object Storage ---
-            - name: EVE_STORAGE_BACKEND
-              value: "minio"
-            - name: EVE_STORAGE_ENDPOINT
-              value: "http://eve-minio.eve.svc.cluster.local:9000"
-            - name: EVE_STORAGE_PUBLIC_ENDPOINT
-              value: "http://storage.eve.lvh.me"
-            - name: EVE_STORAGE_REGION
-              value: "us-east-1"
-            - name: EVE_STORAGE_ORG_BUCKET_PREFIX
-              value: "eve-org"
-            - name: EVE_STORAGE_INTERNAL_BUCKET
-              value: "eve-internal"
+            # --- Object Storage credentials (endpoint config from eve-cluster-config) ---
             - name: EVE_STORAGE_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -97,19 +78,6 @@ spec:
           volumeMounts:
             - name: toolchains
               mountPath: /opt/eve/toolchains
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 20
-            periodSeconds: 10
       volumes:
         - name: toolchains
           emptyDir: {}

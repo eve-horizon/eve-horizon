@@ -1,0 +1,9 @@
+# Standard main-container securityContext for eve services.
+# Applied via kustomization.yaml `patches` to the first container of:
+# eve-api, eve-worker, eve-orchestrator, eve-gateway, eve-sso (Deployments)
+# and eve-agent-runtime (StatefulSet).
+# The orchestrator init container keeps its securityContext inline.
+- op: add
+  path: /spec/template/spec/containers/0/securityContext
+  value:
+    allowPrivilegeEscalation: false

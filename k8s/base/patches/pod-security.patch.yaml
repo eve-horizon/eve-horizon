@@ -1,0 +1,10 @@
+# Standard pod-level securityContext for eve services.
+# Applied via kustomization.yaml `patches` to: eve-api, eve-orchestrator,
+# eve-gateway, eve-sso (Deployments) and eve-agent-runtime (StatefulSet).
+# eve-worker keeps its own extended securityContext inline (runAsNonRoot,
+# fsGroup, ...) which already includes this seccompProfile.
+- op: add
+  path: /spec/template/spec/securityContext
+  value:
+    seccompProfile:
+      type: RuntimeDefault

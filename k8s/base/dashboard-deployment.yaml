@@ -23,7 +23,10 @@ spec:
             - containerPort: 3200
           env:
             - name: EVE_API_URL
-              value: "http://eve-api:4701"
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_API_URL
             - name: PORT
               value: "3200"
           livenessProbe:

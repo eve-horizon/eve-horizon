@@ -17,7 +17,10 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: DATABASE_URL
-              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: DATABASE_URL
           command:
             - node
             - /app/packages/db/dist/migrate.js
