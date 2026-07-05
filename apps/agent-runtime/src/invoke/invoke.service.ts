@@ -133,12 +133,66 @@ import {
   formatToolchainEvent,
   recordToolchainEvent,
 } from './toolchains';
+import type { SecretResolveItem, EveAgentCliOptions } from '@eve/shared';
 
 const DEFAULT_K8S_NAMESPACE = 'eve';
 
 type ClaudeAuthRuntimeState = {
   runtimeConfig: ClaudeRuntimeConfig;
   materialized: ClaudeCredentialMaterialization;
+};
+
+type LifecycleLoggerFn = (
+  attemptId: string,
+  phase: LifecyclePhase,
+  action: LifecycleAction,
+  meta: Record<string, unknown>,
+  opts?: { duration_ms?: number; success?: boolean; error?: string; [key: string]: unknown },
+) => Promise<void>;
+
+/**
+ * Read-mostly state assembled by execute() and threaded through the inline
+ * execution phase methods. `env` (from materializeJobSecrets) is passed
+ * separately and mutated in place by later phases, matching the original
+ * single-function behavior.
+ */
+type InlineExecContext = {
+  effectiveInvocation: HarnessInvocation;
+  invocationWithOptions: HarnessInvocation;
+  execTimings: Record<string, number>;
+  timePhase: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+  lifecycleLogger: LifecycleLoggerFn;
+  resolvedSecrets: SecretResolveItem[];
+  gitAuth: Awaited<ReturnType<typeof prepareGitAuth>>;
+  gitConfig: JobGit | undefined;
+  provisionedToolchains: ToolchainProvisionResult | null;
+};
+
+type PreparedRepo = {
+  repoPath: string;
+  gitWorkspace?: GitWorkspace;
+  hadRepoPath: boolean;
+};
+
+/** Everything resolved up-front about how the harness process will run. */
+type HarnessExecutionPlan = {
+  harnessName: HarnessName;
+  isClaudeHarness: boolean;
+  jobUserHome: string;
+  originalCodexB64: string | undefined;
+  codexScopeType: 'user' | 'org' | 'project' | undefined;
+  codexScopeId: string | undefined;
+  claudeAuthDecision: ClaudeAuthDecision | null;
+  claudeAuthRuntimeRef: { current: ClaudeAuthRuntimeState | null };
+  harnessOptionsResolved: EveAgentCliOptions;
+  harnessBinary: { binary: string; prefixArgs: string[] };
+  harnessArgs: string[];
+};
+
+type HarnessProcessSetup = {
+  startTime: number;
+  logs: { type: string; content: Record<string, unknown> }[];
+  processEnv: ReturnType<typeof buildSanitizedHarnessEnv>;
 };
 
 /**
@@ -861,39 +915,7 @@ export class InvokeService {
       const executeStartTime = Date.now();
 
       if (this.shouldRunInK8sRunnerPod()) {
-        const localRepoPath = effectiveInvocation.repoUrl ? getLocalRepoPath(effectiveInvocation.repoUrl) : null;
-        if (localRepoPath) {
-          throw new Error('file:// repo URLs are not supported in k8s runtime');
-        }
-
-        const runnerInvocation = await this.getInvocationWithAppClis(
-          await this.getInvocationWithJobToken(effectiveInvocation),
-        );
-
-        return await runInvocationInK8s(
-          runnerInvocation,
-          async (runtimeMeta) => {
-            try {
-              await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, runtimeMeta);
-              console.log(`Updated runtime_meta for attempt ${effectiveInvocation.attemptId}:`, runtimeMeta);
-            } catch (error) {
-              console.error(`Failed to update runtime_meta for attempt ${effectiveInvocation.attemptId}:`, error);
-            }
-          },
-          async (phase, action, meta, opts) => {
-            await this.logLifecycleEvent(
-              effectiveInvocation.attemptId,
-              phase,
-              action,
-              meta,
-              {
-                duration_ms: opts?.duration_ms,
-                success: opts?.success,
-                error: opts?.error,
-              }
-            );
-          }
-        );
+        return await this.dispatchToRunner(effectiveInvocation);
       }
 
       if (process.env.EVE_RUNTIME === 'k8s' && effectiveInvocation.attemptId) {
@@ -904,89 +926,9 @@ export class InvokeService {
         }
       }
 
-      const requestedToolchains = [...new Set(effectiveInvocation.toolchains ?? [])];
-      let provisionedToolchains: ToolchainProvisionResult | null = null;
-      if (requestedToolchains.length > 0) {
-        const toolchainEvents = new Map<string, Set<string>>();
-        const logToolchainEvent = async (event: ToolchainCacheEvent) => {
-          recordToolchainEvent(toolchainEvents, event);
-          const message = formatToolchainEvent(event);
-          console.log(`[toolchain] ${message}`);
-          if (effectiveInvocation.attemptId) {
-            await this.logs.appendLog(effectiveInvocation.attemptId, 'status', {
-              kind: 'toolchain',
-              event_type: event.type,
-              toolchain: event.toolchain,
-              image: event.image,
-              root: event.root,
-              message,
-              timestamp: new Date().toISOString(),
-            });
-          }
-        };
-
-        try {
-          provisionedToolchains = await ensureToolchains({
-            toolchains: requestedToolchains,
-            baseEnv: process.env,
-            logger: logToolchainEvent,
-          });
-          if (effectiveInvocation.attemptId) {
-            await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
-              toolchains: buildToolchainRuntimeMeta({
-                executionMode: 'inline',
-                requested: requestedToolchains,
-                resolved: provisionedToolchains.resolved,
-                missing: provisionedToolchains.missing,
-                eventsByToolchain: toolchainEvents,
-              }),
-            });
-          }
-        } catch (error) {
-          const provisionError = error instanceof ToolchainProvisionError ? error : null;
-          const errorMessage = provisionError?.message
-            ?? (error instanceof Error ? error.message : String(error));
-          const resultJson = {
-            error_code: 'toolchain_unavailable',
-            toolchain: provisionError?.toolchain ?? requestedToolchains[0] ?? null,
-            image: provisionError?.image ?? null,
-          };
-
-          if (effectiveInvocation.attemptId) {
-            await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
-              toolchains: buildToolchainRuntimeMeta({
-                executionMode: 'inline',
-                requested: requestedToolchains,
-                resolved: [],
-                missing: requestedToolchains,
-                source: 'unavailable',
-                eventsByToolchain: toolchainEvents,
-                errorCode: 'toolchain_unavailable',
-                error: errorMessage,
-                toolchain: provisionError?.toolchain,
-                image: provisionError?.image,
-              }),
-            });
-            await this.logs.appendLog(effectiveInvocation.attemptId, 'status', {
-              kind: 'toolchain',
-              event_type: 'provision_failed',
-              error_code: 'toolchain_unavailable',
-              toolchain: resultJson.toolchain,
-              image: resultJson.image,
-              message: errorMessage,
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          return {
-            attemptId: effectiveInvocation.attemptId,
-            success: false,
-            exitCode: 1,
-            error: errorMessage,
-            resultJson,
-            durationMs: Date.now() - executeStartTime,
-          };
-        }
+      const toolchains = await this.provisionRequestedToolchains(effectiveInvocation, executeStartTime);
+      if (!toolchains.ok) {
+        return toolchains.failure;
       }
 
       // Mark the start of execution (distinct from claim time).
@@ -1015,98 +957,24 @@ export class InvokeService {
       const gitAuth = await prepareGitAuth(effectiveInvocation, resolvedSecrets);
 
       const gitConfig = effectiveInvocation.git as JobGit | undefined;
-      let repoPath: string;
-      let gitWorkspace: GitWorkspace | undefined;
 
-      let hadRepoPath = false;
-      if (gitConfig) {
-        const cloneRef = gitConfig.ref ?? effectiveInvocation.repoBranch ?? 'main';
-        if (effectiveInvocation.attemptId) {
-          await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'start', {
-            kind: 'git_clone',
-            ref: cloneRef,
-          });
-        }
-        const cloneStartMs = Date.now();
-        try {
-          const result = await timePhase('git_workspace', () => this.prepareWorkspaceWithGitControls(effectiveInvocation, gitAuth));
-          repoPath = result.repoPath;
-          gitWorkspace = result.gitWorkspace;
-          hadRepoPath = result.hadRepoPath;
-          if (effectiveInvocation.attemptId) {
-            await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'end', {
-              kind: 'git_clone',
-              ref: cloneRef,
-            }, { duration_ms: Date.now() - cloneStartMs, success: true });
-          }
-        } catch (err) {
-          if (effectiveInvocation.attemptId) {
-            await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'end', {
-              kind: 'git_clone',
-              ref: cloneRef,
-            }, { duration_ms: Date.now() - cloneStartMs, success: false, error: err instanceof Error ? err.message : String(err) });
-          }
-          throw err;
-        }
-      } else {
-        const cloneRef = effectiveInvocation.repoBranch;
-        if (effectiveInvocation.attemptId) {
-          await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'start', {
-            kind: 'git_clone',
-            ref: cloneRef,
-          });
-        }
-        const cloneStartMs = Date.now();
-        try {
-          const result = await timePhase('git_clone', () => this.prepareWorkspace(effectiveInvocation, gitAuth));
-          repoPath = result.repoPath;
-          hadRepoPath = result.hadRepoPath;
-          if (effectiveInvocation.attemptId) {
-            await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'end', {
-              kind: 'git_clone',
-              ref: cloneRef,
-            }, { duration_ms: Date.now() - cloneStartMs, success: true });
-          }
-        } catch (err) {
-          if (effectiveInvocation.attemptId) {
-            await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'end', {
-              kind: 'git_clone',
-              ref: cloneRef,
-            }, { duration_ms: Date.now() - cloneStartMs, success: false, error: err instanceof Error ? err.message : String(err) });
-          }
-          throw err;
-        }
-      }
-      await cleanupWorkspaceSecretArtifacts(repoPath);
-      if (effectiveInvocation.attemptId) {
-        await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'log', {
-          had_repo_path: hadRepoPath,
-        });
-      }
-
-      const {
-        mountPath: orgRootPath,
-        mountSpec: orgFsMountSpec,
-      } = await timePhase('orgfs_mount', () => this.ensureOrgRoot(
-        effectiveInvocation.workspacePath,
-        invocationWithOptions.data?.orgfs_mount,
-      ));
-      if (effectiveInvocation.attemptId) {
-        await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
-          orgfs_mount: {
-            mode: orgFsMountSpec.mode,
-            allow_prefixes: orgFsMountSpec.allow_prefixes,
-            read_only_prefixes: orgFsMountSpec.read_only_prefixes,
-            mounted: Boolean(orgRootPath),
-          },
-        });
-      }
-      const { env, secretsFilePath } = await timePhase('materialize_secrets', () => materializeSecrets(
-        repoPath,
+      const ctx: InlineExecContext = {
+        effectiveInvocation,
         invocationWithOptions,
+        execTimings,
+        timePhase,
+        lifecycleLogger,
         resolvedSecrets,
-        orgRootPath,
-      ));
+        gitAuth,
+        gitConfig,
+        provisionedToolchains: toolchains.provisioned,
+      };
+
+      const prepared = await this.prepareRepo(ctx);
+      const { repoPath, hadRepoPath } = prepared;
+
+      const orgRootPath = await this.mountOrgFs(ctx);
+      const { env, secretsFilePath } = await this.materializeJobSecrets(ctx, repoPath, orgRootPath);
 
       const skipWorkspaceSkills = await this.shouldSkipWorkspaceSkills(effectiveInvocation);
       if (skipWorkspaceSkills) {
@@ -1124,627 +992,16 @@ export class InvokeService {
 
       await timePhase('hooks', () => runAcquireHooks(repoPath, env, secretsFilePath, !hadRepoPath, lifecycleLogger, invocationWithOptions.attemptId));
 
-      // Resource hydration with event emission
-      if (invocationWithOptions.resource_refs && invocationWithOptions.resource_refs.length > 0) {
-        const project = await this.projects.findById(effectiveInvocation.projectId);
-        if (!project) {
-          throw new Error(`Project ${effectiveInvocation.projectId} not found for resource hydration`);
-        }
+      await this.runResourceHydration(ctx, repoPath, env);
+      await this.stageWorkspaceContext(ctx, repoPath);
 
-        const eventCreator = this.events;
+      const plan = await this.resolveHarnessExecution(ctx, repoPath, env);
+      const setup = await this.buildHarnessProcessEnv(ctx, plan, repoPath, env);
+      const messageRelay = await this.createMessageRelay(ctx);
 
-        await emitResourceHydrationEvent(eventCreator, invocationWithOptions, 'system.resource.hydration.started', {
-          resource_count: invocationWithOptions.resource_refs.length,
-          attempt_id: invocationWithOptions.attemptId,
-        });
+      const result = await this.runHarness(ctx, plan, setup, messageRelay, repoPath);
 
-        const hydration = await timePhase('resource_hydration', () => this.hydrateResources(invocationWithOptions, project.org_id, repoPath));
-        if (hydration.indexPath) {
-          env.EVE_RESOURCE_INDEX = hydration.indexPath;
-        }
-
-        if (effectiveInvocation.attemptId) {
-          await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
-            resource_hydration: hydration.summary,
-            resource_index_path: hydration.indexPath,
-          });
-        }
-
-        if (hydration.summary.failed_required_count > 0) {
-          await emitResourceHydrationEvent(eventCreator, invocationWithOptions, 'system.resource.hydration.failed', {
-            summary: hydration.summary,
-            attempt_id: invocationWithOptions.attemptId,
-          });
-          throw new Error('Resource hydration failed: required resources missing');
-        }
-
-        await emitResourceHydrationEvent(eventCreator, invocationWithOptions, 'system.resource.hydration.completed', {
-          summary: hydration.summary,
-          attempt_id: invocationWithOptions.attemptId,
-        });
-      }
-
-      // Stage chat file attachments into .eve/attachments/
-      const chatFiles = effectiveInvocation.data?.chat_files;
-      if (Array.isArray(chatFiles) && chatFiles.length > 0) {
-        await this.stageAttachments(repoPath, chatFiles as ChatFile[]);
-      }
-
-      // Materialize coordination inbox + thread context before harness launch
-      const coordinationDb = this.buildCoordinationDb();
-      await writeCoordinationInbox(invocationWithOptions, repoPath, coordinationDb);
-      await writeThreadContext(invocationWithOptions, repoPath, coordinationDb);
-
-      // Materialize carryover context (agent_context from hints)
-      const carryoverContextDb = this.buildCarryoverContextDb();
-      await writeCarryoverContext(invocationWithOptions, repoPath, carryoverContextDb);
-
-      const harnessName = (invocationWithOptions.harness ?? 'mclaude') as HarnessName;
-      const permission = (invocationWithOptions.permission ?? 'yolo') as PermissionPolicy;
-      const harnessAdapter = resolveHarnessAdapter(harnessName);
-      if (!harnessAdapter) {
-        throw new Error(`Unknown harness: ${harnessName}`);
-      }
-      const isClaudeHarness = harnessName === 'claude' || harnessName === 'mclaude';
-
-      // Phase 2 secret isolation: create per-job HOME before harness option
-      // resolution so Claude auth/config materialization cannot land in repoPath.
-      const jobUserHome = await createJobUserHome(invocationWithOptions.attemptId);
-
-      // Capture original Codex auth for post-execution write-back comparison
-      const codexAuthSecret = resolvedSecrets.find(s => s.key === 'CODEX_AUTH_JSON_B64');
-      const originalCodexB64 = codexAuthSecret?.value;
-      const rawCodexScopeType = codexAuthSecret?.scope_type;
-      const codexScopeType = (rawCodexScopeType === 'user' || rawCodexScopeType === 'org' || rawCodexScopeType === 'project')
-        ? rawCodexScopeType : undefined;
-      const codexScopeId = codexAuthSecret?.scope_id;
-
-      const claudeAuthDecision = selectClaudeAuth(resolvedSecrets);
-      let claudeAuthRuntime: ClaudeAuthRuntimeState | null = null;
-      const helpers: HarnessHelpers = {
-        resolveMclaudeAuth: async (options) => {
-          const sourceConfigDir = options?.configDir ?? path.join(os.homedir(), '.config', 'claude');
-          const runtimeConfig = await prepareClaudeRuntimeConfig(
-            repoPath,
-            sourceConfigDir,
-            jobUserHome,
-            invocationWithOptions.attemptId,
-            options?.harness ?? (harnessName === 'claude' ? 'claude' : 'mclaude'),
-            options?.variant ?? invocationWithOptions.variant,
-          );
-          const materialized = await materializeClaudeCredentials(runtimeConfig.configDir, claudeAuthDecision);
-          claudeAuthRuntime = { runtimeConfig, materialized };
-          return {
-            env: { ...(claudeAuthDecision?.env ?? {}) },
-            configDir: runtimeConfig.configDir,
-          };
-        },
-        resolveCodeAuth: async (options) => {
-          const homeDir = process.env.HOME || os.homedir();
-          const configDir = options?.configDir ?? path.join(homeDir, '.codex');
-
-          // Priority 1: OPENAI_API_KEY from secrets
-          const apiKeySecret = resolvedSecrets.find(s => s.key === 'OPENAI_API_KEY');
-          if (apiKeySecret) {
-            console.log('[codex-auth] Using OPENAI_API_KEY from resolved secrets');
-            return { env: { OPENAI_API_KEY: apiKeySecret.value } };
-          }
-
-          // Priority 2: CODEX_AUTH_JSON_B64 — decode and write full auth.json
-          const authB64Secret = resolvedSecrets.find(s => s.key === 'CODEX_AUTH_JSON_B64');
-          if (authB64Secret) {
-            const authJsonStr = Buffer.from(authB64Secret.value, 'base64').toString('utf-8');
-
-            try {
-              const authData = JSON.parse(authJsonStr) as Record<string, unknown>;
-              const tokens = authData.tokens as Record<string, unknown> | undefined;
-              console.log(
-                `[codex-auth] Decoded CODEX_AUTH_JSON_B64: access_token=${!!tokens?.access_token} refresh_token=${!!tokens?.refresh_token} last_refresh=${String(authData.last_refresh ?? 'missing')}`,
-              );
-            } catch {
-              console.warn('[codex-auth] Failed to parse CODEX_AUTH_JSON_B64');
-            }
-
-            // Write auth.json to CODEX_HOME (inside workspace) and fallback locations
-            const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
-            for (const dir of authTargets) {
-              const authPath = path.join(dir, 'auth.json');
-              try {
-                await fs.mkdir(dir, { recursive: true });
-                await fs.writeFile(authPath, authJsonStr);
-                console.log(`[codex-auth] Wrote auth.json to ${authPath}`);
-              } catch (error) {
-                console.warn(`[codex-auth] Failed to write auth.json to ${authPath}: ${String(error)}`);
-              }
-            }
-
-            // Let Codex CLI use file-based auth with refresh_token support
-            return { env: {} };
-          }
-
-          // Priority 3: CODEX_OAUTH_ACCESS_TOKEN (no refresh support)
-          const oauthSecret = resolvedSecrets.find(s => s.key === 'CODEX_OAUTH_ACCESS_TOKEN');
-          if (oauthSecret) {
-            const authPayload = {
-              tokens: { access_token: oauthSecret.value },
-              last_refresh: new Date().toISOString(),
-            };
-            const authJsonStr = JSON.stringify(authPayload, null, 2);
-            const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
-            for (const dir of authTargets) {
-              try {
-                await fs.mkdir(dir, { recursive: true });
-                await fs.writeFile(path.join(dir, 'auth.json'), authJsonStr);
-              } catch {
-                // non-fatal
-              }
-            }
-            return { env: { OPENAI_API_KEY: oauthSecret.value } };
-          }
-
-          // Priority 4: Pre-existing auth files
-          const authPaths = [
-            path.join(configDir, 'auth.json'),
-            path.join(homeDir, '.codex', 'auth.json'),
-            path.join(homeDir, '.code', 'auth.json'),
-          ];
-          for (const authPath of authPaths) {
-            try {
-              const content = await fs.readFile(authPath, 'utf-8');
-              const data = JSON.parse(content) as { tokens?: { access_token?: string }; OPENAI_API_KEY?: string };
-              if (data.tokens?.access_token || data.OPENAI_API_KEY) {
-                console.log(`[codex-auth] Found pre-existing auth at ${authPath}`);
-                if (configDir && !authPath.startsWith(configDir)) {
-                  try {
-                    await fs.mkdir(configDir, { recursive: true });
-                    await fs.writeFile(path.join(configDir, 'auth.json'), content);
-                  } catch { /* non-fatal */ }
-                }
-                return { env: {} };
-              }
-            } catch {
-              // next
-            }
-          }
-
-          console.error('[codex-auth] No codex auth found in secrets or filesystem');
-          throw new Error('Missing code auth: set OPENAI_API_KEY or CODEX_AUTH_JSON_B64. Run: eve auth sync --codex');
-        },
-      };
-
-      // baseEnv is a read context for adapter resolution.
-      const prefixedEnv = extractPrefixedEnv(['EVE_WORKER_', 'EVE_HARNESS_'], process.env);
-      const baseEnv: Record<string, string | undefined> = {
-        ...prefixedEnv,
-        ...env,
-      };
-
-      const harnessOptionsResolved = await timePhase('harness_options', () => harnessAdapter.buildOptions({
-        invocation: invocationWithOptions,
-        harness: harnessName,
-        permission,
-        repoPath,
-        helpers,
-        env: baseEnv,
-      }));
-
-      // Gap #3: Write security CLAUDE.md for Claude-family harnesses
-      const claudeConfigDir = harnessOptionsResolved.env?.CLAUDE_CONFIG_DIR;
-      if (claudeConfigDir) {
-        await writeSecurityClaudeMd(repoPath, claudeConfigDir);
-      }
-
-      const securityPreamble = buildSecurityPolicyPreamble(repoPath);
-      const fullPromptText = securityPreamble + '\n\n' + invocationWithOptions.text;
-
-      const harnessBinary = this.resolveHarnessBinary();
-      const harnessArgs = this.buildHarnessArgs({
-        harness: harnessOptionsResolved.harness,
-        permission: harnessOptionsResolved.permission,
-        variant: harnessOptionsResolved.variant,
-        model: harnessOptionsResolved.model,
-        reasoning: harnessOptionsResolved.reasoning,
-        workspace: repoPath,
-        prompt: fullPromptText,
-      });
-
-      // Emit setup timing summary before harness launch
-      const setupTotalMs = Object.values(execTimings).reduce((a, b) => a + b, 0);
-      console.log(`⏱️ SETUP TOTAL: ${setupTotalMs}ms | ${JSON.stringify(execTimings)}`);
-
-      const startTime = Date.now();
-      const logs: { type: string; content: Record<string, unknown> }[] = [];
-
-      const binPaths = [
-        path.resolve(process.cwd(), 'node_modules', '.bin'),
-        path.resolve(process.cwd(), '..', '..', 'node_modules', '.bin'),
-      ];
-
-      // Forward resolved project secrets + adapter-selected vars to the harness.
-      const adapterEnv: Record<string, string | undefined> = {
-        ...env,
-        ...(harnessOptionsResolved.env ?? {}),
-      };
-      if (provisionedToolchains) {
-        appendProvisionedToolchainEnv(provisionedToolchains, binPaths, adapterEnv);
-      }
-
-      const envOverridesRaw = (invocationWithOptions as { env_overrides?: Record<string, string> }).env_overrides;
-      const envOverrideResult = await applyEnvOverrides({
-        envOverrides: envOverridesRaw,
-        resolvedSecrets,
-        baseEnv: adapterEnv,
-        onMissingSecrets: (missing) =>
-          deliverProvisioningError(this.buildRelayDb(), {
-            jobId: invocationWithOptions.jobId,
-            parentJobId: invocationWithOptions.parentJobId ?? null,
-            assignee: invocationWithOptions.agentId ?? null,
-            errorCode: 'missing_secret_override',
-            message: `env_overrides reference unresolved secret(s): ${missing.join(', ')}`,
-          }),
-      });
-      Object.assign(adapterEnv, envOverrideResult.env);
-      let claudeAuthFailureMessage: string | undefined;
-      if (isClaudeHarness) {
-        const { scrubbedKeys } = scrubClaudeAuthEnv(adapterEnv, claudeAuthDecision);
-        await this.logClaudeAuthSelected(
-          invocationWithOptions,
-          harnessName,
-          claudeAuthDecision,
-          claudeAuthRuntime,
-          scrubbedKeys,
-          jobUserHome,
-          Boolean(adapterEnv.ANTHROPIC_BASE_URL),
-        );
-      }
-      const agentPermissions = await this.resolveAgentPermissions(invocationWithOptions);
-      const invocationToken = getInvocationJobToken(invocationWithOptions);
-      const credsStartMs = Date.now();
-      if (invocationWithOptions.attemptId) {
-        await this.logLifecycleEvent(invocationWithOptions.attemptId, 'secrets', 'start', { kind: 'credentials_write' });
-      }
-      const jobToken = await writeEveCredentials(invocationWithOptions, invocationToken, jobUserHome, agentPermissions);
-      if (invocationWithOptions.attemptId) {
-        await this.logLifecycleEvent(invocationWithOptions.attemptId, 'secrets', 'end', { kind: 'credentials_write' }, {
-          duration_ms: Date.now() - credsStartMs,
-          success: Boolean(jobToken),
-        });
-      }
-      if (jobToken) {
-        adapterEnv.EVE_JOB_TOKEN = jobToken;
-      }
-
-      // Inject with_apis env vars (EVE_APP_API_URL_{service}) from resolved hints
-      // and set up app CLIs (chmod + add to PATH) for repo-bundled CLIs
-      try {
-        const hintsRow = await this.db<{ hints: Record<string, unknown> | null }[]>`
-          SELECT hints FROM jobs WHERE id = ${invocationWithOptions.jobId}
-        `;
-        const resolvedApis = hintsRow[0]?.hints?.resolved_app_apis as Array<{ name: string; type?: string; base_url: string; cli?: { name: string; bin: string; image?: string } }> | undefined;
-        const resolvedLinks = hintsRow[0]?.hints?.resolved_app_links as Array<{ name: string; alias: string; subscription_id: string; type?: string; base_url: string; scopes?: string[]; producer_project_id?: string; producer_env?: string; cli?: { name: string; bin: string; image?: string } }> | undefined;
-        const resolvedLinksWithTokens = [];
-        for (const link of resolvedLinks ?? []) {
-          const token = await mintAppLinkToken({
-            subscriptionId: link.subscription_id,
-            consumerPrincipal: `job:${invocationWithOptions.jobId}`,
-            producerEnv: link.producer_env,
-            ttlSeconds: 60 * 60,
-          });
-          resolvedLinksWithTokens.push({
-            ...link,
-            origin: 'app_link' as const,
-            type: link.type ?? 'openapi',
-            token: token?.access_token,
-          });
-        }
-        if (resolvedApis?.length || resolvedLinksWithTokens.length > 0) {
-          Object.assign(adapterEnv, buildAppApiEnvVars([
-            ...(resolvedApis ?? []).map((api) => ({ ...api, type: api.type ?? 'openapi' })),
-            ...resolvedLinksWithTokens,
-          ]));
-
-          // Set up repo-bundled CLIs: chmod +x and add bin dir to PATH
-          for (const api of resolvedApis ?? []) {
-            if (!api.cli?.bin) continue;
-            const cliBinPath = path.join(repoPath, api.cli.bin);
-            try {
-              await fs.chmod(cliBinPath, 0o755);
-              binPaths.push(path.dirname(cliBinPath));
-              console.log(`[app-cli] '${api.cli.name}' available at ${cliBinPath}`);
-              if (invocationWithOptions.attemptId) {
-                await this.logLifecycleEvent(invocationWithOptions.attemptId, 'workspace', 'log', {
-                  kind: 'app_cli_discovery',
-                  name: api.cli.name,
-                  available: true,
-                });
-              }
-            } catch {
-              console.warn(`[app-cli] '${api.cli.name}' declared but not found: ${cliBinPath}`);
-              if (invocationWithOptions.attemptId) {
-                await this.logLifecycleEvent(invocationWithOptions.attemptId, 'workspace', 'log', {
-                  kind: 'app_cli_discovery',
-                  name: api.cli.name,
-                  available: false,
-                });
-              }
-            }
-          }
-        }
-      } catch {
-        // Non-fatal — description still has the URLs
-      }
-
-      const processEnv = buildSanitizedHarnessEnv({
-        binPaths,
-        jobId: invocationWithOptions.jobId,
-        attemptId: invocationWithOptions.attemptId,
-        projectId: invocationWithOptions.projectId,
-        repoPath,
-        parentJobId: invocationWithOptions.parentJobId,
-        eveApiUrl: loadConfig().EVE_API_URL,
-        jobUserHome,
-        adapterEnv,
-      });
-
-      // Construct EveMessageRelay with chat context if this is a chat-originated job
-      let chatDeliveryCtx: ChatDeliveryContext | null = null;
-      try {
-        const jobRow = await this.db<{ hints: Record<string, unknown> | null; labels: string[] | null }[]>`
-          SELECT hints, labels FROM jobs WHERE id = ${invocationWithOptions.jobId}
-        `;
-        const jobHints = jobRow[0]?.hints ?? {};
-        const jobLabels = jobRow[0]?.labels ?? [];
-        if (jobLabels.includes('chat') && typeof jobHints.thread_id === 'string') {
-          chatDeliveryCtx = {
-            threadId: jobHints.thread_id as string,
-            projectId: invocationWithOptions.projectId,
-          };
-        }
-      } catch (err) {
-        console.warn(`[eve-message] Failed to look up chat context: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      const relayDb = this.buildRelayDb();
-      const messageRelay = new EveMessageRelay(
-        relayDb,
-        invocationWithOptions.jobId,
-        invocationWithOptions.parentJobId ?? null,
-        invocationWithOptions.agentId ?? null,
-        chatDeliveryCtx,
-      );
-
-      // Gap #1: Resolve budget enforcement config
-      const budgetDb = this.buildBudgetDb();
-      const budgetConfig = await resolveBudgetEnforcementConfig(budgetDb, invocationWithOptions).catch(err => {
-        console.warn(`[budget] Failed to resolve budget config: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      });
-
-      // Gap #7: Log harness start lifecycle event
-      await logHarnessStart(lifecycleLogger, invocationWithOptions.attemptId, {
-        harness: harnessOptionsResolved.harness,
-        permission: harnessOptionsResolved.permission,
-        variant: harnessOptionsResolved.variant,
-        model: harnessOptionsResolved.model,
-        reasoning: harnessOptionsResolved.reasoning,
-      });
-
-      const logSink = this.buildLogSink();
-      let claudeApiKeySource: string | null = null;
-      let claudeAuthFailureCandidate: { reason: string; apiKeySource?: string } | null = null;
-      const maybeRecordClaudeAuthFailure = async (
-        input: unknown,
-        stream?: 'stdout' | 'stderr' | 'error',
-      ): Promise<void> => {
-        if (!isClaudeHarness || claudeAuthFailureCandidate) return;
-        const apiKeySource = readClaudeApiKeySource(input);
-        if (apiKeySource) {
-          claudeApiKeySource = apiKeySource;
-        }
-        const failure = detectClaudeAuthFailure(input, stream ? { stream } : undefined);
-        if (!failure) return;
-        claudeAuthFailureCandidate = failure;
-      };
-
-      const result = await new Promise<HarnessResult>((resolve) => {
-        const child = spawn(harnessBinary.binary, [...harnessBinary.prefixArgs, ...harnessArgs], {
-          cwd: repoPath,
-          env: processEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        // Emit periodic heartbeat lifecycle logs so `eve job diagnose` can detect stuck processes
-        const harnessStartTime = Date.now();
-        const heartbeatInterval = setInterval(async () => {
-          if (invocationWithOptions.attemptId) {
-            await lifecycleLogger(
-              invocationWithOptions.attemptId,
-              'runner',
-              'log',
-              {
-                kind: 'heartbeat',
-                elapsed_ms: Date.now() - harnessStartTime,
-                harness: harnessOptionsResolved.harness,
-                pid: child.pid,
-              },
-            );
-          }
-        }, 30_000);
-
-        // Gap #1: Set up budget enforcer after spawn
-        let budgetEnforcer: BudgetEnforcer | null = null;
-        if (budgetConfig) {
-          budgetEnforcer = new BudgetEnforcer(budgetConfig, logSink, invocationWithOptions.attemptId, () => {
-            try { child.kill('SIGTERM'); } catch { /* process may have already exited */ }
-            setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignored */ } }, 5000);
-          });
-          budgetEnforcer.startPeriodicCheck();
-        }
-
-        const rl = readline.createInterface({ input: child.stdout });
-        let logChain: Promise<void> = Promise.resolve();
-        const enqueue = (fn: () => Promise<void>) => {
-          logChain = logChain.then(fn).catch((err) => {
-            console.error('Failed processing harness log line', err);
-          });
-        };
-        const stdoutClosed = new Promise<void>((resolveClosed) => rl.on('close', () => resolveClosed()));
-
-        rl.on('line', (line) => {
-          if (!line.trim()) return;
-
-          enqueue(async () => {
-            try {
-              const parsed = JSON.parse(line);
-              const logType = (parsed as { type?: string }).type ?? 'event';
-              logs.push({ type: logType, content: parsed as Record<string, unknown> });
-              if (invocationWithOptions.attemptId) {
-                await this.logs.appendLog(invocationWithOptions.attemptId!, logType, parsed);
-              }
-              await maybeRecordClaudeAuthFailure(parsed);
-
-              // Gap #1: Feed llm.call events to budget enforcer
-              if (budgetEnforcer && logType === 'llm.call') {
-                await budgetEnforcer.processLlmCall(parsed as Record<string, unknown>);
-              }
-
-              // Scan for eve-message blocks in assistant text
-              await messageRelay.processEvent(parsed as Record<string, unknown>);
-            } catch (parseError) {
-              // Non-JSON line — check for raw eve-message fenced blocks
-              await messageRelay.processLine(line);
-              await maybeRecordClaudeAuthFailure(line, 'stdout');
-
-              if (invocationWithOptions.attemptId) {
-                await this.logs.appendLog(invocationWithOptions.attemptId!, 'parse_error', {
-                  content: line,
-                  error: parseError instanceof Error ? parseError.message : String(parseError),
-                });
-              }
-            }
-          });
-        });
-
-        child.stderr.on('data', (chunk) => {
-          const text = chunk.toString();
-          if (invocationWithOptions.attemptId) {
-            enqueue(async () => {
-              await maybeRecordClaudeAuthFailure(text, 'stderr');
-              await this.logs.appendLog(invocationWithOptions.attemptId!, 'system_error', {
-                content: text,
-              });
-            });
-          }
-        });
-
-        child.on('error', async (err) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          clearInterval(heartbeatInterval);
-          budgetEnforcer?.stop();
-          await budgetEnforcer?.appendSummary('spawn_error');
-          if (invocationWithOptions.attemptId) {
-            enqueue(async () => {
-              await this.logs.appendLog(invocationWithOptions.attemptId!, 'spawn_error', {
-                error: msg,
-              });
-            });
-          }
-          resolve({
-            attemptId: invocationWithOptions.attemptId,
-            success: false,
-            exitCode: 1,
-            error: `Harness spawn failed: ${msg}`,
-          });
-        });
-
-        child.on('close', async (code) => {
-          clearInterval(heartbeatInterval);
-          budgetEnforcer?.stop();
-          await stdoutClosed;
-          await logChain;
-          await budgetEnforcer?.appendSummary('final');
-
-          const durationMs = Date.now() - startTime;
-
-          if (code !== 0 && claudeAuthFailureCandidate) {
-            claudeAuthFailureMessage = await this.emitClaudeAuthFailed(
-              invocationWithOptions,
-              claudeAuthDecision,
-              claudeAuthFailureCandidate,
-              claudeApiKeySource,
-            );
-          }
-
-          // Gap #5/#6: Use shared extractResults for Codex + error support
-          const extracted = extractResults(logs);
-          let errorMessage = code === 0
-            ? undefined
-            : (extracted.errorMessage || `Harness exited with code ${code}`);
-          if (code !== 0 && claudeAuthFailureMessage) {
-            errorMessage = extracted.errorMessage
-              ? `${extracted.errorMessage}\n\n${claudeAuthFailureMessage}`
-              : claudeAuthFailureMessage;
-          }
-
-          // Gap #1: Check budget enforcement result
-          if (budgetEnforcer?.exceeded) {
-            errorMessage = budgetEnforcer.exceededError ?? 'Budget exceeded';
-            if (code === 0) code = 1;
-          }
-
-          // Gap #7: Log harness end lifecycle event
-          await logHarnessEnd(lifecycleLogger, invocationWithOptions.attemptId, {
-            harness: harnessOptionsResolved.harness,
-            permission: harnessOptionsResolved.permission,
-            reasoning: harnessOptionsResolved.reasoning,
-            exit_code: code ?? 1,
-          }, durationMs, errorMessage);
-
-          resolve({
-            attemptId: invocationWithOptions.attemptId,
-            success: code === 0 && !budgetEnforcer?.exceeded,
-            exitCode: code ?? 1,
-            resultText: extracted.resultText,
-            resultJson: extracted.resultJson,
-            durationMs,
-            tokenInput: extracted.tokenInput,
-            tokenOutput: extracted.tokenOutput,
-            error: errorMessage,
-          });
-        });
-      });
-
-      // Write back refreshed Codex auth.json if the token was refreshed during execution
-      if (originalCodexB64 && codexScopeType && codexScopeId) {
-        const codexHome = harnessOptionsResolved.env?.CODEX_HOME;
-        await writeBackCodexAuth(originalCodexB64, codexScopeType, codexScopeId, codexHome);
-      }
-
-      // Git policies: auto-commit and push after harness execution
-      if (gitWorkspace && gitConfig) {
-        try {
-          await handleCommitPolicy(gitWorkspace, gitConfig, invocationWithOptions.jobId, result.success);
-          await handlePushPolicy(gitWorkspace, gitConfig, result.success);
-        } catch (gitError) {
-          const msg = gitError instanceof Error ? gitError.message : String(gitError);
-          console.error(`[git-policy] ${msg}`);
-          result.success = false;
-          result.error = result.error ? `${result.error}; ${msg}` : msg;
-        }
-
-        if (invocationWithOptions.attemptId) {
-          const updateFn = async (attemptId: string, gitMeta: Record<string, unknown>) => {
-            await this.db`
-              UPDATE job_attempts
-              SET git_json = ${this.db.json(gitMeta as never)}::jsonb
-              WHERE id = ${attemptId}::uuid
-            `;
-          };
-          await updateAttemptGitMeta(updateFn, invocationWithOptions.attemptId, gitWorkspace.getResolvedMetadata());
-        }
-      }
-
-      await runReleaseHook(repoPath, env, secretsFilePath, lifecycleLogger, invocationWithOptions.attemptId);
+      await this.finalizeExecution(ctx, plan, result, prepared, env, secretsFilePath);
 
       return result;
     } catch (error) {
@@ -1759,6 +1016,979 @@ export class InvokeService {
       // Phase 2 secret isolation: clean up per-job user home
       await cleanupJobUserHome(invocation.attemptId);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Inline execution phases (in execute() order)
+  // ---------------------------------------------------------------------------
+
+  /** Dispatch the invocation to a dedicated k8s runner pod. */
+  private async dispatchToRunner(effectiveInvocation: HarnessInvocation): Promise<HarnessResult> {
+    const localRepoPath = effectiveInvocation.repoUrl ? getLocalRepoPath(effectiveInvocation.repoUrl) : null;
+    if (localRepoPath) {
+      throw new Error('file:// repo URLs are not supported in k8s runtime');
+    }
+
+    const runnerInvocation = await this.getInvocationWithAppClis(
+      await this.getInvocationWithJobToken(effectiveInvocation),
+    );
+
+    return await runInvocationInK8s(
+      runnerInvocation,
+      async (runtimeMeta) => {
+        try {
+          await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, runtimeMeta);
+          console.log(`Updated runtime_meta for attempt ${effectiveInvocation.attemptId}:`, runtimeMeta);
+        } catch (error) {
+          console.error(`Failed to update runtime_meta for attempt ${effectiveInvocation.attemptId}:`, error);
+        }
+      },
+      async (phase, action, meta, opts) => {
+        await this.logLifecycleEvent(
+          effectiveInvocation.attemptId,
+          phase,
+          action,
+          meta,
+          {
+            duration_ms: opts?.duration_ms,
+            success: opts?.success,
+            error: opts?.error,
+          }
+        );
+      }
+    );
+  }
+
+  /**
+   * Provision declared toolchains before harness start. On provisioning
+   * failure, returns the terminal `toolchain_unavailable` result instead of
+   * throwing so execute() can fail fast with the classified error.
+   */
+  private async provisionRequestedToolchains(
+    effectiveInvocation: HarnessInvocation,
+    executeStartTime: number,
+  ): Promise<
+    | { ok: true; provisioned: ToolchainProvisionResult | null }
+    | { ok: false; failure: HarnessResult }
+  > {
+    const requestedToolchains = [...new Set(effectiveInvocation.toolchains ?? [])];
+    let provisionedToolchains: ToolchainProvisionResult | null = null;
+    if (requestedToolchains.length > 0) {
+      const toolchainEvents = new Map<string, Set<string>>();
+      const logToolchainEvent = async (event: ToolchainCacheEvent) => {
+        recordToolchainEvent(toolchainEvents, event);
+        const message = formatToolchainEvent(event);
+        console.log(`[toolchain] ${message}`);
+        if (effectiveInvocation.attemptId) {
+          await this.logs.appendLog(effectiveInvocation.attemptId, 'status', {
+            kind: 'toolchain',
+            event_type: event.type,
+            toolchain: event.toolchain,
+            image: event.image,
+            root: event.root,
+            message,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      };
+
+      try {
+        provisionedToolchains = await ensureToolchains({
+          toolchains: requestedToolchains,
+          baseEnv: process.env,
+          logger: logToolchainEvent,
+        });
+        if (effectiveInvocation.attemptId) {
+          await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
+            toolchains: buildToolchainRuntimeMeta({
+              executionMode: 'inline',
+              requested: requestedToolchains,
+              resolved: provisionedToolchains.resolved,
+              missing: provisionedToolchains.missing,
+              eventsByToolchain: toolchainEvents,
+            }),
+          });
+        }
+      } catch (error) {
+        const provisionError = error instanceof ToolchainProvisionError ? error : null;
+        const errorMessage = provisionError?.message
+          ?? (error instanceof Error ? error.message : String(error));
+        const resultJson = {
+          error_code: 'toolchain_unavailable',
+          toolchain: provisionError?.toolchain ?? requestedToolchains[0] ?? null,
+          image: provisionError?.image ?? null,
+        };
+
+        if (effectiveInvocation.attemptId) {
+          await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
+            toolchains: buildToolchainRuntimeMeta({
+              executionMode: 'inline',
+              requested: requestedToolchains,
+              resolved: [],
+              missing: requestedToolchains,
+              source: 'unavailable',
+              eventsByToolchain: toolchainEvents,
+              errorCode: 'toolchain_unavailable',
+              error: errorMessage,
+              toolchain: provisionError?.toolchain,
+              image: provisionError?.image,
+            }),
+          });
+          await this.logs.appendLog(effectiveInvocation.attemptId, 'status', {
+            kind: 'toolchain',
+            event_type: 'provision_failed',
+            error_code: 'toolchain_unavailable',
+            toolchain: resultJson.toolchain,
+            image: resultJson.image,
+            message: errorMessage,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        return {
+          ok: false,
+          failure: {
+            attemptId: effectiveInvocation.attemptId,
+            success: false,
+            exitCode: 1,
+            error: errorMessage,
+            resultJson,
+            durationMs: Date.now() - executeStartTime,
+          },
+        };
+      }
+    }
+
+    return { ok: true, provisioned: provisionedToolchains };
+  }
+
+  /** Prepare the git workspace (with or without git controls). */
+  private async prepareRepo(ctx: InlineExecContext): Promise<PreparedRepo> {
+    const { effectiveInvocation, gitConfig, gitAuth, timePhase } = ctx;
+
+    let prepared: PreparedRepo;
+    if (gitConfig) {
+      const cloneRef = gitConfig.ref ?? effectiveInvocation.repoBranch ?? 'main';
+      prepared = await this.cloneRepoWithLifecycle(
+        effectiveInvocation,
+        cloneRef,
+        'git_workspace',
+        timePhase,
+        () => this.prepareWorkspaceWithGitControls(effectiveInvocation, gitAuth),
+      );
+    } else {
+      prepared = await this.cloneRepoWithLifecycle(
+        effectiveInvocation,
+        effectiveInvocation.repoBranch,
+        'git_clone',
+        timePhase,
+        () => this.prepareWorkspace(effectiveInvocation, gitAuth),
+      );
+    }
+    await cleanupWorkspaceSecretArtifacts(prepared.repoPath);
+    if (effectiveInvocation.attemptId) {
+      await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'log', {
+        had_repo_path: prepared.hadRepoPath,
+      });
+    }
+    return prepared;
+  }
+
+  /**
+   * Run a workspace-preparation step bracketed by the `git_clone` lifecycle
+   * start/end events (folds the previously duplicated try/catch logging).
+   */
+  private async cloneRepoWithLifecycle(
+    effectiveInvocation: HarnessInvocation,
+    cloneRef: string | undefined,
+    phaseName: string,
+    timePhase: <T>(name: string, fn: () => Promise<T>) => Promise<T>,
+    doPrepare: () => Promise<PreparedRepo>,
+  ): Promise<PreparedRepo> {
+    if (effectiveInvocation.attemptId) {
+      await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'start', {
+        kind: 'git_clone',
+        ref: cloneRef,
+      });
+    }
+    const cloneStartMs = Date.now();
+    try {
+      const result = await timePhase(phaseName, doPrepare);
+      if (effectiveInvocation.attemptId) {
+        await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'end', {
+          kind: 'git_clone',
+          ref: cloneRef,
+        }, { duration_ms: Date.now() - cloneStartMs, success: true });
+      }
+      return result;
+    } catch (err) {
+      if (effectiveInvocation.attemptId) {
+        await this.logLifecycleEvent(effectiveInvocation.attemptId, 'workspace', 'end', {
+          kind: 'git_clone',
+          ref: cloneRef,
+        }, { duration_ms: Date.now() - cloneStartMs, success: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      throw err;
+    }
+  }
+
+  /** Mount the scoped org filesystem and record the mount in runtime_meta. */
+  private async mountOrgFs(ctx: InlineExecContext): Promise<string | null> {
+    const { effectiveInvocation, invocationWithOptions, timePhase } = ctx;
+
+    const {
+      mountPath: orgRootPath,
+      mountSpec: orgFsMountSpec,
+    } = await timePhase('orgfs_mount', () => this.ensureOrgRoot(
+      effectiveInvocation.workspacePath,
+      invocationWithOptions.data?.orgfs_mount,
+    ));
+    if (effectiveInvocation.attemptId) {
+      await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
+        orgfs_mount: {
+          mode: orgFsMountSpec.mode,
+          allow_prefixes: orgFsMountSpec.allow_prefixes,
+          read_only_prefixes: orgFsMountSpec.read_only_prefixes,
+          mounted: Boolean(orgRootPath),
+        },
+      });
+    }
+    return orgRootPath;
+  }
+
+  /** Materialize resolved secrets into the harness env (and files on disk). */
+  private async materializeJobSecrets(
+    ctx: InlineExecContext,
+    repoPath: string,
+    orgRootPath: string | null,
+  ): Promise<{ env: NodeJS.ProcessEnv; secretsFilePath: string | null }> {
+    const { invocationWithOptions, resolvedSecrets, timePhase } = ctx;
+    return await timePhase('materialize_secrets', () => materializeSecrets(
+      repoPath,
+      invocationWithOptions,
+      resolvedSecrets,
+      orgRootPath,
+    ));
+  }
+
+  /** Hydrate declared resource refs into .eve/resources/, emitting hydration events. */
+  private async runResourceHydration(
+    ctx: InlineExecContext,
+    repoPath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    const { effectiveInvocation, invocationWithOptions, timePhase } = ctx;
+
+    // Resource hydration with event emission
+    if (invocationWithOptions.resource_refs && invocationWithOptions.resource_refs.length > 0) {
+      const project = await this.projects.findById(effectiveInvocation.projectId);
+      if (!project) {
+        throw new Error(`Project ${effectiveInvocation.projectId} not found for resource hydration`);
+      }
+
+      const eventCreator = this.events;
+
+      await emitResourceHydrationEvent(eventCreator, invocationWithOptions, 'system.resource.hydration.started', {
+        resource_count: invocationWithOptions.resource_refs.length,
+        attempt_id: invocationWithOptions.attemptId,
+      });
+
+      const hydration = await timePhase('resource_hydration', () => this.hydrateResources(invocationWithOptions, project.org_id, repoPath));
+      if (hydration.indexPath) {
+        env.EVE_RESOURCE_INDEX = hydration.indexPath;
+      }
+
+      if (effectiveInvocation.attemptId) {
+        await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
+          resource_hydration: hydration.summary,
+          resource_index_path: hydration.indexPath,
+        });
+      }
+
+      if (hydration.summary.failed_required_count > 0) {
+        await emitResourceHydrationEvent(eventCreator, invocationWithOptions, 'system.resource.hydration.failed', {
+          summary: hydration.summary,
+          attempt_id: invocationWithOptions.attemptId,
+        });
+        throw new Error('Resource hydration failed: required resources missing');
+      }
+
+      await emitResourceHydrationEvent(eventCreator, invocationWithOptions, 'system.resource.hydration.completed', {
+        summary: hydration.summary,
+        attempt_id: invocationWithOptions.attemptId,
+      });
+    }
+  }
+
+  /** Stage chat attachments and coordination/thread/carryover context files. */
+  private async stageWorkspaceContext(ctx: InlineExecContext, repoPath: string): Promise<void> {
+    const { effectiveInvocation, invocationWithOptions } = ctx;
+
+    // Stage chat file attachments into .eve/attachments/
+    const chatFiles = effectiveInvocation.data?.chat_files;
+    if (Array.isArray(chatFiles) && chatFiles.length > 0) {
+      await this.stageAttachments(repoPath, chatFiles as ChatFile[]);
+    }
+
+    // Materialize coordination inbox + thread context before harness launch
+    const coordinationDb = this.buildCoordinationDb();
+    await writeCoordinationInbox(invocationWithOptions, repoPath, coordinationDb);
+    await writeThreadContext(invocationWithOptions, repoPath, coordinationDb);
+
+    // Materialize carryover context (agent_context from hints)
+    const carryoverContextDb = this.buildCarryoverContextDb();
+    await writeCarryoverContext(invocationWithOptions, repoPath, carryoverContextDb);
+  }
+
+  /**
+   * Resolve the harness adapter, per-job HOME, Codex/Claude auth, adapter
+   * options, security preamble, and the eve-agent-cli binary + args.
+   */
+  private async resolveHarnessExecution(
+    ctx: InlineExecContext,
+    repoPath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<HarnessExecutionPlan> {
+    const { invocationWithOptions, resolvedSecrets, execTimings, timePhase } = ctx;
+
+    const harnessName = (invocationWithOptions.harness ?? 'mclaude') as HarnessName;
+    const permission = (invocationWithOptions.permission ?? 'yolo') as PermissionPolicy;
+    const harnessAdapter = resolveHarnessAdapter(harnessName);
+    if (!harnessAdapter) {
+      throw new Error(`Unknown harness: ${harnessName}`);
+    }
+    const isClaudeHarness = harnessName === 'claude' || harnessName === 'mclaude';
+
+    // Phase 2 secret isolation: create per-job HOME before harness option
+    // resolution so Claude auth/config materialization cannot land in repoPath.
+    const jobUserHome = await createJobUserHome(invocationWithOptions.attemptId);
+
+    // Capture original Codex auth for post-execution write-back comparison
+    const codexAuthSecret = resolvedSecrets.find(s => s.key === 'CODEX_AUTH_JSON_B64');
+    const originalCodexB64 = codexAuthSecret?.value;
+    const rawCodexScopeType = codexAuthSecret?.scope_type;
+    const codexScopeType = (rawCodexScopeType === 'user' || rawCodexScopeType === 'org' || rawCodexScopeType === 'project')
+      ? rawCodexScopeType : undefined;
+    const codexScopeId = codexAuthSecret?.scope_id;
+
+    const claudeAuthDecision = selectClaudeAuth(resolvedSecrets);
+    const claudeAuthRuntimeRef: { current: ClaudeAuthRuntimeState | null } = { current: null };
+    const helpers: HarnessHelpers = {
+      resolveMclaudeAuth: async (options) => {
+        const sourceConfigDir = options?.configDir ?? path.join(os.homedir(), '.config', 'claude');
+        const runtimeConfig = await prepareClaudeRuntimeConfig(
+          repoPath,
+          sourceConfigDir,
+          jobUserHome,
+          invocationWithOptions.attemptId,
+          options?.harness ?? (harnessName === 'claude' ? 'claude' : 'mclaude'),
+          options?.variant ?? invocationWithOptions.variant,
+        );
+        const materialized = await materializeClaudeCredentials(runtimeConfig.configDir, claudeAuthDecision);
+        claudeAuthRuntimeRef.current = { runtimeConfig, materialized };
+        return {
+          env: { ...(claudeAuthDecision?.env ?? {}) },
+          configDir: runtimeConfig.configDir,
+        };
+      },
+      resolveCodeAuth: async (options) => {
+        const homeDir = process.env.HOME || os.homedir();
+        const configDir = options?.configDir ?? path.join(homeDir, '.codex');
+
+        // Priority 1: OPENAI_API_KEY from secrets
+        const apiKeySecret = resolvedSecrets.find(s => s.key === 'OPENAI_API_KEY');
+        if (apiKeySecret) {
+          console.log('[codex-auth] Using OPENAI_API_KEY from resolved secrets');
+          return { env: { OPENAI_API_KEY: apiKeySecret.value } };
+        }
+
+        // Priority 2: CODEX_AUTH_JSON_B64 — decode and write full auth.json
+        const authB64Secret = resolvedSecrets.find(s => s.key === 'CODEX_AUTH_JSON_B64');
+        if (authB64Secret) {
+          const authJsonStr = Buffer.from(authB64Secret.value, 'base64').toString('utf-8');
+
+          try {
+            const authData = JSON.parse(authJsonStr) as Record<string, unknown>;
+            const tokens = authData.tokens as Record<string, unknown> | undefined;
+            console.log(
+              `[codex-auth] Decoded CODEX_AUTH_JSON_B64: access_token=${!!tokens?.access_token} refresh_token=${!!tokens?.refresh_token} last_refresh=${String(authData.last_refresh ?? 'missing')}`,
+            );
+          } catch {
+            console.warn('[codex-auth] Failed to parse CODEX_AUTH_JSON_B64');
+          }
+
+          // Write auth.json to CODEX_HOME (inside workspace) and fallback locations
+          const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
+          for (const dir of authTargets) {
+            const authPath = path.join(dir, 'auth.json');
+            try {
+              await fs.mkdir(dir, { recursive: true });
+              await fs.writeFile(authPath, authJsonStr);
+              console.log(`[codex-auth] Wrote auth.json to ${authPath}`);
+            } catch (error) {
+              console.warn(`[codex-auth] Failed to write auth.json to ${authPath}: ${String(error)}`);
+            }
+          }
+
+          // Let Codex CLI use file-based auth with refresh_token support
+          return { env: {} };
+        }
+
+        // Priority 3: CODEX_OAUTH_ACCESS_TOKEN (no refresh support)
+        const oauthSecret = resolvedSecrets.find(s => s.key === 'CODEX_OAUTH_ACCESS_TOKEN');
+        if (oauthSecret) {
+          const authPayload = {
+            tokens: { access_token: oauthSecret.value },
+            last_refresh: new Date().toISOString(),
+          };
+          const authJsonStr = JSON.stringify(authPayload, null, 2);
+          const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
+          for (const dir of authTargets) {
+            try {
+              await fs.mkdir(dir, { recursive: true });
+              await fs.writeFile(path.join(dir, 'auth.json'), authJsonStr);
+            } catch {
+              // non-fatal
+            }
+          }
+          return { env: { OPENAI_API_KEY: oauthSecret.value } };
+        }
+
+        // Priority 4: Pre-existing auth files
+        const authPaths = [
+          path.join(configDir, 'auth.json'),
+          path.join(homeDir, '.codex', 'auth.json'),
+          path.join(homeDir, '.code', 'auth.json'),
+        ];
+        for (const authPath of authPaths) {
+          try {
+            const content = await fs.readFile(authPath, 'utf-8');
+            const data = JSON.parse(content) as { tokens?: { access_token?: string }; OPENAI_API_KEY?: string };
+            if (data.tokens?.access_token || data.OPENAI_API_KEY) {
+              console.log(`[codex-auth] Found pre-existing auth at ${authPath}`);
+              if (configDir && !authPath.startsWith(configDir)) {
+                try {
+                  await fs.mkdir(configDir, { recursive: true });
+                  await fs.writeFile(path.join(configDir, 'auth.json'), content);
+                } catch { /* non-fatal */ }
+              }
+              return { env: {} };
+            }
+          } catch {
+            // next
+          }
+        }
+
+        console.error('[codex-auth] No codex auth found in secrets or filesystem');
+        throw new Error('Missing code auth: set OPENAI_API_KEY or CODEX_AUTH_JSON_B64. Run: eve auth sync --codex');
+      },
+    };
+
+    // baseEnv is a read context for adapter resolution.
+    const prefixedEnv = extractPrefixedEnv(['EVE_WORKER_', 'EVE_HARNESS_'], process.env);
+    const baseEnv: Record<string, string | undefined> = {
+      ...prefixedEnv,
+      ...env,
+    };
+
+    const harnessOptionsResolved = await timePhase('harness_options', () => harnessAdapter.buildOptions({
+      invocation: invocationWithOptions,
+      harness: harnessName,
+      permission,
+      repoPath,
+      helpers,
+      env: baseEnv,
+    }));
+
+    // Gap #3: Write security CLAUDE.md for Claude-family harnesses
+    const claudeConfigDir = harnessOptionsResolved.env?.CLAUDE_CONFIG_DIR;
+    if (claudeConfigDir) {
+      await writeSecurityClaudeMd(repoPath, claudeConfigDir);
+    }
+
+    const securityPreamble = buildSecurityPolicyPreamble(repoPath);
+    const fullPromptText = securityPreamble + '\n\n' + invocationWithOptions.text;
+
+    const harnessBinary = this.resolveHarnessBinary();
+    const harnessArgs = this.buildHarnessArgs({
+      harness: harnessOptionsResolved.harness,
+      permission: harnessOptionsResolved.permission,
+      variant: harnessOptionsResolved.variant,
+      model: harnessOptionsResolved.model,
+      reasoning: harnessOptionsResolved.reasoning,
+      workspace: repoPath,
+      prompt: fullPromptText,
+    });
+
+    // Emit setup timing summary before harness launch
+    const setupTotalMs = Object.values(execTimings).reduce((a, b) => a + b, 0);
+    console.log(`⏱️ SETUP TOTAL: ${setupTotalMs}ms | ${JSON.stringify(execTimings)}`);
+
+    return {
+      harnessName,
+      isClaudeHarness,
+      jobUserHome,
+      originalCodexB64,
+      codexScopeType,
+      codexScopeId,
+      claudeAuthDecision,
+      claudeAuthRuntimeRef,
+      harnessOptionsResolved,
+      harnessBinary,
+      harnessArgs,
+    };
+  }
+
+  /**
+   * Assemble the harness process environment: adapter env, env overrides,
+   * Claude auth scrub/log, Eve credentials, app APIs/CLIs, sanitized env.
+   */
+  private async buildHarnessProcessEnv(
+    ctx: InlineExecContext,
+    plan: HarnessExecutionPlan,
+    repoPath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<HarnessProcessSetup> {
+    const { invocationWithOptions, resolvedSecrets, provisionedToolchains } = ctx;
+    const {
+      harnessName,
+      isClaudeHarness,
+      jobUserHome,
+      claudeAuthDecision,
+      claudeAuthRuntimeRef,
+      harnessOptionsResolved,
+    } = plan;
+
+    const startTime = Date.now();
+    const logs: { type: string; content: Record<string, unknown> }[] = [];
+
+    const binPaths = [
+      path.resolve(process.cwd(), 'node_modules', '.bin'),
+      path.resolve(process.cwd(), '..', '..', 'node_modules', '.bin'),
+    ];
+
+    // Forward resolved project secrets + adapter-selected vars to the harness.
+    const adapterEnv: Record<string, string | undefined> = {
+      ...env,
+      ...(harnessOptionsResolved.env ?? {}),
+    };
+    if (provisionedToolchains) {
+      appendProvisionedToolchainEnv(provisionedToolchains, binPaths, adapterEnv);
+    }
+
+    const envOverridesRaw = (invocationWithOptions as { env_overrides?: Record<string, string> }).env_overrides;
+    const envOverrideResult = await applyEnvOverrides({
+      envOverrides: envOverridesRaw,
+      resolvedSecrets,
+      baseEnv: adapterEnv,
+      onMissingSecrets: (missing) =>
+        deliverProvisioningError(this.buildRelayDb(), {
+          jobId: invocationWithOptions.jobId,
+          parentJobId: invocationWithOptions.parentJobId ?? null,
+          assignee: invocationWithOptions.agentId ?? null,
+          errorCode: 'missing_secret_override',
+          message: `env_overrides reference unresolved secret(s): ${missing.join(', ')}`,
+        }),
+    });
+    Object.assign(adapterEnv, envOverrideResult.env);
+    if (isClaudeHarness) {
+      const { scrubbedKeys } = scrubClaudeAuthEnv(adapterEnv, claudeAuthDecision);
+      await this.logClaudeAuthSelected(
+        invocationWithOptions,
+        harnessName,
+        claudeAuthDecision,
+        claudeAuthRuntimeRef.current,
+        scrubbedKeys,
+        jobUserHome,
+        Boolean(adapterEnv.ANTHROPIC_BASE_URL),
+      );
+    }
+    const agentPermissions = await this.resolveAgentPermissions(invocationWithOptions);
+    const invocationToken = getInvocationJobToken(invocationWithOptions);
+    const credsStartMs = Date.now();
+    if (invocationWithOptions.attemptId) {
+      await this.logLifecycleEvent(invocationWithOptions.attemptId, 'secrets', 'start', { kind: 'credentials_write' });
+    }
+    const jobToken = await writeEveCredentials(invocationWithOptions, invocationToken, jobUserHome, agentPermissions);
+    if (invocationWithOptions.attemptId) {
+      await this.logLifecycleEvent(invocationWithOptions.attemptId, 'secrets', 'end', { kind: 'credentials_write' }, {
+        duration_ms: Date.now() - credsStartMs,
+        success: Boolean(jobToken),
+      });
+    }
+    if (jobToken) {
+      adapterEnv.EVE_JOB_TOKEN = jobToken;
+    }
+
+    // Inject with_apis env vars (EVE_APP_API_URL_{service}) from resolved hints
+    // and set up app CLIs (chmod + add to PATH) for repo-bundled CLIs
+    try {
+      const hintsRow = await this.db<{ hints: Record<string, unknown> | null }[]>`
+        SELECT hints FROM jobs WHERE id = ${invocationWithOptions.jobId}
+      `;
+      const resolvedApis = hintsRow[0]?.hints?.resolved_app_apis as Array<{ name: string; type?: string; base_url: string; cli?: { name: string; bin: string; image?: string } }> | undefined;
+      const resolvedLinks = hintsRow[0]?.hints?.resolved_app_links as Array<{ name: string; alias: string; subscription_id: string; type?: string; base_url: string; scopes?: string[]; producer_project_id?: string; producer_env?: string; cli?: { name: string; bin: string; image?: string } }> | undefined;
+      const resolvedLinksWithTokens = [];
+      for (const link of resolvedLinks ?? []) {
+        const token = await mintAppLinkToken({
+          subscriptionId: link.subscription_id,
+          consumerPrincipal: `job:${invocationWithOptions.jobId}`,
+          producerEnv: link.producer_env,
+          ttlSeconds: 60 * 60,
+        });
+        resolvedLinksWithTokens.push({
+          ...link,
+          origin: 'app_link' as const,
+          type: link.type ?? 'openapi',
+          token: token?.access_token,
+        });
+      }
+      if (resolvedApis?.length || resolvedLinksWithTokens.length > 0) {
+        Object.assign(adapterEnv, buildAppApiEnvVars([
+          ...(resolvedApis ?? []).map((api) => ({ ...api, type: api.type ?? 'openapi' })),
+          ...resolvedLinksWithTokens,
+        ]));
+
+        // Set up repo-bundled CLIs: chmod +x and add bin dir to PATH
+        for (const api of resolvedApis ?? []) {
+          if (!api.cli?.bin) continue;
+          const cliBinPath = path.join(repoPath, api.cli.bin);
+          try {
+            await fs.chmod(cliBinPath, 0o755);
+            binPaths.push(path.dirname(cliBinPath));
+            console.log(`[app-cli] '${api.cli.name}' available at ${cliBinPath}`);
+            if (invocationWithOptions.attemptId) {
+              await this.logLifecycleEvent(invocationWithOptions.attemptId, 'workspace', 'log', {
+                kind: 'app_cli_discovery',
+                name: api.cli.name,
+                available: true,
+              });
+            }
+          } catch {
+            console.warn(`[app-cli] '${api.cli.name}' declared but not found: ${cliBinPath}`);
+            if (invocationWithOptions.attemptId) {
+              await this.logLifecycleEvent(invocationWithOptions.attemptId, 'workspace', 'log', {
+                kind: 'app_cli_discovery',
+                name: api.cli.name,
+                available: false,
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // Non-fatal — description still has the URLs
+    }
+
+    const processEnv = buildSanitizedHarnessEnv({
+      binPaths,
+      jobId: invocationWithOptions.jobId,
+      attemptId: invocationWithOptions.attemptId,
+      projectId: invocationWithOptions.projectId,
+      repoPath,
+      parentJobId: invocationWithOptions.parentJobId,
+      eveApiUrl: loadConfig().EVE_API_URL,
+      jobUserHome,
+      adapterEnv,
+    });
+
+    return { startTime, logs, processEnv };
+  }
+
+  /** Construct the EveMessageRelay, with chat delivery context when chat-originated. */
+  private async createMessageRelay(ctx: InlineExecContext): Promise<EveMessageRelay> {
+    const { invocationWithOptions } = ctx;
+
+    // Construct EveMessageRelay with chat context if this is a chat-originated job
+    let chatDeliveryCtx: ChatDeliveryContext | null = null;
+    try {
+      const jobRow = await this.db<{ hints: Record<string, unknown> | null; labels: string[] | null }[]>`
+        SELECT hints, labels FROM jobs WHERE id = ${invocationWithOptions.jobId}
+      `;
+      const jobHints = jobRow[0]?.hints ?? {};
+      const jobLabels = jobRow[0]?.labels ?? [];
+      if (jobLabels.includes('chat') && typeof jobHints.thread_id === 'string') {
+        chatDeliveryCtx = {
+          threadId: jobHints.thread_id as string,
+          projectId: invocationWithOptions.projectId,
+        };
+      }
+    } catch (err) {
+      console.warn(`[eve-message] Failed to look up chat context: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const relayDb = this.buildRelayDb();
+    return new EveMessageRelay(
+      relayDb,
+      invocationWithOptions.jobId,
+      invocationWithOptions.parentJobId ?? null,
+      invocationWithOptions.agentId ?? null,
+      chatDeliveryCtx,
+    );
+  }
+
+  /**
+   * Spawn the harness process, stream/persist its output, enforce budget,
+   * relay eve-messages, and resolve the harness result.
+   */
+  private async runHarness(
+    ctx: InlineExecContext,
+    plan: HarnessExecutionPlan,
+    setup: HarnessProcessSetup,
+    messageRelay: EveMessageRelay,
+    repoPath: string,
+  ): Promise<HarnessResult> {
+    const { invocationWithOptions, lifecycleLogger } = ctx;
+    const { isClaudeHarness, claudeAuthDecision, harnessOptionsResolved, harnessBinary, harnessArgs } = plan;
+    const { startTime, logs, processEnv } = setup;
+
+    // Gap #1: Resolve budget enforcement config
+    const budgetDb = this.buildBudgetDb();
+    const budgetConfig = await resolveBudgetEnforcementConfig(budgetDb, invocationWithOptions).catch(err => {
+      console.warn(`[budget] Failed to resolve budget config: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+
+    // Gap #7: Log harness start lifecycle event
+    await logHarnessStart(lifecycleLogger, invocationWithOptions.attemptId, {
+      harness: harnessOptionsResolved.harness,
+      permission: harnessOptionsResolved.permission,
+      variant: harnessOptionsResolved.variant,
+      model: harnessOptionsResolved.model,
+      reasoning: harnessOptionsResolved.reasoning,
+    });
+
+    const logSink = this.buildLogSink();
+    let claudeApiKeySource: string | null = null;
+    let claudeAuthFailureCandidate: { reason: string; apiKeySource?: string } | null = null;
+    const maybeRecordClaudeAuthFailure = async (
+      input: unknown,
+      stream?: 'stdout' | 'stderr' | 'error',
+    ): Promise<void> => {
+      if (!isClaudeHarness || claudeAuthFailureCandidate) return;
+      const apiKeySource = readClaudeApiKeySource(input);
+      if (apiKeySource) {
+        claudeApiKeySource = apiKeySource;
+      }
+      const failure = detectClaudeAuthFailure(input, stream ? { stream } : undefined);
+      if (!failure) return;
+      claudeAuthFailureCandidate = failure;
+    };
+
+    let claudeAuthFailureMessage: string | undefined;
+    return await new Promise<HarnessResult>((resolve) => {
+      const child = spawn(harnessBinary.binary, [...harnessBinary.prefixArgs, ...harnessArgs], {
+        cwd: repoPath,
+        env: processEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      // Emit periodic heartbeat lifecycle logs so `eve job diagnose` can detect stuck processes
+      const harnessStartTime = Date.now();
+      const heartbeatInterval = setInterval(async () => {
+        if (invocationWithOptions.attemptId) {
+          await lifecycleLogger(
+            invocationWithOptions.attemptId,
+            'runner',
+            'log',
+            {
+              kind: 'heartbeat',
+              elapsed_ms: Date.now() - harnessStartTime,
+              harness: harnessOptionsResolved.harness,
+              pid: child.pid,
+            },
+          );
+        }
+      }, 30_000);
+
+      // Gap #1: Set up budget enforcer after spawn
+      let budgetEnforcer: BudgetEnforcer | null = null;
+      if (budgetConfig) {
+        budgetEnforcer = new BudgetEnforcer(budgetConfig, logSink, invocationWithOptions.attemptId, () => {
+          try { child.kill('SIGTERM'); } catch { /* process may have already exited */ }
+          setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignored */ } }, 5000);
+        });
+        budgetEnforcer.startPeriodicCheck();
+      }
+
+      const rl = readline.createInterface({ input: child.stdout });
+      let logChain: Promise<void> = Promise.resolve();
+      const enqueue = (fn: () => Promise<void>) => {
+        logChain = logChain.then(fn).catch((err) => {
+          console.error('Failed processing harness log line', err);
+        });
+      };
+      const stdoutClosed = new Promise<void>((resolveClosed) => rl.on('close', () => resolveClosed()));
+
+      rl.on('line', (line) => {
+        if (!line.trim()) return;
+
+        enqueue(async () => {
+          try {
+            const parsed = JSON.parse(line);
+            const logType = (parsed as { type?: string }).type ?? 'event';
+            logs.push({ type: logType, content: parsed as Record<string, unknown> });
+            if (invocationWithOptions.attemptId) {
+              await this.logs.appendLog(invocationWithOptions.attemptId!, logType, parsed);
+            }
+            await maybeRecordClaudeAuthFailure(parsed);
+
+            // Gap #1: Feed llm.call events to budget enforcer
+            if (budgetEnforcer && logType === 'llm.call') {
+              await budgetEnforcer.processLlmCall(parsed as Record<string, unknown>);
+            }
+
+            // Scan for eve-message blocks in assistant text
+            await messageRelay.processEvent(parsed as Record<string, unknown>);
+          } catch (parseError) {
+            // Non-JSON line — check for raw eve-message fenced blocks
+            await messageRelay.processLine(line);
+            await maybeRecordClaudeAuthFailure(line, 'stdout');
+
+            if (invocationWithOptions.attemptId) {
+              await this.logs.appendLog(invocationWithOptions.attemptId!, 'parse_error', {
+                content: line,
+                error: parseError instanceof Error ? parseError.message : String(parseError),
+              });
+            }
+          }
+        });
+      });
+
+      child.stderr.on('data', (chunk) => {
+        const text = chunk.toString();
+        if (invocationWithOptions.attemptId) {
+          enqueue(async () => {
+            await maybeRecordClaudeAuthFailure(text, 'stderr');
+            await this.logs.appendLog(invocationWithOptions.attemptId!, 'system_error', {
+              content: text,
+            });
+          });
+        }
+      });
+
+      child.on('error', async (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        clearInterval(heartbeatInterval);
+        budgetEnforcer?.stop();
+        await budgetEnforcer?.appendSummary('spawn_error');
+        if (invocationWithOptions.attemptId) {
+          enqueue(async () => {
+            await this.logs.appendLog(invocationWithOptions.attemptId!, 'spawn_error', {
+              error: msg,
+            });
+          });
+        }
+        resolve({
+          attemptId: invocationWithOptions.attemptId,
+          success: false,
+          exitCode: 1,
+          error: `Harness spawn failed: ${msg}`,
+        });
+      });
+
+      child.on('close', async (code) => {
+        clearInterval(heartbeatInterval);
+        budgetEnforcer?.stop();
+        await stdoutClosed;
+        await logChain;
+        await budgetEnforcer?.appendSummary('final');
+
+        const durationMs = Date.now() - startTime;
+
+        if (code !== 0 && claudeAuthFailureCandidate) {
+          claudeAuthFailureMessage = await this.emitClaudeAuthFailed(
+            invocationWithOptions,
+            claudeAuthDecision,
+            claudeAuthFailureCandidate,
+            claudeApiKeySource,
+          );
+        }
+
+        // Gap #5/#6: Use shared extractResults for Codex + error support
+        const extracted = extractResults(logs);
+        let errorMessage = code === 0
+          ? undefined
+          : (extracted.errorMessage || `Harness exited with code ${code}`);
+        if (code !== 0 && claudeAuthFailureMessage) {
+          errorMessage = extracted.errorMessage
+            ? `${extracted.errorMessage}\n\n${claudeAuthFailureMessage}`
+            : claudeAuthFailureMessage;
+        }
+
+        // Gap #1: Check budget enforcement result
+        if (budgetEnforcer?.exceeded) {
+          errorMessage = budgetEnforcer.exceededError ?? 'Budget exceeded';
+          if (code === 0) code = 1;
+        }
+
+        // Gap #7: Log harness end lifecycle event
+        await logHarnessEnd(lifecycleLogger, invocationWithOptions.attemptId, {
+          harness: harnessOptionsResolved.harness,
+          permission: harnessOptionsResolved.permission,
+          reasoning: harnessOptionsResolved.reasoning,
+          exit_code: code ?? 1,
+        }, durationMs, errorMessage);
+
+        resolve({
+          attemptId: invocationWithOptions.attemptId,
+          success: code === 0 && !budgetEnforcer?.exceeded,
+          exitCode: code ?? 1,
+          resultText: extracted.resultText,
+          resultJson: extracted.resultJson,
+          durationMs,
+          tokenInput: extracted.tokenInput,
+          tokenOutput: extracted.tokenOutput,
+          error: errorMessage,
+        });
+      });
+    });
+  }
+
+  /** Codex auth write-back, git commit/push policies, and the release hook. */
+  private async finalizeExecution(
+    ctx: InlineExecContext,
+    plan: HarnessExecutionPlan,
+    result: HarnessResult,
+    prepared: PreparedRepo,
+    env: NodeJS.ProcessEnv,
+    secretsFilePath: string | null,
+  ): Promise<void> {
+    const { invocationWithOptions, gitConfig, lifecycleLogger } = ctx;
+    const { originalCodexB64, codexScopeType, codexScopeId, harnessOptionsResolved } = plan;
+    const { repoPath, gitWorkspace } = prepared;
+
+    // Write back refreshed Codex auth.json if the token was refreshed during execution
+    if (originalCodexB64 && codexScopeType && codexScopeId) {
+      const codexHome = harnessOptionsResolved.env?.CODEX_HOME;
+      await writeBackCodexAuth(originalCodexB64, codexScopeType, codexScopeId, codexHome);
+    }
+
+    // Git policies: auto-commit and push after harness execution
+    if (gitWorkspace && gitConfig) {
+      try {
+        await handleCommitPolicy(gitWorkspace, gitConfig, invocationWithOptions.jobId, result.success);
+        await handlePushPolicy(gitWorkspace, gitConfig, result.success);
+      } catch (gitError) {
+        const msg = gitError instanceof Error ? gitError.message : String(gitError);
+        console.error(`[git-policy] ${msg}`);
+        result.success = false;
+        result.error = result.error ? `${result.error}; ${msg}` : msg;
+      }
+
+      if (invocationWithOptions.attemptId) {
+        const updateFn = async (attemptId: string, gitMeta: Record<string, unknown>) => {
+          await this.db`
+            UPDATE job_attempts
+            SET git_json = ${this.db.json(gitMeta as never)}::jsonb
+            WHERE id = ${attemptId}::uuid
+          `;
+        };
+        await updateAttemptGitMeta(updateFn, invocationWithOptions.attemptId, gitWorkspace.getResolvedMetadata());
+      }
+    }
+
+    await runReleaseHook(repoPath, env, secretsFilePath, lifecycleLogger, invocationWithOptions.attemptId);
   }
 
   // ---------------------------------------------------------------------------

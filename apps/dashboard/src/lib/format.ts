@@ -72,3 +72,43 @@ export function formatEventDescription(event: {
 export function formatCount(value: number): string {
   return value.toLocaleString('en-US');
 }
+
+/** Translate a cron expression into a human-readable string */
+export function cronToHuman(cron: string): string {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length < 5) return cron;
+  const [min, hour, dom, , dow] = parts;
+
+  if (min === '*' && hour === '*') return 'Every minute';
+  if (hour === '*' && min !== '*') return `Every hour at :${min!.padStart(2, '0')}`;
+
+  const dayNames: Record<string, string> = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '7': 'Sun' };
+
+  let timeStr = '';
+  if (hour !== '*' && min !== '*') {
+    timeStr = `${hour!.padStart(2, '0')}:${min!.padStart(2, '0')}`;
+  }
+
+  if (dow !== '*' && dow !== '?') {
+    const days = dow!.split(',').map((d) => dayNames[d] ?? d).join(', ');
+    return timeStr ? `${days} at ${timeStr}` : `${days}`;
+  }
+  if (dom !== '*' && dom !== '?') {
+    return timeStr ? `Day ${dom} at ${timeStr}` : `Day ${dom}`;
+  }
+  return timeStr ? `Daily at ${timeStr}` : cron;
+}
+
+/** Format a date for table display */
+export function formatDate(d: string | undefined | null): string {
+  if (!d) return '\u2014';
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return '\u2014';
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Truncate a git SHA */
+export function shortSha(sha: string | undefined | null): string {
+  if (!sha) return '\u2014';
+  return sha.slice(0, 8);
+}
