@@ -2,30 +2,23 @@ import {
   Controller,
   Post,
   Body,
-  Headers,
   HttpCode,
   HttpStatus,
   UnauthorizedException,
   NotFoundException,
   Inject,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { loadConfig, DEFAULT_SERVICE_PERMISSIONS, AccessBindingScopeSchema, type AccessBindingScope } from '@eve/shared';
+import { DEFAULT_SERVICE_PERMISSIONS, AccessBindingScopeSchema, type AccessBindingScope } from '@eve/shared';
 import { type Db, appLinkSubscriptionQueries, jobQueries, projectQueries } from '@eve/db';
 import { Public } from './auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { AuthService } from './auth.service.js';
-
-const INTERNAL_HEADER = 'x-eve-internal-token';
-
-function validateInternalToken(token: string | undefined): void {
-  const config = loadConfig();
-  if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-    throw new UnauthorizedException('Invalid internal token');
-  }
-}
 
 @ApiTags('internal')
 @Controller('internal/auth')
+@UseGuards(InternalTokenGuard)
 export class AuthInternalController {
   private jobs: ReturnType<typeof jobQueries>;
   private projects: ReturnType<typeof projectQueries>;
@@ -45,11 +38,8 @@ export class AuthInternalController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mint a job token with explicit permissions for agent CLI access (internal only)' })
   async mintJobToken(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { job_id: string; permissions?: string[]; scopes?: string[]; scope?: unknown; ttl_seconds?: number },
   ): Promise<{ access_token: string; token_type: string; expires_at: number }> {
-    validateInternalToken(token);
-
     const job = await this.jobs.findById(body.job_id);
     if (!job) {
       throw new NotFoundException(`Job ${body.job_id} not found`);
@@ -104,7 +94,6 @@ export class AuthInternalController {
       'Returns the metadata needed to render the SSO confirmation interstitial: kind, project_id, org_id, redirect_to, expiry/consumed flags, and the running get_count so scanner pre-fetches are visible. Increments get_count and last_get_at on every call — used by both HEAD and GET handlers on the SSO. Never reveals the underlying GoTrue action_link.',
   })
   async inspectMagicLinkWrap(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { wrap_token?: string },
   ): Promise<
     | {
@@ -120,7 +109,6 @@ export class AuthInternalController {
       }
     | { found: false }
   > {
-    validateInternalToken(token);
     const id = (body.wrap_token ?? '').trim();
     if (!id) {
       return { found: false };
@@ -151,13 +139,11 @@ export class AuthInternalController {
       'Atomically marks the wrap consumed. On success returns the stored GoTrue action_link (the SSO 302-redirects the browser there). On failure returns {status: expired | already_consumed | unknown} so the SSO can render the right "can\'t be used" page.',
   })
   async consumeMagicLinkWrap(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { wrap_token?: string },
   ): Promise<
     | { status: 'ok'; gotrue_action_link: string; kind: 'magic_link' | 'invite'; project_id: string | null; org_id: string | null }
     | { status: 'expired' | 'already_consumed' | 'unknown' }
   > {
-    validateInternalToken(token);
     const id = (body.wrap_token ?? '').trim();
     if (!id) {
       return { status: 'unknown' };
@@ -180,7 +166,6 @@ export class AuthInternalController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mint a service token for deployed app services (internal only)' })
   async mintServiceToken(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: {
       project_id: string;
       org_id: string;
@@ -190,8 +175,6 @@ export class AuthInternalController {
       ttl_seconds?: number;
     },
   ): Promise<{ access_token: string; token_type: string; expires_at: number }> {
-    validateInternalToken(token);
-
     const accessToken = this.authService.mintServiceToken({
       projectId: body.project_id,
       orgId: body.org_id,
@@ -216,7 +199,6 @@ export class AuthInternalController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mint an app-link token for cross-project API access (internal only)' })
   async mintAppLinkToken(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: {
       subscription_id: string;
       consumer_principal: string;
@@ -225,8 +207,6 @@ export class AuthInternalController {
       ttl_seconds?: number;
     },
   ): Promise<{ access_token: string; token_type: string; expires_at: number }> {
-    validateInternalToken(token);
-
     const subscription = await this.appLinkSubscriptions.findWithGrantsById(body.subscription_id);
     if (!subscription || !subscription.api_grant) {
       throw new NotFoundException(`App-link subscription ${body.subscription_id} not found`);

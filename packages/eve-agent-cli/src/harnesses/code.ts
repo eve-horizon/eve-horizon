@@ -90,6 +90,9 @@ export function buildCodeCommand(
 
 export const codeAdapter: CliHarnessAdapter = {
   name: 'code',
+  // buildCodeCommand branches on ctx.harness for codex-specific behavior
+  // (config dir, sandbox/auth handling, model_reasoning_effort, binary).
+  names: ['codex'],
   aliases: ['coder'],
   buildCommand: buildCodeCommand,
 };

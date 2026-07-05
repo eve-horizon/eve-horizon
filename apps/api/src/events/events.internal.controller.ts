@@ -4,14 +4,13 @@ import {
   Get,
   Patch,
   Param,
-  Headers,
   HttpCode,
   HttpStatus,
   Body,
   Query,
   DefaultValuePipe,
   ParseIntPipe,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags, ApiQuery } from '@nestjs/swagger';
 import {
@@ -21,17 +20,16 @@ import {
   type CreateEventRequest,
   type EventResponse,
   type EventListResponse,
-  loadConfig,
 } from '@eve/shared';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { EventsService } from './events.service.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 
-const INTERNAL_HEADER = 'x-eve-internal-token';
-
 @ApiTags('internal')
 @Controller('internal/projects/:project_id/events')
+@UseGuards(InternalTokenGuard)
 export class EventsInternalController {
   constructor(private readonly eventsService: EventsService) {}
 
@@ -43,14 +41,8 @@ export class EventsInternalController {
   @ApiOkResponse({ schema: zodSchemaToOpenApi(EventResponseSchema, 'EventResponse') })
   async create(
     @Param('project_id') projectId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(CreateEventRequestSchema)) body: CreateEventRequest,
   ): Promise<EventResponse> {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
-
     return this.eventsService.create(projectId, body);
   }
 
@@ -70,7 +62,6 @@ export class EventsInternalController {
   })
   async list(
     @Param('project_id') projectId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Query('type') type?: string,
     @Query('source') source?: string,
     @Query('status') status?: string,
@@ -79,11 +70,6 @@ export class EventsInternalController {
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
   ): Promise<EventListResponse> {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
-
     return this.eventsService.list(projectId, {
       type,
       source,
@@ -112,14 +98,8 @@ export class EventsInternalController {
   async linkJob(
     @Param('project_id') _projectId: string,
     @Param('event_id') eventId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { job_id: string },
   ): Promise<{ success: true }> {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
-
     await this.eventsService.linkJobToEvent(eventId, body.job_id);
     return { success: true };
   }

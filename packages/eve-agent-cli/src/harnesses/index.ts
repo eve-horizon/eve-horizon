@@ -1,10 +1,7 @@
 import type { CliHarnessAdapter, HarnessName } from './types';
-import { claudeAdapter } from './claude-direct.js';
-import { mclaudeAdapter } from './mclaude';
-import { zaiAdapter } from './zai';
+import { claudeAdapter, mclaudeAdapter, zaiAdapter } from './claude';
 import { geminiAdapter } from './gemini';
 import { codeAdapter } from './code';
-import { codexAdapter } from './codex';
 import { piCliAdapter } from './pi';
 
 const adapters: CliHarnessAdapter[] = [
@@ -13,17 +10,13 @@ const adapters: CliHarnessAdapter[] = [
   zaiAdapter,
   geminiAdapter,
   codeAdapter,
-  codexAdapter,
   piCliAdapter,
 ];
 
 const registry = new Map<HarnessName, CliHarnessAdapter>();
 for (const adapter of adapters) {
-  registry.set(adapter.name, adapter);
-  if (adapter.aliases) {
-    for (const alias of adapter.aliases) {
-      registry.set(alias, adapter);
-    }
+  for (const name of [adapter.name, ...(adapter.names ?? []), ...(adapter.aliases ?? [])]) {
+    registry.set(name, adapter);
   }
 }
 

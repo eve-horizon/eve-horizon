@@ -1,12 +1,11 @@
 import {
   Body,
   Controller,
-  Headers,
   HttpCode,
   HttpStatus,
   Param,
   Post,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
@@ -16,17 +15,16 @@ import {
   type ChatRouteRequest,
   type ChatRouteResponse,
   type ChatDeliverRequest,
-  loadConfig,
 } from '@eve/shared';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { ChatService } from './chat.service.js';
-
-const INTERNAL_HEADER = 'x-eve-internal-token';
 
 @ApiTags('internal')
 @Controller('internal/projects/:project_id/chat')
+@UseGuards(InternalTokenGuard)
 export class ChatInternalController {
   constructor(private readonly chatService: ChatService) {}
 
@@ -41,10 +39,8 @@ export class ChatInternalController {
   })
   async routeMessage(
     @Param('project_id') projectId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatRouteRequestSchema)) body: ChatRouteRequest,
   ): Promise<ChatRouteResponse> {
-    this.requireInternalToken(token);
     return this.chatService.routeMessage(projectId, body);
   }
 
@@ -56,10 +52,8 @@ export class ChatInternalController {
   @ApiOkResponse({ description: 'Delivery result' })
   async deliverOutbound(
     @Param('project_id') projectId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatDeliverRequestSchema)) body: ChatDeliverRequest,
   ) {
-    this.requireInternalToken(token);
     return this.chatService.deliverChatResult({
       projectId,
       job_id: body.job_id,
@@ -68,12 +62,5 @@ export class ChatInternalController {
       agent_id: body.agent_id,
       progress: body.progress,
     });
-  }
-
-  private requireInternalToken(token: string | undefined) {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
   }
 }

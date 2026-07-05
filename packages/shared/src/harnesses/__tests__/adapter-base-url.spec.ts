@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HarnessInvocation } from '../../types/harness.js';
-import { mclaudeAdapter } from '../adapters/mclaude.js';
-import { claudeAdapter } from '../adapters/claude.js';
+import { claudeAdapter, mclaudeAdapter } from '../adapters/claude.js';
 import { zaiAdapter } from '../adapters/zai.js';
 import type { HarnessContext } from '../adapters/types.js';
 

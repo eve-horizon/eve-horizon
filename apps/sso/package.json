@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@eve/shared": "workspace:*",
     "express": "^4.21.0",
     "cookie-parser": "^1.4.6"
   },

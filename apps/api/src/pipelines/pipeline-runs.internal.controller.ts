@@ -6,25 +6,16 @@ import {
   Param,
   Patch,
   Post,
-  Headers,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { loadConfig } from '@eve/shared';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { PipelineRunsService } from './pipeline-runs.service.js';
-
-const INTERNAL_HEADER = 'x-eve-internal-token';
-
-function validateInternalToken(token: string | undefined): void {
-  const config = loadConfig();
-  if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-    throw new UnauthorizedException('Invalid internal token');
-  }
-}
 
 @ApiTags('internal')
 @Controller('internal')
+@UseGuards(InternalTokenGuard)
 export class PipelineRunsInternalController {
   constructor(private readonly pipelineRunsService: PipelineRunsService) {}
 
@@ -46,10 +37,8 @@ export class PipelineRunsInternalController {
   @ApiOkResponse({ description: 'Pipeline run updated' })
   async updateRun(
     @Param('runId') runId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { status?: string; started_at?: string; completed_at?: string; error_message?: string },
   ): Promise<{ success: true }> {
-    validateInternalToken(token);
     await this.pipelineRunsService.updateRunInternal(runId, body);
     return { success: true };
   }
@@ -78,7 +67,6 @@ export class PipelineRunsInternalController {
   async updateStep(
     @Param('runId') runId: string,
     @Param('stepId') stepId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body()
     body: {
       status?: string;
@@ -92,7 +80,6 @@ export class PipelineRunsInternalController {
       output_json?: Record<string, unknown>;
     },
   ): Promise<{ success: true }> {
-    validateInternalToken(token);
     await this.pipelineRunsService.updateStepInternal(runId, stepId, body);
     return { success: true };
   }
@@ -115,10 +102,8 @@ export class PipelineRunsInternalController {
   async appendLog(
     @Param('runId') runId: string,
     @Param('stepId') stepId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { log_type: string; content: Record<string, unknown> },
   ): Promise<{ success: true }> {
-    validateInternalToken(token);
     await this.pipelineRunsService.appendStepLog(runId, stepId, body.log_type, body.content);
     return { success: true };
   }

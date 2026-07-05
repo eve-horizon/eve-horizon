@@ -3,13 +3,12 @@ import {
   BadRequestException,
   Controller,
   ForbiddenException,
-  Headers,
   HttpCode,
   HttpStatus,
   NotFoundException,
   Param,
   Post,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
@@ -31,20 +30,19 @@ import {
   type ChatListenersResponse,
   type ChatDispatchRequest,
   type ChatDispatchResponse,
-  loadConfig,
 } from '@eve/shared';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { ChatService } from './chat.service.js';
 import { Inject } from '@nestjs/common';
 import type { Db } from '@eve/db';
 import { agentQueries, orgQueries, teamQueries } from '@eve/db';
 
-const INTERNAL_HEADER = 'x-eve-internal-token';
-
 @ApiTags('internal')
 @Controller('internal/orgs/:org_id/chat')
+@UseGuards(InternalTokenGuard)
 export class ChatGatewayController {
   private agents: ReturnType<typeof agentQueries>;
   private orgs: ReturnType<typeof orgQueries>;
@@ -70,11 +68,8 @@ export class ChatGatewayController {
   })
   async routeBySlug(
     @Param('org_id') orgId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatRouteBySlugRequestSchema)) body: ChatRouteBySlugRequest,
   ): Promise<ChatRouteResponse> {
-    this.requireInternalToken(token);
-
     const org = await this.orgs.findById(orgId);
     if (!org) {
       throw new NotFoundException(`Organization ${orgId} not found`);
@@ -203,10 +198,8 @@ export class ChatGatewayController {
   })
   async listen(
     @Param('org_id') orgId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatListenRequestSchema)) body: ChatListenRequest,
   ): Promise<ChatListenResponse> {
-    this.requireInternalToken(token);
     return this.chatService.subscribeAgentToThread(
       orgId,
       body.agent_slug.trim().toLowerCase(),
@@ -227,10 +220,8 @@ export class ChatGatewayController {
   })
   async unlisten(
     @Param('org_id') orgId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatListenRequestSchema)) body: ChatListenRequest,
   ): Promise<ChatUnlistenResponse> {
-    this.requireInternalToken(token);
     return this.chatService.unsubscribeAgentFromThread(
       orgId,
       body.agent_slug.trim().toLowerCase(),
@@ -250,10 +241,8 @@ export class ChatGatewayController {
   })
   async listeners(
     @Param('org_id') orgId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatListenersRequestSchema)) body: ChatListenersRequest,
   ): Promise<ChatListenersResponse> {
-    this.requireInternalToken(token);
     const channelKey = body.channel_key ?? null;
     const threadKey = body.thread_key ?? null;
     if (!channelKey && !threadKey) {
@@ -273,17 +262,8 @@ export class ChatGatewayController {
   })
   async dispatch(
     @Param('org_id') orgId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ChatDispatchRequestSchema)) body: ChatDispatchRequest,
   ): Promise<ChatDispatchResponse> {
-    this.requireInternalToken(token);
     return this.chatService.dispatchToListeners(orgId, body);
-  }
-
-  private requireInternalToken(token: string | undefined) {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
   }
 }

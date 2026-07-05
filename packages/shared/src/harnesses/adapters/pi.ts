@@ -1,8 +1,27 @@
 import type { HarnessAdapter } from './types.js';
-import { mapReasoningEffort } from './reasoning.js';
+import { mapReasoningForMode } from './reasoning.js';
 
 export const piAdapter: HarnessAdapter = {
   name: 'pi',
+  description: 'pi coding agent — multi-provider, extensible.',
+  reasoningMode: 'effort',
+  capabilities: {
+    supports_model: true,
+    model_notes: 'Use provider/model format (e.g., anthropic/claude-sonnet-4).',
+    model_examples: [
+      'anthropic/claude-opus-4-7',
+      'anthropic/claude-sonnet-4',
+      'openai/gpt-5.5',
+      'openai/gpt-4o',
+      'google/gemini-2.5-pro',
+    ],
+    reasoning: {
+      supported: true,
+      levels: ['low', 'medium', 'high', 'x-high'],
+      mode: 'level',
+      notes: 'pi maps x-high to xhigh internally.',
+    },
+  },
   buildOptions: async (ctx) => {
     const env: Record<string, string | undefined> = {};
 
@@ -33,7 +52,7 @@ export const piAdapter: HarnessAdapter = {
       permission: ctx.permission,
       variant: ctx.invocation.harness_options?.variant ?? ctx.invocation.variant,
       model: ctx.invocation.harness_options?.model,
-      reasoning: mapReasoningEffort(ctx.harness, ctx.invocation.harness_options?.reasoning_effort),
+      reasoning: mapReasoningForMode('effort', ctx.invocation.harness_options?.reasoning_effort),
       env,
     };
   },

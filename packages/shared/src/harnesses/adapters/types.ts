@@ -1,5 +1,7 @@
 import type { HarnessInvocation } from '../../types/harness.js';
-import type { HarnessName } from '../registry.js';
+import type { HarnessCanonicalName, HarnessName } from '../registry.js';
+import type { HarnessCapability } from '../capabilities.js';
+import type { ReasoningMode } from './reasoning.js';
 
 export type PermissionPolicy = 'default' | 'auto_edit' | 'never' | 'yolo';
 
@@ -36,8 +38,17 @@ export type HarnessContext = {
   env: Record<string, string | undefined>;
 };
 
+/**
+ * Self-describing harness adapter: carries the per-harness knowledge
+ * (aliases, description, capabilities, reasoning mode) alongside the
+ * invocation-option builder. The registry, name lists, and capability
+ * table are all derived from the adapter list.
+ */
 export type HarnessAdapter = {
-  name: HarnessName;
+  name: HarnessCanonicalName;
   aliases?: HarnessName[];
+  description: string;
+  capabilities: HarnessCapability;
+  reasoningMode: ReasoningMode;
   buildOptions: (ctx: HarnessContext) => Promise<EveAgentCliOptions>;
 };

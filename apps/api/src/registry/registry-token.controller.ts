@@ -11,6 +11,7 @@ import {
   ServiceUnavailableException,
   BadRequestException,
   Logger,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
@@ -23,8 +24,8 @@ import {
 import { existsSync, readFileSync } from 'fs';
 import { loadConfig } from '@eve/shared';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 
-const INTERNAL_HEADER = 'x-eve-internal-token';
 const TOKEN_TTL_SECONDS = 300;
 
 interface RegistryTokenRequest {
@@ -147,18 +148,11 @@ export class RegistryTokenController {
    */
   @Public()
   @Post('token')
+  @UseGuards(InternalTokenGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Issue a scoped registry token (internal only)' })
-  async issueToken(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
-    @Body() body: RegistryTokenRequest,
-  ): Promise<RegistryTokenResponse> {
+  async issueToken(@Body() body: RegistryTokenRequest): Promise<RegistryTokenResponse> {
     const config = loadConfig();
-
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
-
     return this.buildScopedToken(config, body.scope, body.service);
   }
 

@@ -304,6 +304,9 @@ importers:
 
   apps/sso:
     dependencies:
+      '@eve/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       cookie-parser:
         specifier: ^1.4.6
         version: 1.4.7

@@ -1,6 +1,12 @@
-import type { HarnessName } from '../registry.js';
+import type { ReasoningEffort } from '../../types/harness.js';
 
-type ReasoningEffort = 'low' | 'medium' | 'high' | 'x-high';
+/**
+ * How a harness consumes the normalized reasoning-effort levels:
+ * - `thinking_tokens`: mapped to a thinking-token budget (Claude family)
+ * - `effort`: mapped to the harness's effort flag values (`x-high` → `xhigh`)
+ * - `passthrough`: forwarded as-is
+ */
+export type ReasoningMode = 'thinking_tokens' | 'effort' | 'passthrough';
 
 const CLAUDE_THINKING_TOKENS: Record<ReasoningEffort, string> = {
   low: '1024',
@@ -9,42 +15,27 @@ const CLAUDE_THINKING_TOKENS: Record<ReasoningEffort, string> = {
   'x-high': '32000',
 };
 
-const CODE_REASONING_MAP: Record<ReasoningEffort, string> = {
+const EFFORT_LEVELS: Record<ReasoningEffort, string> = {
   low: 'low',
   medium: 'medium',
   high: 'high',
   'x-high': 'xhigh',
 };
 
-const PI_REASONING_MAP: Record<ReasoningEffort, string> = {
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  'x-high': 'xhigh',
-};
-
-export function mapReasoningEffort(
-  harness: HarnessName,
+export function mapReasoningForMode(
+  mode: ReasoningMode,
   effort?: ReasoningEffort | string,
 ): string | undefined {
   if (!effort) return undefined;
   if (!['low', 'medium', 'high', 'x-high'].includes(effort)) return undefined;
+  const level = effort as ReasoningEffort;
 
-  if (harness === 'mclaude' || harness === 'claude' || harness === 'zai') {
-    return CLAUDE_THINKING_TOKENS[effort as ReasoningEffort];
+  switch (mode) {
+    case 'thinking_tokens':
+      return CLAUDE_THINKING_TOKENS[level];
+    case 'effort':
+      return EFFORT_LEVELS[level];
+    case 'passthrough':
+      return level;
   }
-
-  if (harness === 'code' || harness === 'coder' || harness === 'codex') {
-    return CODE_REASONING_MAP[effort as ReasoningEffort];
-  }
-
-  if (harness === 'gemini') {
-    return effort as ReasoningEffort;
-  }
-
-  if (harness === 'pi') {
-    return PI_REASONING_MAP[effort as ReasoningEffort] ?? effort;
-  }
-
-  return undefined;
 }

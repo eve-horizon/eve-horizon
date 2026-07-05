@@ -2,11 +2,10 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
   Post,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
@@ -22,15 +21,14 @@ import {
   type ExternalIdentityResolveResponse,
   type IdentityLinkRedeemRequest,
   type IdentityLinkRedeemResponse,
-  loadConfig,
 } from '@eve/shared';
 import { z } from 'zod';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { IntegrationsService } from './integrations.service.js';
 
-const INTERNAL_HEADER = 'x-eve-internal-token';
 const IntegrationTokensRequestSchema = z.object({
   integration_id: z.string().min(1),
 });
@@ -40,6 +38,7 @@ const IntegrationTokensResponseSchema = z.object({
 
 @ApiTags('internal')
 @Controller('internal')
+@UseGuards(InternalTokenGuard)
 export class IntegrationsInternalController {
   constructor(private readonly integrationsService: IntegrationsService) {}
 
@@ -54,10 +53,8 @@ export class IntegrationsInternalController {
     schema: zodSchemaToOpenApi(IntegrationResolveResponseSchema, 'IntegrationResolveResponse'),
   })
   async resolveIntegration(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(IntegrationResolveRequestSchema)) body: IntegrationResolveRequest,
   ): Promise<IntegrationResolveResponse> {
-    this.requireInternalToken(token);
     return this.integrationsService.resolveIntegration(body.provider, body.account_id);
   }
 
@@ -72,10 +69,8 @@ export class IntegrationsInternalController {
     schema: zodSchemaToOpenApi(ExternalIdentityResolveResponseSchema, 'ExternalIdentityResolveResponse'),
   })
   async resolveExternalIdentity(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(ExternalIdentityResolveRequestSchema)) body: ExternalIdentityResolveRequest,
   ): Promise<ExternalIdentityResolveResponse> {
-    this.requireInternalToken(token);
     return this.integrationsService.resolveExternalIdentity(
       body.org_id,
       body.provider,
@@ -96,10 +91,8 @@ export class IntegrationsInternalController {
     schema: zodSchemaToOpenApi(IntegrationTokensResponseSchema, 'IntegrationTokensResponse'),
   })
   async fetchTokens(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(IntegrationTokensRequestSchema)) body: { integration_id: string },
   ): Promise<{ tokens_json: Record<string, unknown> | null }> {
-    this.requireInternalToken(token);
     const tokens = await this.integrationsService.getIntegrationTokens(body.integration_id);
     return { tokens_json: tokens };
   }
@@ -115,10 +108,8 @@ export class IntegrationsInternalController {
     schema: zodSchemaToOpenApi(IdentityLinkRedeemResponseSchema, 'IdentityLinkRedeemResponse'),
   })
   async redeemLinkToken(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(IdentityLinkRedeemRequestSchema)) body: IdentityLinkRedeemRequest,
   ): Promise<IdentityLinkRedeemResponse> {
-    this.requireInternalToken(token);
     return this.integrationsService.redeemLinkToken(
       body.token,
       body.provider,
@@ -131,21 +122,11 @@ export class IntegrationsInternalController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'List active integrations for gateway bootstrap (internal only)' })
-  async listActiveIntegrations(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
-  ): Promise<Array<{
+  async listActiveIntegrations(): Promise<Array<{
     id: string; org_id: string; provider: string;
     account_id: string; tokens_json: Record<string, unknown> | null;
     settings_json: Record<string, unknown>; status: string;
   }>> {
-    this.requireInternalToken(token);
     return this.integrationsService.listActiveIntegrations();
-  }
-
-  private requireInternalToken(token: string | undefined): void {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
   }
 }

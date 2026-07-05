@@ -1,9 +1,22 @@
 import { resolveClaudeConfigDir } from '../config.js';
 import type { HarnessAdapter } from './types.js';
-import { mapReasoningEffort } from './reasoning.js';
+import { mapReasoningForMode } from './reasoning.js';
 
 export const zaiAdapter: HarnessAdapter = {
   name: 'zai',
+  description: 'Z.ai via cc-mirror.',
+  reasoningMode: 'thinking_tokens',
+  capabilities: {
+    supports_model: true,
+    model_notes: 'Model override supported via ZAI_MODEL or --model.',
+    model_examples: ['glm-5', 'glm-5-code', 'glm-4.7'],
+    reasoning: {
+      supported: true,
+      levels: ['low', 'medium', 'high', 'x-high'],
+      mode: 'thinking_tokens',
+      notes: 'Reasoning effort maps to thinking-token budget in adapter.',
+    },
+  },
   buildOptions: async (ctx) => {
     const apiKey = ctx.env.Z_AI_API_KEY ?? ctx.env.ZAI_API_KEY;
     if (!apiKey) {
@@ -13,8 +26,8 @@ export const zaiAdapter: HarnessAdapter = {
       ctx.invocation.harness_options?.model ??
       (ctx.env.ZAI_MODEL || ctx.env.CLAUDE_MODEL);
     const variant = ctx.invocation.harness_options?.variant ?? ctx.invocation.variant;
-    const reasoning = mapReasoningEffort(
-      ctx.harness,
+    const reasoning = mapReasoningForMode(
+      'thinking_tokens',
       ctx.invocation.harness_options?.reasoning_effort,
     );
     const configDir = resolveClaudeConfigDir('zai', variant, {

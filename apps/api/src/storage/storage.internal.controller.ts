@@ -1,12 +1,10 @@
-import { Controller, Post, Headers, HttpCode, HttpStatus, Body, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, HttpCode, HttpStatus, Body, UseGuards, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { loadConfig } from '@eve/shared';
 import { z } from 'zod';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { StorageService } from './storage.service.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
-
-const INTERNAL_HEADER = 'x-eve-internal-token';
 
 const PresignRequestSchema = z.object({
   key: z.string().min(1),
@@ -18,6 +16,7 @@ type PresignRequest = z.infer<typeof PresignRequestSchema>;
 
 @ApiTags('internal')
 @Controller('internal/storage/chat-attachments')
+@UseGuards(InternalTokenGuard)
 export class StorageInternalController {
   constructor(private readonly storage: StorageService) {}
 
@@ -26,14 +25,8 @@ export class StorageInternalController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get presigned URL for chat attachment upload/download (internal only)' })
   async presign(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body(new ZodValidationPipe(PresignRequestSchema)) body: PresignRequest,
   ): Promise<{ url: string }> {
-    const config = loadConfig();
-    if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-      throw new UnauthorizedException('Invalid internal token');
-    }
-
     // Validate key prefix
     if (!body.key.startsWith('chat-attachments/')) {
       throw new BadRequestException('Key must start with chat-attachments/');

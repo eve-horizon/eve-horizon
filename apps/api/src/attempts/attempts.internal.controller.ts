@@ -3,25 +3,15 @@ import {
   Post,
   Patch,
   Param,
-  Headers,
   HttpCode,
   HttpStatus,
   Body,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { loadConfig } from '@eve/shared';
 import { Public } from '../auth/auth.decorator.js';
+import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { AttemptsService } from './attempts.service.js';
-
-const INTERNAL_HEADER = 'x-eve-internal-token';
-
-function validateInternalToken(token: string | undefined): void {
-  const config = loadConfig();
-  if (!config.EVE_INTERNAL_API_KEY || token !== config.EVE_INTERNAL_API_KEY) {
-    throw new UnauthorizedException('Invalid internal token');
-  }
-}
 
 /**
  * Internal API for worker operations.
@@ -30,6 +20,7 @@ function validateInternalToken(token: string | undefined): void {
  */
 @ApiTags('internal')
 @Controller('internal')
+@UseGuards(InternalTokenGuard)
 export class AttemptsInternalController {
   constructor(private readonly attemptsService: AttemptsService) {}
 
@@ -50,10 +41,8 @@ export class AttemptsInternalController {
   @ApiOkResponse({ description: 'Log appended successfully' })
   async appendLog(
     @Param('attempt_id') attemptId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { log_type: string; content: Record<string, unknown> },
   ): Promise<{ success: true }> {
-    validateInternalToken(token);
     await this.attemptsService.appendLog(attemptId, body.log_type, body.content);
     return { success: true };
   }
@@ -75,10 +64,8 @@ export class AttemptsInternalController {
   @ApiOkResponse({ description: 'Attempt updated successfully' })
   async updateAttempt(
     @Param('attempt_id') attemptId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { status?: string; result_json?: Record<string, unknown>; result_summary?: string },
   ): Promise<{ success: true }> {
-    validateInternalToken(token);
     await this.attemptsService.updateAttemptInternal(attemptId, body);
     return { success: true };
   }
@@ -100,10 +87,8 @@ export class AttemptsInternalController {
   @ApiOkResponse({ description: 'Job requeued successfully' })
   async requeueJob(
     @Param('job_id') jobId: string,
-    @Headers(INTERNAL_HEADER) token: string | undefined,
     @Body() body: { agent_id: string; reason?: string },
   ): Promise<{ success: true }> {
-    validateInternalToken(token);
     await this.attemptsService.requeueJob(jobId, body.agent_id, body.reason);
     return { success: true };
   }

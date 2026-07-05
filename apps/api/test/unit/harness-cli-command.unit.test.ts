@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { claudeAdapter } from '../../../../packages/eve-agent-cli/src/harnesses/claude-direct';
-import { buildClaudeCommand } from '../../../../packages/eve-agent-cli/src/harnesses/claude';
+import { claudeAdapter, mclaudeAdapter, zaiAdapter } from '../../../../packages/eve-agent-cli/src/harnesses/claude';
 import { buildCodeCommand } from '../../../../packages/eve-agent-cli/src/harnesses/code';
 
 const envBase = { PATH: '/usr/bin' } as Record<string, string | undefined>;
@@ -44,7 +43,7 @@ describe('harness CLI command construction', () => {
   });
 
   it('normalizes Opus aliases for cc-mirror Claude but not Z.ai', () => {
-    const mclaude = buildClaudeCommand({
+    const mclaude = mclaudeAdapter.buildCommand({
       harness: 'mclaude',
       prompt: 'hello',
       permission: 'yolo',
@@ -53,7 +52,7 @@ describe('harness CLI command construction', () => {
       model: 'claude-opus-4-7',
       reasoning: '16000',
     });
-    const zai = buildClaudeCommand({
+    const zai = zaiAdapter.buildCommand({
       harness: 'zai',
       prompt: 'hello',
       permission: 'yolo',

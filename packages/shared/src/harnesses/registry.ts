@@ -1,29 +1,27 @@
 import * as path from 'node:path';
 import { listHarnessConfigVariants, resolveHarnessConfigRoot } from './config.js';
+import { harnessAdapters } from './adapters/index.js';
 
-export const HARNESS_NAMES = [
-  'mclaude',
-  'claude',
-  'zai',
-  'gemini',
-  'code',
-  'coder',
-  'codex',
-  'pi',
-] as const;
+export type HarnessCanonicalName =
+  | 'mclaude'
+  | 'claude'
+  | 'zai'
+  | 'gemini'
+  | 'code'
+  | 'codex'
+  | 'pi';
 
-export const HARNESS_CANONICAL_NAMES = [
-  'mclaude',
-  'claude',
-  'zai',
-  'gemini',
-  'code',
-  'codex',
-  'pi',
-] as const;
+export type HarnessName = HarnessCanonicalName | 'coder';
 
-export type HarnessName = (typeof HARNESS_NAMES)[number];
-export type HarnessCanonicalName = (typeof HARNESS_CANONICAL_NAMES)[number];
+/** All accepted harness names (canonical + aliases), aliases directly after their canonical name. */
+export const HARNESS_NAMES: readonly HarnessName[] = harnessAdapters.flatMap(
+  (adapter) => [adapter.name, ...(adapter.aliases ?? [])],
+);
+
+/** Canonical harness names only. */
+export const HARNESS_CANONICAL_NAMES: readonly HarnessCanonicalName[] = harnessAdapters.map(
+  (adapter) => adapter.name,
+);
 
 export type HarnessVariant = {
   name: string;
@@ -43,37 +41,11 @@ const DEFAULT_VARIANT: HarnessVariant = {
   source: 'default',
 };
 
-export const HARNESS_REGISTRY: HarnessInfo[] = [
-  {
-    name: 'mclaude',
-    description: 'Claude Code via cc-mirror (Anthropic).',
-  },
-  {
-    name: 'claude',
-    description: 'Claude Code CLI (direct).',
-  },
-  {
-    name: 'zai',
-    description: 'Z.ai via cc-mirror.',
-  },
-  {
-    name: 'gemini',
-    description: 'Gemini CLI harness.',
-  },
-  {
-    name: 'code',
-    aliases: ['coder'],
-    description: 'just-every/code fork of codex.',
-  },
-  {
-    name: 'codex',
-    description: 'OpenAI Codex CLI harness.',
-  },
-  {
-    name: 'pi',
-    description: 'pi coding agent — multi-provider, extensible.',
-  },
-];
+export const HARNESS_REGISTRY: HarnessInfo[] = harnessAdapters.map((adapter) => ({
+  name: adapter.name,
+  ...(adapter.aliases ? { aliases: adapter.aliases } : {}),
+  description: adapter.description,
+}));
 
 export function listHarnesses(): HarnessInfo[] {
   return [...HARNESS_REGISTRY];

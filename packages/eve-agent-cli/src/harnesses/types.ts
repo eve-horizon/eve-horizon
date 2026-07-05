@@ -20,6 +20,8 @@ export type HarnessCommand = {
 
 export type CliHarnessAdapter = {
   name: HarnessName;
+  /** Additional distinct harness names served by this adapter's builder (branching on ctx.harness). */
+  names?: HarnessName[];
   aliases?: HarnessName[];
   buildCommand(ctx: CliContext): { command: HarnessCommand; warnings: string[] };
 };

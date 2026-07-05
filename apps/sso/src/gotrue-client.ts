@@ -1,3 +1,4 @@
+import { internalApiFetch } from '@eve/shared';
 import { EVE_API_URL, EVE_INTERNAL_API_KEY, SUPABASE_ANON_KEY, SUPABASE_AUTH_URL } from './config.js';
 import type { SsoLoginContext } from './types.js';
 
@@ -7,13 +8,11 @@ export async function internalApiPost<T>(path: string, body: Record<string, unkn
     return null;
   }
   try {
-    const res = await fetch(`${EVE_API_URL}${path}`, {
+    const res = await internalApiFetch(path, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-eve-internal-token': EVE_INTERNAL_API_KEY,
-      },
-      body: JSON.stringify(body),
+      body,
+      baseUrl: EVE_API_URL,
+      internalToken: EVE_INTERNAL_API_KEY,
     });
     if (!res.ok) {
       console.warn(`[wrap] ${path} returned ${res.status}`);

@@ -55,13 +55,19 @@ export function resolveHarnessConfig(options: HarnessConfigOptions): HarnessConf
   };
 }
 
-export function resolveClaudeConfigDir(
-  harness: 'claude' | 'mclaude' | 'zai',
+/**
+ * Resolve a harness config dir, honoring a pre-set env-var override
+ * (e.g. CLAUDE_CONFIG_DIR, CODEX_HOME) before falling back to the
+ * standard harness config layout.
+ */
+function resolveConfigDirWithEnvOverride(
+  overrideEnvVar: string,
+  harness: string,
   variant?: string,
   options?: { repoPath?: string; env?: NodeJS.ProcessEnv },
 ): string {
   const env = options?.env ?? process.env;
-  const existing = env.CLAUDE_CONFIG_DIR;
+  const existing = env[overrideEnvVar];
   if (existing) {
     if (!variant) return existing;
     const normalized = existing.replace(/\/+$/, '');
@@ -80,29 +86,20 @@ export function resolveClaudeConfigDir(
   }).configDir;
 }
 
+export function resolveClaudeConfigDir(
+  harness: 'claude' | 'mclaude' | 'zai',
+  variant?: string,
+  options?: { repoPath?: string; env?: NodeJS.ProcessEnv },
+): string {
+  return resolveConfigDirWithEnvOverride('CLAUDE_CONFIG_DIR', harness, variant, options);
+}
+
 export function resolveCodeConfigDir(
   harness: 'code' | 'codex',
   variant?: string,
   options?: { repoPath?: string; env?: NodeJS.ProcessEnv },
 ): string {
-  const env = options?.env ?? process.env;
-  const existing = env.CODEX_HOME;
-  if (existing) {
-    if (!variant) return existing;
-    const normalized = existing.replace(/\/+$/, '');
-    const marker = `${path.sep}variants${path.sep}`;
-    if (normalized.includes(marker)) {
-      return existing;
-    }
-    return path.join(normalized, 'variants', variant);
-  }
-
-  return resolveHarnessConfig({
-    harness,
-    variant,
-    repoPath: options?.repoPath,
-    env,
-  }).configDir;
+  return resolveConfigDirWithEnvOverride('CODEX_HOME', harness, variant, options);
 }
 
 export function listHarnessConfigVariants(options: {
