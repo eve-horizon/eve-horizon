@@ -1,3 +1,18 @@
+/**
+ * PLATFORM database migration runner.
+ *
+ * Applies the sequence-named files in packages/db/migrations/ (00001_*.sql …)
+ * to the Eve platform database, tracking state in `_migrations`. Consumers:
+ * bin/db-migrate, bin/eh-commands/{db,start,test}.sh, and
+ * k8s/base/db-migrate-job.yaml.
+ *
+ * This is NOT the same tool as @eve/migrate (packages/migrate), which
+ * migrates TENANT APP databases: timestamp-named app-supplied migrations,
+ * `schema_migrations` state table, SHA-256 checksums, auto-baseline, and the
+ * standalone `eve-migrate` image. The two runners serve disjoint databases —
+ * do not consolidate them without reconciling state tables and file-naming
+ * rules (see codebase-refactor-simplification-plan.md, MIG-1 withdrawal).
+ */
 import { readdir, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
