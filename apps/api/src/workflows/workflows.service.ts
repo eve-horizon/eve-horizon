@@ -3,6 +3,7 @@ import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
 import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, interpolateValue, isValidPermission, mergeEnvOverrides, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
+import { intersectScopes, pathPatternBase } from './scope-algebra.js';
 import * as yaml from 'yaml';
 
 const VALID_TOOLCHAIN_SET = new Set<string>(VALID_TOOLCHAINS);
@@ -182,73 +183,7 @@ export class WorkflowsService {
   ): AccessBindingScope | null {
     const scopes = [workflowScope, stepScope, invocationScope].filter((scope): scope is AccessBindingScope => Boolean(scope));
     if (scopes.length === 0) return null;
-    return scopes.reduce((acc, scope) => this.intersectScopes(acc, scope));
-  }
-
-  private intersectScopes(left: AccessBindingScope, right: AccessBindingScope): AccessBindingScope {
-    return {
-      ...(left.orgfs || right.orgfs ? { orgfs: this.intersectPrefixScope(left.orgfs, right.orgfs) } : {}),
-      ...(left.orgdocs || right.orgdocs ? { orgdocs: this.intersectPrefixScope(left.orgdocs, right.orgdocs) } : {}),
-      ...(left.envdb || right.envdb ? { envdb: {
-        schemas: this.intersectStringSets(left.envdb?.schemas, right.envdb?.schemas),
-        tables: this.intersectStringSets(left.envdb?.tables, right.envdb?.tables),
-      } } : {}),
-      ...(left.cloud_fs || right.cloud_fs ? { cloud_fs: {
-        allow_mount_ids: this.intersectStringSets(left.cloud_fs?.allow_mount_ids, right.cloud_fs?.allow_mount_ids),
-      } } : {}),
-    };
-  }
-
-  private intersectPrefixScope(
-    left: AccessBindingScope['orgfs'],
-    right: AccessBindingScope['orgfs'],
-  ): NonNullable<AccessBindingScope['orgfs']> {
-    return {
-      allow_prefixes: this.intersectPathPatterns(left?.allow_prefixes, right?.allow_prefixes),
-      read_only_prefixes: this.intersectPathPatterns(left?.read_only_prefixes, right?.read_only_prefixes),
-    };
-  }
-
-  private intersectStringSets(left: string[] | undefined, right: string[] | undefined): string[] {
-    if (left === undefined) return [...new Set(right ?? [])].sort();
-    if (right === undefined) return [...new Set(left)].sort();
-    if (left.includes('*')) return [...new Set(right)].sort();
-    if (right.includes('*')) return [...new Set(left)].sort();
-    const rightSet = new Set(right);
-    return [...new Set(left.filter((item) => rightSet.has(item)))].sort();
-  }
-
-  private intersectPathPatterns(left: string[] | undefined, right: string[] | undefined): string[] {
-    if (left === undefined) return [...new Set(right ?? [])].sort();
-    if (right === undefined) return [...new Set(left)].sort();
-    const out = new Set<string>();
-    for (const a of left) {
-      for (const b of right) {
-        const intersection = this.intersectPathPattern(a, b);
-        if (intersection) out.add(intersection);
-      }
-    }
-    return [...out].sort();
-  }
-
-  private intersectPathPattern(a: string, b: string): string | null {
-    if (a === '*') return b;
-    if (b === '*') return a;
-    const aBase = this.pathPatternBase(a);
-    const bBase = this.pathPatternBase(b);
-    if (aBase === bBase) return a.length >= b.length ? a : b;
-    if (aBase.startsWith(`${bBase}/`)) return a;
-    if (bBase.startsWith(`${aBase}/`)) return b;
-    return null;
-  }
-
-  private pathPatternBase(pattern: string): string {
-    const trimmed = pattern.trim();
-    if (trimmed === '*' || trimmed === '') return '/';
-    return trimmed
-      .replace(/\/\*\*$/, '')
-      .replace(/\/\*$/, '')
-      .replace(/\/+$/, '') || '/';
+    return scopes.reduce((acc, scope) => intersectScopes(acc, scope));
   }
 
   private async assertActorCanUseScope(
@@ -261,16 +196,16 @@ export class WorkflowsService {
     if (!userId || !scope || !this.accessService) return;
     const checks: Array<{ permission: string; resource: { type: 'orgfs' | 'orgdocs' | 'envdb' | 'cloud_fs'; id: string; action: 'read' | 'write' | 'admin' } }> = [];
     for (const prefix of scope.orgfs?.allow_prefixes ?? []) {
-      checks.push({ permission: 'orgfs:write', resource: { type: 'orgfs', id: this.pathPatternBase(prefix), action: 'write' } });
+      checks.push({ permission: 'orgfs:write', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'write' } });
     }
     for (const prefix of scope.orgfs?.read_only_prefixes ?? []) {
-      checks.push({ permission: 'orgfs:read', resource: { type: 'orgfs', id: this.pathPatternBase(prefix), action: 'read' } });
+      checks.push({ permission: 'orgfs:read', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'read' } });
     }
     for (const prefix of scope.orgdocs?.allow_prefixes ?? []) {
-      checks.push({ permission: 'orgdocs:write', resource: { type: 'orgdocs', id: this.pathPatternBase(prefix), action: 'write' } });
+      checks.push({ permission: 'orgdocs:write', resource: { type: 'orgdocs', id: pathPatternBase(prefix), action: 'write' } });
     }
     for (const prefix of scope.orgdocs?.read_only_prefixes ?? []) {
-      checks.push({ permission: 'orgdocs:read', resource: { type: 'orgdocs', id: this.pathPatternBase(prefix), action: 'read' } });
+      checks.push({ permission: 'orgdocs:read', resource: { type: 'orgdocs', id: pathPatternBase(prefix), action: 'read' } });
     }
     for (const mountId of scope.cloud_fs?.allow_mount_ids ?? []) {
       checks.push({ permission: 'cloud_fs:read', resource: { type: 'cloud_fs', id: mountId, action: 'read' } });

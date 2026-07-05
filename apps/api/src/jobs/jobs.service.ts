@@ -1,12 +1,14 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, ConflictException, MessageEvent } from '@nestjs/common';
-import { Observable, interval, from, of, EMPTY } from 'rxjs';
-import { switchMap, concatMap, takeWhile, share } from 'rxjs/operators';
+import { Observable } from 'rxjs';
 import type { Db } from '@eve/db';
-import { jobQueries, projectQueries, executionLogQueries, gateQueries, projectManifestQueries, threadMessageQueries, spendQueries, environmentQueries, agentQueries, batchJobQueries, projectApiSourceQueries, orgQueries, agentConfigQueries, appLinkSubscriptionQueries, type Job, type JobAttempt, type JobHints, type AttemptResultData, type JobGitConfig, type JobWorkspaceConfig, type JobAttemptGitMeta } from '@eve/db';
-import type { AccessBindingScope, JobGit, JobWorkspace, JobHarnessOptions, JobCompareResponse, JobTarget, ResourceRef, CreateBatchRequest, CreateBatchResponse, BatchValidateResponse, BatchValidationError, InlineProfileBundle } from '@eve/shared';
-import { deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, generateBatchId, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
+import { jobQueries, projectQueries, executionLogQueries, gateQueries, projectManifestQueries, threadMessageQueries, environmentQueries, agentQueries, projectApiSourceQueries, orgQueries, agentConfigQueries, appLinkSubscriptionQueries, type Job, type JobAttempt, type JobHints, type AttemptResultData, type JobWorkspaceConfig, type JobAttemptGitMeta } from '@eve/db';
+import type { AccessBindingScope, JobGit, JobWorkspace, JobHarnessOptions, JobCompareResponse, JobTarget, ResourceRef, CreateBatchRequest, CreateBatchResponse, BatchValidateResponse, InlineProfileBundle } from '@eve/shared';
+import { deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
 import * as yaml from 'yaml';
 import { buildApiError } from '../system/api-errors.js';
+import { JobLogsService } from './job-logs.service.js';
+import { JobReceiptsService } from './job-receipts.service.js';
+import { JobBatchService } from './job-batch.service.js';
 
 // ============================================================================
 // Request/Response Types (inline - the new model)
@@ -215,26 +217,27 @@ export class JobsService {
   private gates: ReturnType<typeof gateQueries>;
   private manifests: ReturnType<typeof projectManifestQueries>;
   private threadMessages: ReturnType<typeof threadMessageQueries>;
-  private spend: ReturnType<typeof spendQueries>;
   private environments: ReturnType<typeof environmentQueries>;
   private agents: ReturnType<typeof agentQueries>;
-  private batchJobs: ReturnType<typeof batchJobQueries>;
   private apiSources: ReturnType<typeof projectApiSourceQueries>;
   private appLinkSubscriptions: ReturnType<typeof appLinkSubscriptionQueries>;
   private orgs: ReturnType<typeof orgQueries>;
   private agentConfigs: ReturnType<typeof agentConfigQueries>;
 
-  constructor(@Inject('DB') private readonly db: Db) {
+  constructor(
+    @Inject('DB') private readonly db: Db,
+    private readonly jobLogsService: JobLogsService,
+    private readonly jobReceiptsService: JobReceiptsService,
+    private readonly jobBatchService: JobBatchService,
+  ) {
     this.jobs = jobQueries(db);
     this.projects = projectQueries(db);
     this.logs = executionLogQueries(db);
     this.gates = gateQueries(db);
     this.manifests = projectManifestQueries(db);
     this.threadMessages = threadMessageQueries(db);
-    this.spend = spendQueries(db);
     this.environments = environmentQueries(db);
     this.agents = agentQueries(db);
-    this.batchJobs = batchJobQueries(db);
     this.apiSources = projectApiSourceQueries(db);
     this.appLinkSubscriptions = appLinkSubscriptionQueries(db);
     this.orgs = orgQueries(db);
@@ -1452,296 +1455,36 @@ export class JobsService {
     return { logs };
   }
 
-  /**
-   * Stream execution logs for a specific attempt (SSE)
-   *
-   * Polls for new logs every second and emits them as SSE events.
-   * Emits 'complete' or 'error' event when the attempt finishes.
-   */
+  // ── SSE log streaming (delegated) ──────────────────────────────────
+  // Implementations live in JobLogsService; these delegates keep the
+  // public surface unchanged for controllers.
+
   streamAttemptLogs(jobId: string, attemptNum: number): Observable<MessageEvent> {
-    let lastSequence = 0;
-    let isComplete = false;
-
-    return interval(1000).pipe(
-      // Fetch new logs and attempt status
-      switchMap(() =>
-        from(
-          (async () => {
-            // Find the attempt by number
-            const attempts = await this.jobs.listAttempts(jobId);
-            const attempt = attempts.find(a => a.attempt_number === attemptNum);
-            if (!attempt) {
-              throw new NotFoundException(`Attempt ${attemptNum} not found for job ${jobId}`);
-            }
-
-            // Get logs since lastSequence
-            const executionLogs = await this.logs.listLogs(attempt.id, lastSequence);
-
-            return { logs: executionLogs, attempt };
-          })()
-        )
-      ),
-      // Emit log events and check completion
-      concatMap(({ logs, attempt }) => {
-        const events: MessageEvent[] = [];
-
-        // Emit each new log as a 'log' event
-        for (const log of logs) {
-          const content = log.content as Record<string, unknown>;
-          const logType = log.type;
-          lastSequence = log.seq;
-
-          events.push({
-            type: 'log',
-            data: {
-              sequence: log.seq,
-              timestamp: (content.timestamp as string) || log.created_at.toISOString(),
-              type: logType,
-              line: content,
-              text: renderLogText({ type: logType, line: content }),
-            },
-          });
-        }
-
-        // Check if attempt has finished
-        if (attempt.status === 'succeeded' || attempt.status === 'failed' || attempt.status === 'cancelled') {
-          isComplete = true;
-
-          if (attempt.status === 'succeeded') {
-            events.push({
-              type: 'complete',
-              data: {
-                status: 'succeeded',
-                exitCode: attempt.exit_code ?? 0,
-                resultText: attempt.result_text ?? null,
-              },
-            });
-          } else {
-            events.push({
-              type: 'error',
-              data: {
-                status: attempt.status,
-                exitCode: attempt.exit_code ?? 1,
-                errorMessage: attempt.error_message ?? null,
-              },
-            });
-          }
-        }
-
-        return from(events);
-      }),
-      // Keep the stream alive until complete
-      takeWhile(() => !isComplete, true),
-      share()
-    );
+    return this.jobLogsService.streamAttemptLogs(jobId, attemptNum);
   }
 
-  /**
-   * Stream execution logs for the current/latest attempt of a job (SSE)
-   *
-   * Convenience endpoint that finds the latest attempt and streams its logs.
-   */
   streamJobLogs(jobId: string): Observable<MessageEvent> {
-    // We need to find the current attempt number first
-    // Then delegate to streamAttemptLogs
-    let attemptNumResolved = false;
-    let resolvedAttemptNum = 0;
-    let lastSequence = 0;
-    let isComplete = false;
-
-    return interval(1000).pipe(
-      // Fetch new logs and attempt status
-      switchMap(() =>
-        from(
-          (async () => {
-            // Get attempts to find the current one
-            const attempts = await this.jobs.listAttempts(jobId);
-            if (attempts.length === 0) {
-              throw new NotFoundException(`No attempts found for job ${jobId}`);
-            }
-
-            // Use the latest attempt (first in list, sorted by attempt_number desc)
-            const attempt = attempts[0];
-            resolvedAttemptNum = attempt.attempt_number;
-            attemptNumResolved = true;
-
-            // Get logs since lastSequence
-            const executionLogs = await this.logs.listLogs(attempt.id, lastSequence);
-
-            return { logs: executionLogs, attempt };
-          })()
-        )
-      ),
-      // Emit log events and check completion
-      concatMap(({ logs, attempt }) => {
-        const events: MessageEvent[] = [];
-
-        // Emit each new log as a 'log' event
-        for (const log of logs) {
-          const content = log.content as Record<string, unknown>;
-          const logType = log.type;
-          lastSequence = log.seq;
-
-          events.push({
-            type: 'log',
-            data: {
-              sequence: log.seq,
-              timestamp: (content.timestamp as string) || log.created_at.toISOString(),
-              type: logType,
-              line: content,
-              text: renderLogText({ type: logType, line: content }),
-            },
-          });
-        }
-
-        // Check if attempt has finished
-        if (attempt.status === 'succeeded' || attempt.status === 'failed' || attempt.status === 'cancelled') {
-          isComplete = true;
-
-          if (attempt.status === 'succeeded') {
-            events.push({
-              type: 'complete',
-              data: {
-                status: 'succeeded',
-                exitCode: attempt.exit_code ?? 0,
-                resultText: attempt.result_text ?? null,
-              },
-            });
-          } else {
-            events.push({
-              type: 'error',
-              data: {
-                status: attempt.status,
-                exitCode: attempt.exit_code ?? 1,
-                errorMessage: attempt.error_message ?? null,
-              },
-            });
-          }
-        }
-
-        return from(events);
-      }),
-      // Keep the stream alive until complete
-      takeWhile(() => !isComplete, true),
-      share()
-    );
+    return this.jobLogsService.streamJobLogs(jobId);
   }
 
-  /**
-   * Get job result (from latest or specific attempt)
-   */
+  // ── Results, receipts, attempt comparison (delegated) ──────────────
+  // Implementations live in JobReceiptsService; these delegates keep the
+  // public surface unchanged for controllers.
+
   async getJobResult(
     jobId: string,
     attemptNumber?: number,
     format?: 'full' | 'text',
   ): Promise<JobResultResponse> {
-    // 1. Find the job
-    const job = await this.jobs.findById(jobId);
-    if (!job) {
-      throw new NotFoundException(`Job not found: ${jobId}`);
-    }
-
-    // 2. Get the attempt (latest or specified)
-    const attempts = await this.jobs.listAttempts(jobId);
-    if (attempts.length === 0) {
-      throw new NotFoundException('No attempts found for this job');
-    }
-
-    const attempt = attemptNumber
-      ? attempts.find(a => a.attempt_number === attemptNumber)
-      : attempts[0]; // listAttempts returns descending by attempt_number, so [0] is latest
-
-    if (!attempt) {
-      throw new NotFoundException(`Attempt ${attemptNumber} not found for job ${jobId}`);
-    }
-
-    // 3. Check if still running
-    if (attempt.status === 'running' || attempt.status === 'pending') {
-      throw new ConflictException({
-        message: 'Job is still running',
-        phase: job.phase,
-        status: attempt.status,
-      });
-    }
-
-    // 4. Get result data
-    const result = await this.jobs.getAttemptResult(attempt.id);
-
-    // 5. Return based on format
-    if (format === 'text') {
-      return { resultText: result?.resultText ?? null };
-    }
-
-    return {
-      jobId,
-      attemptId: attempt.id,
-      attemptNumber: attempt.attempt_number,
-      status: attempt.status,
-      exitCode: result?.exitCode ?? null,
-      resultText: result?.resultText ?? null,
-      resultJson: result?.resultJson ?? null,
-      durationMs: result?.durationMs ?? null,
-      tokenUsage: result ? {
-        input: result.tokenInput,
-        output: result.tokenOutput,
-      } : null,
-      errorMessage: result?.errorMessage ?? null,
-      git: attempt.git_json ?? undefined,
-    };
+    return this.jobReceiptsService.getJobResult(jobId, attemptNumber, format);
   }
 
   async getJobReceipt(jobId: string, attemptNumber?: number): Promise<Record<string, unknown>> {
-    const job = await this.jobs.findById(jobId);
-    if (!job) {
-      throw new NotFoundException(`Job not found: ${jobId}`);
-    }
-
-    const [row] = attemptNumber
-      ? await this.db<{ receipt_json: Record<string, unknown> | null }[]>`
-          SELECT receipt_json
-          FROM job_attempts
-          WHERE job_id = ${jobId} AND attempt_number = ${attemptNumber}
-          LIMIT 1
-        `
-      : await this.db<{ receipt_json: Record<string, unknown> | null }[]>`
-          SELECT receipt_json
-          FROM job_attempts
-          WHERE job_id = ${jobId}
-          ORDER BY attempt_number DESC
-          LIMIT 1
-        `;
-
-    if (!row) {
-      throw new NotFoundException(`Attempt not found for job ${jobId}`);
-    }
-    if (!row.receipt_json) {
-      throw new NotFoundException(`Receipt not found for job ${jobId}`);
-    }
-
-    return row.receipt_json;
+    return this.jobReceiptsService.getJobReceipt(jobId, attemptNumber);
   }
 
   async getAttemptReceipt(jobId: string, attemptId: string): Promise<Record<string, unknown>> {
-    const job = await this.jobs.findById(jobId);
-    if (!job) {
-      throw new NotFoundException(`Job not found: ${jobId}`);
-    }
-
-    const [row] = await this.db<{ receipt_json: Record<string, unknown> | null }[]>`
-      SELECT receipt_json
-      FROM job_attempts
-      WHERE job_id = ${jobId} AND id = ${attemptId}::uuid
-      LIMIT 1
-    `;
-
-    if (!row) {
-      throw new NotFoundException(`Attempt not found: ${attemptId}`);
-    }
-    if (!row.receipt_json) {
-      throw new NotFoundException(`Receipt not found for attempt ${attemptId}`);
-    }
-
-    return row.receipt_json;
+    return this.jobReceiptsService.getAttemptReceipt(jobId, attemptId);
   }
 
   async compareAttempts(
@@ -1750,36 +1493,7 @@ export class JobsService {
     attemptB: number,
     options?: { include_receipt?: boolean },
   ): Promise<JobCompareResponse> {
-    if (!Number.isFinite(attemptA) || !Number.isFinite(attemptB)) {
-      throw new BadRequestException('Attempt numbers must be integers');
-    }
-    const a = Math.max(1, Math.floor(attemptA));
-    const b = Math.max(1, Math.floor(attemptB));
-    if (a === b) {
-      throw new BadRequestException('Attempt numbers must be different');
-    }
-
-    const job = await this.jobs.findById(jobId);
-    if (!job) {
-      throw new NotFoundException(`Job not found: ${jobId}`);
-    }
-
-    const result = await this.spend.compareAttempts(jobId, a, b);
-    const includeReceipt = options?.include_receipt ?? false;
-
-    return {
-      job_id: jobId,
-      attempts: result.attempts.map((entry) => ({
-        attempt_number: entry.attempt_number,
-        status: entry.status,
-        started_at: entry.started_at,
-        ended_at: entry.ended_at,
-        base_total_usd: entry.base_total_usd,
-        billed_total: entry.billed_total,
-        billed_currency: entry.billed_currency,
-        ...(includeReceipt ? { receipt: entry.receipt_json } : {}),
-      })),
-    };
+    return this.jobReceiptsService.compareAttempts(jobId, attemptA, attemptB, options);
   }
 
   // --------------------------------------------------------------------------
@@ -1935,307 +1649,22 @@ export class JobsService {
   }
 
   // --------------------------------------------------------------------------
-  // Batch operations
+  // Batch operations (delegated)
   // --------------------------------------------------------------------------
+  // Implementations live in JobBatchService; these delegates keep the
+  // public surface unchanged for controllers.
 
-  /**
-   * Validate a batch job graph without creating any jobs.
-   *
-   * Checks for duplicate keys, unknown parent/dependency references,
-   * cycles in the dependency graph, and max nesting depth.
-   */
-  async validateBatch(_projectId: string, request: CreateBatchRequest): Promise<BatchValidateResponse> {
-    const errors: BatchValidationError[] = [];
-
-    // 1. Check for duplicate keys
-    const keys = request.nodes.map(n => n.key);
-    const seen = new Set<string>();
-    for (const k of keys) {
-      if (seen.has(k)) {
-        errors.push({ code: 'batch_node_duplicate', node_key: k, message: `Duplicate node key: ${k}` });
-      }
-      seen.add(k);
-    }
-
-    // 2. Verify parent references exist in nodes
-    for (const node of request.nodes) {
-      if (node.parent && !seen.has(node.parent)) {
-        errors.push({
-          code: 'batch_node_unknown',
-          node_key: node.key,
-          field: 'parent',
-          message: `Unknown parent key: ${node.parent}`,
-          hint: `Use one of: ${keys.join(', ')}`,
-        });
-      }
-    }
-
-    // 3. Verify dependency references
-    for (const dep of request.dependencies) {
-      if (!seen.has(dep.job)) {
-        errors.push({
-          code: 'batch_node_unknown',
-          field: 'dependencies',
-          message: `Unknown job key: ${dep.job}`,
-        });
-      }
-      for (const d of dep.depends_on) {
-        if (!seen.has(d)) {
-          errors.push({
-            code: 'batch_node_unknown',
-            node_key: dep.job,
-            field: 'dependencies',
-            message: `Unknown dependency key: ${d}`,
-            hint: `Use one of: ${keys.join(', ')}`,
-          });
-        }
-      }
-    }
-
-    // 4. Check for cycles (only if no reference errors above)
-    if (errors.length === 0) {
-      const graph = new Map<string, string[]>();
-      for (const node of request.nodes) graph.set(node.key, []);
-      for (const dep of request.dependencies) {
-        graph.get(dep.job)?.push(...dep.depends_on);
-      }
-      // Parent edges: child implicitly depends on parent
-      for (const node of request.nodes) {
-        if (node.parent) graph.get(node.key)?.push(node.parent);
-      }
-
-      if (hasCycle(graph)) {
-        errors.push({ code: 'batch_graph_cycle', message: 'Dependency graph contains a cycle' });
-      }
-    }
-
-    // 5. Check max nesting depth (max 3 levels of parent nesting)
-    if (errors.length === 0) {
-      const parentMap = new Map<string, string | undefined>();
-      for (const node of request.nodes) {
-        parentMap.set(node.key, node.parent);
-      }
-      for (const node of request.nodes) {
-        let depth = 0;
-        let cursor: string | undefined = node.parent;
-        while (cursor) {
-          depth++;
-          if (depth > 3) {
-            errors.push({
-              code: 'batch_depth_exceeded',
-              node_key: node.key,
-              message: `Node "${node.key}" exceeds max nesting depth of 3`,
-            });
-            break;
-          }
-          cursor = parentMap.get(cursor);
-        }
-      }
-    }
-
-    return { valid: errors.length === 0, errors };
+  async validateBatch(projectId: string, request: CreateBatchRequest): Promise<BatchValidateResponse> {
+    return this.jobBatchService.validateBatch(projectId, request);
   }
 
-  /**
-   * Create an entire job tree atomically: validate, create batch record,
-   * create jobs in topological order, wire parent/dependency edges.
-   */
   async createBatch(
     projectId: string,
     request: CreateBatchRequest,
     correlationId?: string,
     userId?: string,
   ): Promise<CreateBatchResponse> {
-    // 1. Validate the graph
-    const validation = await this.validateBatch(projectId, request);
-    if (!validation.valid) {
-      throw new BadRequestException({
-        error: { code: 'batch_validation_failed', errors: validation.errors },
-      });
-    }
-
-    // 2. Resolve project
-    const resolvedProjectId = await this.resolveProject(projectId);
-    const project = await this.projects.findById(resolvedProjectId);
-    if (!project) {
-      throw new NotFoundException(`Project ${projectId} not found`);
-    }
-
-    // 3. Check idempotency
-    if (request.idempotency_key) {
-      const existing = await this.batchJobs.findByIdempotencyKey(resolvedProjectId, request.idempotency_key);
-      if (existing) {
-        return this.reconstructBatchResult(existing.id, request);
-      }
-    }
-
-    // 4. Create batch record
-    const batchId = generateBatchId();
-    await this.batchJobs.create({
-      id: batchId,
-      project_id: resolvedProjectId,
-      idempotency_key: request.idempotency_key ?? null,
-      node_count: request.nodes.length,
-      created_by: correlationId ?? null,
-    });
-
-    // 5. Topological sort - create parents before children, dependencies before dependents
-    const sorted = topologicalSort(request);
-
-    // 6. Create jobs in order, collecting key -> jobId mapping
-    const keyToJobId = new Map<string, string>();
-    const keyToPhase = new Map<string, string>();
-
-    for (const nodeKey of sorted) {
-      const node = request.nodes.find(n => n.key === nodeKey)!;
-
-      // Resolve parent ID from the key mapping
-      const parentJobId = node.parent ? keyToJobId.get(node.parent) ?? null : null;
-
-      // Generate job ID
-      const { id: jobId, projectId: resolvedId } = await this.jobs.generateJobId(
-        resolvedProjectId,
-        parentJobId ?? undefined,
-      );
-
-      // Calculate depth
-      const depth = parentJobId ? parentJobId.split('.').length : 0;
-
-      // Determine initial phase: if this node has dependencies, start as 'backlog'
-      const hasDeps = request.dependencies.some(d => d.job === nodeKey && d.depends_on.length > 0);
-      const phase = hasDeps ? 'backlog' : 'ready';
-
-      // Auto-generate title from description if not provided
-      const title = node.title;
-
-      // Create the job
-      await this.jobs.create({
-        id: jobId,
-        project_id: resolvedId,
-        parent_id: parentJobId,
-        depth,
-        title,
-        description: node.description ?? title,
-        issue_type: node.type === 'epic' ? 'epic' : 'task',
-        labels: [],
-        phase,
-        priority: 2,
-        assignee: null,
-        review_required: 'none',
-        review_status: null,
-        reviewer: null,
-        defer_until: null,
-        due_at: null,
-        hints: node.hints as JobHints ?? {},
-        harness: null,
-        harness_profile: null,
-        harness_options: null,
-        harness_profile_override: null,
-        env_overrides: null,
-        token_scope: null,
-        token_permissions: null,
-        harness_profile_source: null,
-        harness_profile_hash: null,
-        git_json: node.git ? node.git as unknown as JobGitConfig : null,
-        resolved_git_json: null,
-        workspace_json: null,
-        blocked_on_gates: [],
-        env_name: null,
-        execution_mode: 'persistent',
-        execution_type: 'agent',
-        run_id: null,
-        step_name: null,
-        action_type: null,
-        action_input: null,
-        script_command: null,
-        script_timeout_seconds: null,
-        target: node.target ?? null,
-        resource_refs: node.resource_refs ?? [],
-        content_hash: null,
-        actor_user_id: userId ?? null,
-        failure_disposition: null,
-        closed_at: null,
-        close_reason: null,
-      });
-
-      // Tag the job with batch metadata
-      await this.db`
-        UPDATE jobs
-        SET batch_id = ${batchId}, batch_key = ${node.key}
-        WHERE id = ${jobId}
-      `;
-
-      keyToJobId.set(nodeKey, jobId);
-      keyToPhase.set(nodeKey, phase);
-    }
-
-    // 7. Wire explicit dependencies
-    const depsByKey = new Map<string, string[]>();
-    for (const dep of request.dependencies) {
-      for (const dependsOnKey of dep.depends_on) {
-        const fromJobId = keyToJobId.get(dep.job)!;
-        const toJobId = keyToJobId.get(dependsOnKey)!;
-        await this.jobs.addDependency(fromJobId, toJobId, 'blocks');
-
-        if (!depsByKey.has(dep.job)) depsByKey.set(dep.job, []);
-        depsByKey.get(dep.job)!.push(dependsOnKey);
-      }
-    }
-
-    // 8. Build response
-    const jobs: Record<string, { job_id: string; phase: string; blocked_by?: string[] }> = {};
-    for (const node of request.nodes) {
-      const blockedBy = depsByKey.get(node.key);
-      jobs[node.key] = {
-        job_id: keyToJobId.get(node.key)!,
-        phase: keyToPhase.get(node.key)!,
-        ...(blockedBy && blockedBy.length > 0 ? { blocked_by: blockedBy } : {}),
-      };
-    }
-
-    return {
-      batch_id: batchId,
-      idempotency_key: request.idempotency_key ?? null,
-      jobs,
-    };
-  }
-
-  /**
-   * Reconstruct a batch result from existing jobs (for idempotency).
-   */
-  private async reconstructBatchResult(
-    batchId: string,
-    request: CreateBatchRequest,
-  ): Promise<CreateBatchResponse> {
-    const batchJobs = await this.db<Array<{ id: string; batch_key: string; phase: string }>>`
-      SELECT id, batch_key, phase FROM jobs
-      WHERE batch_id = ${batchId}
-      ORDER BY created_at ASC
-    `;
-
-    const depsByKey = new Map<string, string[]>();
-    for (const dep of request.dependencies) {
-      depsByKey.set(dep.job, dep.depends_on);
-    }
-
-    const jobs: Record<string, { job_id: string; phase: string; blocked_by?: string[] }> = {};
-    for (const bj of batchJobs) {
-      if (!bj.batch_key) continue;
-      const blockedBy = depsByKey.get(bj.batch_key);
-      jobs[bj.batch_key] = {
-        job_id: bj.id,
-        phase: bj.phase,
-        ...(blockedBy && blockedBy.length > 0 ? { blocked_by: blockedBy } : {}),
-      };
-    }
-
-    const batch = await this.batchJobs.findById(batchId);
-
-    return {
-      batch_id: batchId,
-      idempotency_key: batch?.idempotency_key ?? null,
-      jobs,
-    };
+    return this.jobBatchService.createBatch(projectId, request, correlationId, userId);
   }
 
   // --------------------------------------------------------------------------
@@ -2345,103 +1774,4 @@ function sanitizeJobText(value: string | null): string | null {
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, (char) => {
     return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
   });
-}
-
-// ============================================================================
-// Batch Graph Helpers
-// ============================================================================
-
-/**
- * Detect whether a directed graph contains a cycle using iterative DFS.
- *
- * Each node can be in one of three states:
- *   0 = unvisited, 1 = in-progress (on current DFS stack), 2 = finished
- *
- * A back-edge to an in-progress node means a cycle exists.
- */
-function hasCycle(graph: Map<string, string[]>): boolean {
-  const state = new Map<string, number>(); // 0=unvisited, 1=in-progress, 2=done
-  for (const key of graph.keys()) state.set(key, 0);
-
-  for (const start of graph.keys()) {
-    if (state.get(start) !== 0) continue;
-
-    // Iterative DFS using an explicit stack
-    const stack: Array<{ node: string; idx: number }> = [{ node: start, idx: 0 }];
-    state.set(start, 1);
-
-    while (stack.length > 0) {
-      const top = stack[stack.length - 1];
-      const neighbors = graph.get(top.node) ?? [];
-
-      if (top.idx < neighbors.length) {
-        const next = neighbors[top.idx];
-        top.idx++;
-
-        const nextState = state.get(next) ?? 0;
-        if (nextState === 1) return true; // back-edge -> cycle
-        if (nextState === 0) {
-          state.set(next, 1);
-          stack.push({ node: next, idx: 0 });
-        }
-      } else {
-        state.set(top.node, 2);
-        stack.pop();
-      }
-    }
-  }
-
-  return false;
-}
-
-/**
- * Topological sort of batch nodes.
- *
- * Produces an ordering where every parent appears before its children
- * and every dependency appears before the nodes that depend on it.
- * Uses Kahn's algorithm (BFS-based) for clarity.
- */
-function topologicalSort(request: CreateBatchRequest): string[] {
-  const inDegree = new Map<string, number>();
-  const adjacency = new Map<string, string[]>(); // prerequisite -> dependents
-
-  for (const node of request.nodes) {
-    inDegree.set(node.key, 0);
-    adjacency.set(node.key, []);
-  }
-
-  // Parent edges: parent must be created before child
-  for (const node of request.nodes) {
-    if (node.parent) {
-      adjacency.get(node.parent)!.push(node.key);
-      inDegree.set(node.key, (inDegree.get(node.key) ?? 0) + 1);
-    }
-  }
-
-  // Dependency edges: depends_on must be created before job
-  for (const dep of request.dependencies) {
-    for (const dependsOn of dep.depends_on) {
-      adjacency.get(dependsOn)!.push(dep.job);
-      inDegree.set(dep.job, (inDegree.get(dep.job) ?? 0) + 1);
-    }
-  }
-
-  // Kahn's algorithm
-  const queue: string[] = [];
-  for (const [key, degree] of inDegree) {
-    if (degree === 0) queue.push(key);
-  }
-
-  const sorted: string[] = [];
-  while (queue.length > 0) {
-    const node = queue.shift()!;
-    sorted.push(node);
-    for (const neighbor of adjacency.get(node) ?? []) {
-      const newDegree = (inDegree.get(neighbor) ?? 1) - 1;
-      inDegree.set(neighbor, newDegree);
-      if (newDegree === 0) queue.push(neighbor);
-    }
-  }
-
-  return sorted;
 }
