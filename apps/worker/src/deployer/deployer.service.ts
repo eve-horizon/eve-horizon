@@ -1,6 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as k8s from '@kubernetes/client-node';
-import * as crypto from 'crypto';
 import type { Db } from '@eve/db';
 import {
   environmentQueries,
@@ -18,36 +17,23 @@ import yaml from 'yaml';
 import {
   loadConfig,
   type Healthcheck,
-  type ManagedDbSslMode,
   type ManagedDbTrustInput,
   type Manifest,
   type Service,
   getServicesFromManifest,
-  getManagedDbServices,
-  getManagedDbConfig,
   ManifestSchema,
   redactLogData,
-  generateManagedDbName,
-  generateManagedDbUser,
-  generateManagedDbTenantId,
-  selectBestInstance,
-  isEveRegistry,
-  getRegistryConfig,
   resolveProjectSecrets,
-  resolveBackupConfig,
   mintServiceToken,
   mintAppLinkToken,
   getServicePermissions,
   DEFAULT_SERVICE_PERMISSIONS,
-  getManifestCustomDomains,
   isPlatformDomainHostname,
   generateCustomDomainId,
-  resolveManagedDbTrustBundle,
   getServiceObjectStoreBuckets,
   getServiceObjectStoreIsolation,
   generateStorageBucketId,
   requiresStableEgress,
-  normalizeManagedDbExtensions,
   DEFAULT_INGRESS_MAX_BODY_SIZE,
   DEFAULT_INGRESS_TIMEOUT,
   parseIngressDuration,
@@ -56,7 +42,6 @@ import {
   combineK8sName,
   appendK8sSuffix,
   deriveNamespace,
-  waitFor,
   type ObjectStoreBucket,
   type ObjectStoreIsolation,
   type TcpIngressConfig,
@@ -64,7 +49,15 @@ import {
 import * as dns from 'node:dns/promises';
 import * as net from 'node:net';
 import { K8sService } from './k8s.service';
+import { DeploymentReadiness } from './deployment-readiness';
+import { ImageResolver } from './image-resolver';
+import {
+  ManagedDbProvisioner,
+  type ManagedDbTrustContext,
+  type ResolvedManagedDbContext,
+} from './managed-db-provisioner';
 import { BucketProvisioner } from './bucket-provisioner';
+import { ObjectStoreProvisioner, type EnvObjectStorePlan } from './object-store-provisioner';
 import {
   createAppCredentialProvisioners,
   type AppCredentialProvisioner,
@@ -202,33 +195,6 @@ type ServiceStorageConfig = {
   volumeName: string;
 };
 
-interface ResolvedManagedDbContext {
-  managedValues: Map<string, string>;
-  trustInputs: ManagedDbTrustInput[];
-}
-
-interface ManagedDbTrustContext {
-  enabled: boolean;
-  checksum?: string;
-  envEntries: k8s.V1EnvVar[];
-  volumes: k8s.V1Volume[];
-  volumeMounts: k8s.V1VolumeMount[];
-}
-
-interface ObjectStoreDesiredBucket {
-  serviceName: string;
-  bucket: ObjectStoreBucket;
-  physicalName: string;
-  envKey: string;
-  requestedIsolation: ObjectStoreIsolation;
-}
-
-interface EnvObjectStorePlan {
-  scope: AppObjectStoreScope;
-  binding: AppObjectStoreBinding | null;
-  bucketsByService: Map<string, ObjectStoreDesiredBucket[]>;
-}
-
 /**
  * Result of `planStableEgressInjection`. See the method for semantics.
  */
@@ -254,11 +220,6 @@ type TcpIngressPlan =
       envEntries: k8s.V1EnvVar[];
     };
 
-const MANAGED_DB_TRUST_CONFIG_MAP_NAME = 'eve-db-trust';
-const MANAGED_DB_TRUST_VOLUME_NAME = 'eve-db-trust';
-const MANAGED_DB_TRUST_MOUNT_PATH = '/etc/eve/trust';
-const MANAGED_DB_TRUST_BUNDLE_PATH = `${MANAGED_DB_TRUST_MOUNT_PATH}/ca-bundle.pem`;
-
 /**
  * DeployerService - Handles environment deployments to K8s
  */
@@ -270,7 +231,6 @@ export class DeployerService {
   private projects: ReturnType<typeof projectQueries>;
   private manifests: ReturnType<typeof projectManifestQueries>;
   private orgs: ReturnType<typeof orgQueries>;
-  private managedDb: ReturnType<typeof managedDbQueries>;
   private ingressAliases: ReturnType<typeof ingressAliasQueries>;
   private customDomains: ReturnType<typeof customDomainQueries>;
   private appLinkSubscriptions: ReturnType<typeof appLinkSubscriptionQueries>;
@@ -279,17 +239,30 @@ export class DeployerService {
   private readonly bucketProvisioner = new BucketProvisioner();
   private appCredentialProvisioners: AppCredentialProvisioner[] =
     createAppCredentialProvisioners(this.bucketProvisioner);
+  private readonly deploymentReadiness: DeploymentReadiness;
+  private readonly imageResolver: ImageResolver;
+  private readonly managedDbProvisioner: ManagedDbProvisioner;
+  private readonly objectStoreProvisioner: ObjectStoreProvisioner;
 
   constructor(
     @Inject('DB') private readonly db: Db,
     private readonly k8sService: K8sService
   ) {
+    this.deploymentReadiness = new DeploymentReadiness(k8sService, this.logger);
+    this.imageResolver = new ImageResolver(k8sService, this.logger);
+    this.managedDbProvisioner = new ManagedDbProvisioner(managedDbQueries(db), k8sService, this.logger);
+    this.objectStoreProvisioner = new ObjectStoreProvisioner(
+      db,
+      this.bucketProvisioner,
+      this.appCredentialProvisioners,
+      this.logger,
+      (service) => this.resolveXeve(service),
+    );
     this.environments = environmentQueries(db);
     this.releases = releaseQueries(db);
     this.projects = projectQueries(db);
     this.manifests = projectManifestQueries(db);
     this.orgs = orgQueries(db);
-    this.managedDb = managedDbQueries(db);
     this.ingressAliases = ingressAliasQueries(db);
     this.customDomains = customDomainQueries(db);
     this.appLinkSubscriptions = appLinkSubscriptionQueries(db);
@@ -528,7 +501,7 @@ export class DeployerService {
       });
 
       const k8sStatus = Object.keys(renderResult.services).length > 0
-        ? await this.waitForDeploymentReadiness(namespace, readinessTimeoutMs)
+        ? await this.deploymentReadiness.waitForDeploymentReadiness(namespace, readinessTimeoutMs)
         : await this.k8sService.getDeploymentStatus(namespace);
 
       return {
@@ -766,7 +739,7 @@ export class DeployerService {
       envName: params.envName,
     });
     const managedTrust = await this.ensureManagedDbTrustStore(namespace, managedDbContext.trustInputs);
-    const objectStorePlan = await this.prepareObjectStorePlan({
+    const objectStorePlan = await this.objectStoreProvisioner.prepareObjectStorePlan({
       services: mergedServices,
       envWorkers,
       scope: {
@@ -838,7 +811,7 @@ export class DeployerService {
       managedTrust.volumeMounts,
     );
 
-    const registryHost = this.resolveRegistryHost(manifest);
+    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const imageDigest = this.resolveServiceDigest(
       params.serviceName,
       service,
@@ -848,7 +821,7 @@ export class DeployerService {
     // Auto-derive image from service key when build config exists but image is not explicit
     const derivedImage = service.image || (service.build ? params.serviceName : undefined);
     const prefixedImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
-    const resolvedImage = this.resolveImageRef(
+    const resolvedImage = this.imageResolver.resolveImageRef(
       prefixedImage,
       imageDigest,
       params.imageTag,
@@ -879,7 +852,7 @@ export class DeployerService {
           },
           spec: {
             restartPolicy: 'Never',
-            serviceAccountName: this.resolveObjectStoreServiceAccountName(objectStorePlan, params.serviceName),
+            serviceAccountName: this.objectStoreProvisioner.resolveObjectStoreServiceAccountName(objectStorePlan, params.serviceName),
             imagePullSecrets: imagePullSecret ? [{ name: imagePullSecret }] : undefined,
             volumes: allVolumes.length > 0 ? allVolumes : undefined,
             containers: [
@@ -962,7 +935,7 @@ export class DeployerService {
   async deleteEnvironment(envId: string): Promise<void> {
     this.logger.log(`Deleting environment ${envId}`);
     const { namespace, environment, project, org } = await this.resolveEnvironmentScope(envId);
-    await this.removeObjectStoreBinding({
+    await this.objectStoreProvisioner.removeObjectStoreBinding({
       orgId: project.org_id,
       projectId: project.id,
       envName: environment.name,
@@ -1025,7 +998,7 @@ export class DeployerService {
     const managedTrust = await this.ensureManagedDbTrustStore(params.namespace, managedDbContext.trustInputs);
 
     const deployableServices = this.filterDeployableServices(mergedServices, envWorkers);
-    const objectStorePlan = await this.prepareObjectStorePlan({
+    const objectStorePlan = await this.objectStoreProvisioner.prepareObjectStorePlan({
       services: mergedServices,
       envWorkers,
       scope: {
@@ -1037,7 +1010,7 @@ export class DeployerService {
         namespace: params.namespace,
       },
     });
-    const registryHost = this.resolveRegistryHost(manifest);
+    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const config = loadConfig();
     const hasTcpIngress = Object.values(deployableServices).some((service) => this.resolveTcpIngressConfig(service));
     if (hasTcpIngress) {
@@ -1070,7 +1043,7 @@ export class DeployerService {
     const desiredTcpIngressServices: string[] = [];
     const envSlug = toK8sName(params.envName, 'environment');
 
-    const serviceAccount = this.buildObjectStoreServiceAccount(objectStorePlan);
+    const serviceAccount = this.objectStoreProvisioner.buildObjectStoreServiceAccount(objectStorePlan);
     if (serviceAccount) {
       documents.push(yaml.stringify(serviceAccount));
     }
@@ -1095,7 +1068,7 @@ export class DeployerService {
         deployableServices as Record<string, Service>,
         params.imageDigests,
       );
-      const resolvedImage = this.resolveImageRef(baseImage, imageDigest, params.imageTag);
+      const resolvedImage = this.imageResolver.resolveImageRef(baseImage, imageDigest, params.imageTag);
       const image = await this.normalizeImageForKubelet(resolvedImage);
       if (!image || typeof image !== 'string') {
         throw new Error(`Service ${name} missing image`);
@@ -1244,7 +1217,7 @@ export class DeployerService {
             },
             spec: {
               imagePullSecrets: params.imagePullSecret ? [{ name: params.imagePullSecret }] : undefined,
-              serviceAccountName: this.resolveObjectStoreServiceAccountName(objectStorePlan, name),
+              serviceAccountName: this.objectStoreProvisioner.resolveObjectStoreServiceAccountName(objectStorePlan, name),
               terminationGracePeriodSeconds,
               volumes: allVolumes.length > 0 ? allVolumes : undefined,
               containers: [
@@ -1866,12 +1839,7 @@ export class DeployerService {
     };
   }
 
-  /**
-   * Resolve managed DB tenants for all managed_db services in the manifest.
-   * Creates tenants if they don't exist, polls until ready.
-   * Returns interpolation values plus trust inputs for provider CA resolution.
-   */
-  private async resolveManagedDbTenants(params: {
+  private resolveManagedDbTenants(params: {
     manifest: Manifest;
     envId: string;
     orgId: string;
@@ -1880,229 +1848,14 @@ export class DeployerService {
     projectSlug: string;
     envName: string;
   }): Promise<ResolvedManagedDbContext> {
-    const managedValues = new Map<string, string>();
-    const trustInputs: ManagedDbTrustInput[] = [];
-    const managedServices = getManagedDbServices(params.manifest);
-
-    if (Object.keys(managedServices).length === 0) {
-      return { managedValues, trustInputs };
-    }
-
-    for (const [serviceName, service] of Object.entries(managedServices)) {
-      const config = getManagedDbConfig(service);
-      const dbClass = config?.class ?? 'db.p1';
-      const desiredExtensions = normalizeManagedDbExtensions(config?.extensions ?? []);
-
-      // Check for existing tenant
-      let tenant = await this.managedDb.findTenantByEnv(params.envId, serviceName);
-
-      if (tenant?.status === 'failed') {
-        const token = crypto.randomUUID();
-        const locked = await this.managedDb.acquireOperationLock(tenant.id, token);
-        if (locked) {
-          await this.managedDb.transitionStatus(tenant.id, token, 'provisioning', {
-            error: {
-              code: 'retry',
-              message: `Retrying managed DB tenant after previous provisioning failure: ${tenant.last_error_message ?? 'unknown'}`,
-            },
-          });
-          tenant = await this.managedDb.findTenantByEnv(params.envId, serviceName);
-          this.logger.warn(
-            `Retrying managed DB tenant ${tenant?.id ?? ''} for ${serviceName} in env ${params.envName} ` +
-            `after previous failure`,
-          );
-        } else {
-          this.logger.warn(
-            `Managed DB tenant ${tenant.id} for ${serviceName} in env ${params.envName} is locked ` +
-            `while failed; continuing to poll current state`,
-          );
-        }
-      }
-
-      if (!tenant) {
-        // Find best instance via placement
-        const instancesWithCounts = await this.managedDb.listActiveInstancesWithCounts();
-        const tenantCounts = new Map<string, number>();
-        for (const inst of instancesWithCounts) {
-          tenantCounts.set(inst.id, inst.tenant_count);
-        }
-
-        const placement = selectBestInstance({
-          dbClass,
-          instances: instancesWithCounts,
-          tenantCounts,
-        });
-
-        if (!placement) {
-          throw new Error(
-            `No available managed DB instance for class "${dbClass}". ` +
-            `Ensure a local or cloud instance is registered and available.`,
-          );
-        }
-
-        // Create tenant record
-        const dbName = generateManagedDbName(params.orgSlug, params.projectSlug, params.envName);
-        const dbUser = generateManagedDbUser(params.orgSlug, params.projectSlug, params.envName);
-
-        tenant = await this.managedDb.createTenant({
-          id: generateManagedDbTenantId(),
-          org_id: params.orgId,
-          project_id: params.projectId,
-          env_id: params.envId,
-          service_name: serviceName,
-          instance_id: placement.instanceId,
-          db_name: dbName,
-          db_user: dbUser,
-          class: dbClass,
-          desired_extensions: desiredExtensions,
-        });
-
-        this.logger.log(
-          `Created managed DB tenant ${tenant.id} for ${serviceName} ` +
-          `(db=${dbName}, instance=${placement.instanceId})`,
-        );
-      } else {
-        const synced = await this.managedDb.syncTenantDesiredExtensions(tenant.id, desiredExtensions);
-        tenant = synced ?? tenant;
-      }
-
-      const enabledExtensions = new Set(tenant.enabled_extensions ?? []);
-      const missingExtensions = desiredExtensions.filter((extension) => !enabledExtensions.has(extension));
-      if (missingExtensions.length > 0 && tenant.status === 'ready') {
-        const token = crypto.randomUUID();
-        const locked = await this.managedDb.acquireOperationLock(tenant.id, token);
-        if (locked) {
-          await this.managedDb.transitionStatus(tenant.id, token, 'modifying');
-          const refreshed = await this.managedDb.findTenantByEnv(params.envId, serviceName);
-          tenant = refreshed ?? tenant;
-          this.logger.log(
-            `Requested managed DB extension reconcile for tenant ${tenant.id}: ` +
-            missingExtensions.join(', '),
-          );
-        } else {
-          this.logger.warn(
-            `Managed DB tenant ${tenant.id} needs extension reconcile but is locked; ` +
-            `continuing to poll current state`,
-          );
-        }
-      }
-
-      // Poll until tenant is ready (max 60s, 2s interval)
-      if (tenant.status !== 'ready') {
-        const maxWait = 60_000;
-        const pollInterval = 2_000;
-        const start = Date.now();
-
-        while (Date.now() - start < maxWait) {
-          await new Promise(r => setTimeout(r, pollInterval));
-          const refreshed = await this.managedDb.findTenantByEnv(params.envId, serviceName);
-          if (!refreshed) {
-            throw new Error(`Managed DB tenant for ${serviceName} disappeared during provisioning`);
-          }
-          if (refreshed.status === 'ready') {
-            tenant = refreshed;
-            break;
-          }
-          if (refreshed.status === 'failed') {
-            throw new Error(
-              `Managed DB provisioning failed for ${serviceName}: ` +
-              `${refreshed.last_error_code}: ${refreshed.last_error_message}`,
-            );
-          }
-        }
-
-        if (tenant.status !== 'ready') {
-          throw new Error(
-            `Managed DB tenant for ${serviceName} did not reach ready state within ${maxWait / 1000}s ` +
-            `(current: ${tenant.status})`,
-          );
-        }
-      }
-
-      const missingAfterReady = desiredExtensions.filter(
-        (extension) => !(tenant.enabled_extensions ?? []).includes(extension),
-      );
-      if (missingAfterReady.length > 0) {
-        throw new Error(
-          `Managed DB tenant for ${serviceName} reached ready before requested extension(s) were enabled: ` +
-          missingAfterReady.join(', '),
-        );
-      }
-
-      // Sync backup config from manifest (or apply class-based defaults)
-      const backupConfig = resolveBackupConfig(dbClass, config?.backup);
-      await this.managedDb.syncTenantBackupConfig(tenant.id, backupConfig);
-      this.logger.log(
-        `Synced backup config for tenant ${tenant.id}: ` +
-        `schedule=${backupConfig.backup_schedule ?? 'none'}, ` +
-        `retention=${backupConfig.backup_retention ?? 'none'}, ` +
-        `snapshot_on_delete=${backupConfig.snapshot_on_delete}, ` +
-        `snapshot_on_reset=${backupConfig.snapshot_on_reset}`,
-      );
-
-      const instance = await this.managedDb.findInstanceById(tenant.instance_id);
-      if (!instance) {
-        throw new Error(`Managed DB instance ${tenant.instance_id} not found for tenant ${tenant.id}`);
-      }
-
-      trustInputs.push({
-        provider: instance.provider,
-        region: instance.region,
-      });
-
-      // Store connection URL for interpolation: ${managed.<serviceName>.url}
-      // The credential URL's sslmode is set by the reconciler (inherits from DATABASE_URL).
-      // The deployer must not overwrite it — "local" provider instances may be RDS on staging.
-      if (tenant.credential_secret_ref) {
-        managedValues.set(`${serviceName}.url`, tenant.credential_secret_ref);
-      }
-      managedValues.set(`${serviceName}.extensions`, desiredExtensions.join(','));
-    }
-
-    return { managedValues, trustInputs };
+    return this.managedDbProvisioner.resolveManagedDbTenants(params);
   }
 
-  private async ensureManagedDbTrustStore(
+  private ensureManagedDbTrustStore(
     namespace: string,
     trustInputs: ManagedDbTrustInput[],
   ): Promise<ManagedDbTrustContext> {
-    const bundle = await resolveManagedDbTrustBundle(trustInputs);
-    if (!bundle) {
-      return {
-        enabled: false,
-        envEntries: [],
-        volumes: [],
-        volumeMounts: [],
-      };
-    }
-
-    await this.k8sService.createConfigMap(namespace, MANAGED_DB_TRUST_CONFIG_MAP_NAME, {
-      'ca-bundle.pem': bundle,
-    });
-
-    const checksum = crypto.createHash('sha256').update(bundle).digest('hex');
-
-    return {
-      enabled: true,
-      checksum,
-      envEntries: [
-        { name: 'NODE_EXTRA_CA_CERTS', value: MANAGED_DB_TRUST_BUNDLE_PATH },
-        { name: 'PGSSLROOTCERT', value: MANAGED_DB_TRUST_BUNDLE_PATH },
-      ],
-      volumes: [
-        {
-          name: MANAGED_DB_TRUST_VOLUME_NAME,
-          configMap: { name: MANAGED_DB_TRUST_CONFIG_MAP_NAME },
-        },
-      ],
-      volumeMounts: [
-        {
-          name: MANAGED_DB_TRUST_VOLUME_NAME,
-          mountPath: MANAGED_DB_TRUST_MOUNT_PATH,
-          readOnly: true,
-        },
-      ],
-    };
+    return this.managedDbProvisioner.ensureManagedDbTrustStore(namespace, trustInputs);
   }
 
   private mergeEnvEntries(base: k8s.V1EnvVar[], injected: k8s.V1EnvVar[]): k8s.V1EnvVar[] {
@@ -2543,7 +2296,7 @@ export class DeployerService {
     }
 
     // Object store bucket provisioning and env var injection
-    const objectStoreEnvVars = await this.resolveObjectStoreBuckets(service, context, objectStorePlan);
+    const objectStoreEnvVars = await this.objectStoreProvisioner.resolveObjectStoreBuckets(service, context, objectStorePlan);
     for (const entry of objectStoreEnvVars) {
       platformEnvVars.push(entry);
     }
@@ -2665,305 +2418,6 @@ export class DeployerService {
     return `EVE_APP_LINK_${alias.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
   }
 
-  private async prepareObjectStorePlan(params: {
-    services: Record<string, Service>;
-    envWorkers: Array<Record<string, unknown>>;
-    scope: AppObjectStoreScope;
-  }): Promise<EnvObjectStorePlan> {
-    const desired = this.collectObjectStoreBuckets(params.services, params.envWorkers, params.scope);
-    const bucketsByService = new Map<string, ObjectStoreDesiredBucket[]>();
-    for (const entry of desired) {
-      const current = bucketsByService.get(entry.serviceName) ?? [];
-      current.push(entry);
-      bucketsByService.set(entry.serviceName, current);
-    }
-
-    if (desired.length === 0) {
-      if (typeof this.db === 'function') {
-        await this.removeObjectStoreBinding(params.scope);
-        await this.storageBuckets.deleteByEnv(params.scope.projectId, params.scope.envName);
-      }
-      return { scope: params.scope, binding: null, bucketsByService };
-    }
-
-    if (!this.bucketProvisioner.isConfigured) {
-      const services = [...new Set(desired.map((entry) => entry.serviceName))].join(', ');
-      throw new Error(
-        `Services declaring x-eve.object_store.buckets (${services}) cannot deploy because Eve object storage is not configured. ` +
-        `Set EVE_STORAGE_BACKEND and storage connection env vars on the worker, or remove the bucket declarations.`,
-      );
-    }
-
-    const requestedMode = this.resolveRequestedObjectStoreIsolation(desired, params.scope.envName);
-    const provisioner = this.selectObjectStoreCredentialProvisioner(requestedMode, desired);
-    const physicalBucketNames = [...new Set(desired.map((entry) => entry.physicalName))].sort();
-    const binding = await provisioner.ensureForEnv(params.scope, physicalBucketNames);
-
-    for (const entry of desired) {
-      await this.provisionObjectStoreBucket(entry, params.scope, binding);
-    }
-
-    await this.storageBuckets.deleteMissingForEnv(
-      params.scope.projectId,
-      params.scope.envName,
-      desired.map((entry) => ({ service_name: entry.serviceName, name: entry.bucket.name })),
-    );
-
-    return { scope: params.scope, binding, bucketsByService };
-  }
-
-  private collectObjectStoreBuckets(
-    services: Record<string, Service>,
-    envWorkers: Array<Record<string, unknown>>,
-    scope: AppObjectStoreScope,
-  ): ObjectStoreDesiredBucket[] {
-    const desired: ObjectStoreDesiredBucket[] = [];
-    for (const [serviceName, service] of Object.entries(services)) {
-      if (!this.shouldReconcileObjectStoreService(serviceName, service, envWorkers)) {
-        continue;
-      }
-
-      const buckets = getServiceObjectStoreBuckets(service);
-      if (buckets.length === 0) {
-        continue;
-      }
-
-      const requestedIsolation = getServiceObjectStoreIsolation(service);
-      for (const bucket of buckets) {
-        const physicalName = this.bucketProvisioner.getAppBucketName(
-          scope.orgSlug,
-          scope.projectSlug,
-          scope.envName,
-          bucket.name,
-        );
-        desired.push({
-          serviceName,
-          bucket,
-          physicalName,
-          envKey: `STORAGE_BUCKET_${bucket.name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`,
-          requestedIsolation,
-        });
-      }
-    }
-    return desired;
-  }
-
-  private shouldReconcileObjectStoreService(
-    serviceName: string,
-    service: Service,
-    envWorkers: Array<Record<string, unknown>>,
-  ): boolean {
-    const xeve = this.resolveXeve(service);
-    if (xeve?.external || xeve?.connection_url || xeve?.role === 'managed_db') {
-      return false;
-    }
-    if (xeve?.role !== 'worker') {
-      return true;
-    }
-    return envWorkers.some((worker) => worker.service === serviceName || worker.name === serviceName);
-  }
-
-  private resolveRequestedObjectStoreIsolation(
-    desired: ObjectStoreDesiredBucket[],
-    envName: string,
-  ): ObjectStoreIsolation {
-    const explicit = new Map<ObjectStoreIsolation, Set<string>>();
-    for (const entry of desired) {
-      if (entry.requestedIsolation === 'auto') {
-        continue;
-      }
-      const services = explicit.get(entry.requestedIsolation) ?? new Set<string>();
-      services.add(entry.serviceName);
-      explicit.set(entry.requestedIsolation, services);
-    }
-
-    if (explicit.size > 1) {
-      const parts = [...explicit.entries()]
-        .map(([mode, services]) => `${mode}: ${[...services].sort().join(', ')}`)
-        .join('; ');
-      throw new Error(
-        `Conflicting x-eve.object_store.isolation values in env "${envName}": ${parts}. ` +
-        'One environment can only use one object-store credential binding.',
-      );
-    }
-
-    return explicit.keys().next().value ?? 'auto';
-  }
-
-  private selectObjectStoreCredentialProvisioner(
-    requestedMode: ObjectStoreIsolation,
-    desired: ObjectStoreDesiredBucket[],
-  ): AppCredentialProvisioner {
-    if (requestedMode === 'irsa') {
-      return this.requireObjectStoreProvisioner('irsa', requestedMode, desired);
-    }
-
-    if (requestedMode === 'shared') {
-      const staticMode: AppObjectStoreCredentialMode =
-        this.bucketProvisioner.backend === 'minio' ? 'minio-static-key' : 'shared';
-      return this.requireObjectStoreProvisioner(staticMode, requestedMode, desired);
-    }
-
-    for (const mode of ['irsa', 'minio-static-key', 'shared'] satisfies AppObjectStoreCredentialMode[]) {
-      const provisioner = this.appCredentialProvisioners.find((candidate) => candidate.mode === mode);
-      const availability = provisioner?.availability() ?? { available: false, reason: 'provisioner is not registered' };
-      if (availability.available && provisioner) {
-        return provisioner;
-      }
-    }
-
-    throw new Error(
-      'No object-store credential isolation mode is available on this cluster. ' +
-      'Configure IRSA or static app storage credentials before deploying services with x-eve.object_store.buckets.',
-    );
-  }
-
-  private requireObjectStoreProvisioner(
-    mode: AppObjectStoreCredentialMode,
-    requestedMode: ObjectStoreIsolation,
-    desired: ObjectStoreDesiredBucket[],
-  ): AppCredentialProvisioner {
-    const provisioner = this.appCredentialProvisioners.find((candidate) => candidate.mode === mode);
-    const availability = provisioner?.availability() ?? { available: false, reason: 'provisioner is not registered' };
-    if (provisioner && availability.available) {
-      return provisioner;
-    }
-
-    const services = [...new Set(
-      desired
-        .filter((entry) => entry.requestedIsolation === requestedMode)
-        .map((entry) => entry.serviceName),
-    )].sort();
-    const servicePrefix = services.length === 1
-      ? `Service "${services[0]}" declares object_store.isolation='${requestedMode}' but `
-      : services.length > 1
-        ? `Services ${services.map((service) => `"${service}"`).join(', ')} declare object_store.isolation='${requestedMode}' but `
-        : '';
-
-    throw new Error(
-      `${servicePrefix}isolation mode '${requestedMode}' is not available on this cluster: ${availability.reason ?? 'unknown reason'}`,
-    );
-  }
-
-  private async provisionObjectStoreBucket(
-    entry: ObjectStoreDesiredBucket,
-    scope: AppObjectStoreScope,
-    binding: AppObjectStoreBinding,
-  ): Promise<void> {
-    try {
-      await this.bucketProvisioner.ensureBucket(entry.physicalName);
-
-      const visibility = entry.bucket.visibility ?? 'private';
-      if (visibility === 'public') {
-        await this.bucketProvisioner.setBucketPublicReadPolicy(entry.physicalName);
-      }
-
-      if (entry.bucket.cors && this.bucketProvisioner.backend === 'minio') {
-        if (this.shouldWarnForMinioCorsFallback(entry.bucket.cors)) {
-          this.logger.warn(
-            `Object-store bucket ${entry.physicalName} declares restrictive CORS, but the MinIO backend only supports server-wide CORS in local k3d. ` +
-            `Continuing with the bucket provisioned; local browser CORS uses MINIO_API_CORS_ALLOW_ORIGIN.`,
-          );
-        } else {
-          this.logger.log(
-            `Object-store bucket ${entry.physicalName} uses MinIO server-wide CORS configuration`,
-          );
-        }
-      } else if (entry.bucket.cors) {
-        await this.bucketProvisioner.setBucketCors(entry.physicalName, [{
-          origins: entry.bucket.cors.origins ?? ['*'],
-          methods: entry.bucket.cors.methods ?? ['GET', 'HEAD', 'PUT'],
-          maxAgeSeconds: entry.bucket.cors.max_age_seconds,
-        }]);
-      }
-
-      await this.storageBuckets.upsert({
-        id: generateStorageBucketId(),
-        org_id: scope.orgId,
-        project_id: scope.projectId,
-        env_name: scope.envName,
-        service_name: entry.serviceName,
-        name: entry.bucket.name,
-        physical_name: entry.physicalName,
-        visibility,
-        cors_json: entry.bucket.cors ?? {},
-        isolation_mode: binding.mode,
-        iam_role_arn: binding.iamRoleArn ?? null,
-        iam_role_name: binding.iamRoleName ?? null,
-        service_account_name: binding.serviceAccount?.name ?? null,
-        service_account_namespace: binding.serviceAccount?.namespace ?? null,
-      });
-
-      this.logger.log(
-        `Provisioned bucket ${entry.physicalName} (visibility=${visibility}, isolation=${binding.mode})`,
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Failed to provision object_store bucket "${entry.bucket.name}" for service "${entry.serviceName}": ${message}`,
-      );
-    }
-  }
-
-  private async resolveObjectStoreBuckets(
-    service: Service,
-    context: {
-      envName: string;
-      componentName: string;
-    },
-    objectStorePlan?: EnvObjectStorePlan,
-  ): Promise<Array<{ name: string; value: string }>> {
-    const buckets = getServiceObjectStoreBuckets(service);
-    if (buckets.length === 0) {
-      return [];
-    }
-    if (!objectStorePlan) {
-      throw new Error(
-        `Service "${context.componentName}" declares x-eve.object_store.buckets but the env-wide object-store plan was not prepared.`,
-      );
-    }
-    if (!objectStorePlan.binding) {
-      throw new Error(
-        `Service "${context.componentName}" declares x-eve.object_store.buckets but no object-store credential binding was resolved.`,
-      );
-    }
-
-    const desired = objectStorePlan.bucketsByService.get(context.componentName) ?? [];
-    return [
-      ...objectStorePlan.binding.envVars,
-      ...desired.map((entry) => ({ name: entry.envKey, value: entry.physicalName })),
-    ];
-  }
-
-  private buildObjectStoreServiceAccount(objectStorePlan: EnvObjectStorePlan): Record<string, unknown> | null {
-    const serviceAccount = objectStorePlan.binding?.serviceAccount;
-    if (!serviceAccount || objectStorePlan.binding?.mode !== 'irsa') {
-      return null;
-    }
-    return {
-      apiVersion: 'v1',
-      kind: 'ServiceAccount',
-      metadata: {
-        name: serviceAccount.name,
-        namespace: serviceAccount.namespace,
-        annotations: serviceAccount.annotations,
-      },
-    };
-  }
-
-  private resolveObjectStoreServiceAccountName(
-    objectStorePlan: EnvObjectStorePlan,
-    serviceName: string,
-  ): string | undefined {
-    if (objectStorePlan.binding?.mode !== 'irsa') {
-      return undefined;
-    }
-    if (!objectStorePlan.bucketsByService.has(serviceName)) {
-      return undefined;
-    }
-    return objectStorePlan.binding.serviceAccount?.name;
-  }
-
   private buildPodAnnotations(params: {
     managedDbTrustHash?: string;
     objectStorePlan: EnvObjectStorePlan;
@@ -2981,27 +2435,6 @@ export class DeployerService {
       annotations['eve.app_bucket_binding_hash'] = params.objectStorePlan.binding.bindingHash;
     }
     return Object.keys(annotations).length > 0 ? annotations : undefined;
-  }
-
-  private async removeObjectStoreBinding(scope: AppObjectStoreScope): Promise<void> {
-    for (const provisioner of this.appCredentialProvisioners) {
-      if (!provisioner.availability().available) {
-        continue;
-      }
-      try {
-        await provisioner.removeForEnv(scope);
-      } catch (error) {
-        this.logger.warn(
-          `Failed to remove ${provisioner.mode} object-store binding for ${scope.projectSlug}/${scope.envName}: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-  }
-
-  private shouldWarnForMinioCorsFallback(cors: { origins?: string[] }): boolean {
-    const origins = cors.origins ?? ['*'];
-    return !origins.includes('*');
   }
 
   private resolveServiceEveApiUrl(rawUrl: string): string {
@@ -3373,7 +2806,7 @@ export class DeployerService {
         const componentSlug = toK8sName(name, 'component');
         const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
         this.logger.log(`Waiting for ${name} to become healthy (required by dependents)`);
-        await this.waitForComponentHealth(namespace, resourceName, timeoutMs);
+        await this.deploymentReadiness.waitForComponentHealth(namespace, resourceName, timeoutMs);
       }
     }
   }
@@ -3400,7 +2833,7 @@ export class DeployerService {
         const componentSlug = toK8sName(depName, 'component');
         const resourceName = combineK8sName(envSlug, componentSlug, 'resource');
         this.logger.log(`Waiting for dependency ${depName} before running job ${serviceName}`);
-        await this.waitForComponentHealth(namespace, resourceName, timeoutMs);
+        await this.deploymentReadiness.waitForComponentHealth(namespace, resourceName, timeoutMs);
       }
     }
   }
@@ -3712,69 +3145,8 @@ export class DeployerService {
     return result;
   }
 
-  /**
-   * Resolve the registry host from the manifest's registry config.
-   * Returns null if no registry prefix should be applied.
-   */
-  private resolveRegistryHost(manifest: Manifest): string | null {
-    if (isEveRegistry(manifest)) {
-      return loadConfig().EVE_REGISTRY_HOST ?? null;
-    }
-    const registryConfig = getRegistryConfig(manifest);
-    if (registryConfig?.host) {
-      return registryConfig.host;
-    }
-    return null;
-  }
-
-  /**
-   * Prefix a bare image name with the registry host.
-   * A "bare" image has no registry qualifier in its first path segment
-   * (no `.`, `:`, and isn't `localhost`).
-   */
   private prefixRegistryHost(image: string, registryHost: string | null): string {
-    if (!registryHost || !image) {
-      return image;
-    }
-    const firstSlash = image.indexOf('/');
-    const firstSegment = firstSlash > 0 ? image.slice(0, firstSlash) : image;
-    const hasRegistry =
-      firstSegment.includes('.') ||
-      firstSegment.includes(':') ||
-      firstSegment === 'localhost';
-    if (hasRegistry) {
-      return image;
-    }
-    return `${registryHost}/${image}`;
-  }
-
-  private resolveImageRef(baseImage: unknown, digest?: string, imageTag?: string): string {
-    if (typeof baseImage !== 'string' || baseImage.length === 0) {
-      if (!digest) {
-        throw new Error('Component image missing');
-      }
-      return digest;
-    }
-
-    // If we have a digest, use it (pinned to specific image)
-    if (digest && digest.length > 0) {
-      if (digest.includes('/') || digest.includes('@')) {
-        return digest;
-      }
-      const normalizedDigest = digest.startsWith('sha256:') ? digest : `sha256:${digest}`;
-      return `${baseImage}@${normalizedDigest}`;
-    }
-
-    // If baseImage already has a tag (contains ':' after the last '/'), use as-is
-    const lastSlash = baseImage.lastIndexOf('/');
-    const afterSlash = lastSlash >= 0 ? baseImage.slice(lastSlash + 1) : baseImage;
-    if (afterSlash.includes(':')) {
-      return baseImage;
-    }
-
-    // Apply imageTag if provided, otherwise default to 'latest'
-    const tag = imageTag || 'latest';
-    return `${baseImage}:${tag}`;
+    return this.imageResolver.prefixRegistryHost(image, registryHost);
   }
 
   private resolveServiceDigest(
@@ -3783,93 +3155,11 @@ export class DeployerService {
     allServices: Record<string, Service>,
     imageDigests?: Record<string, string>,
   ): string | undefined {
-    if (!imageDigests || Object.keys(imageDigests).length === 0) {
-      return undefined;
-    }
-
-    const directDigest = imageDigests[serviceName];
-    if (typeof directDigest === 'string' && directDigest.length > 0) {
-      return directDigest;
-    }
-
-    if (!service || typeof service.image !== 'string' || service.image.length === 0) {
-      return undefined;
-    }
-
-    const targetRepo = this.normalizeImageRepository(service.image);
-    for (const [candidateName, digest] of Object.entries(imageDigests)) {
-      if (!digest || candidateName === serviceName) {
-        continue;
-      }
-      const candidateService = allServices[candidateName];
-      if (!candidateService || typeof candidateService.image !== 'string' || candidateService.image.length === 0) {
-        continue;
-      }
-      if (this.normalizeImageRepository(candidateService.image) === targetRepo) {
-        return digest;
-      }
-    }
-
-    return undefined;
+    return this.imageResolver.resolveServiceDigest(serviceName, service, allServices, imageDigests);
   }
 
-  private normalizeImageRepository(image: string): string {
-    const withoutDigest = image.split('@')[0];
-    const lastSlash = withoutDigest.lastIndexOf('/');
-    const lastColon = withoutDigest.lastIndexOf(':');
-    if (lastColon > lastSlash) {
-      return withoutDigest.slice(0, lastColon);
-    }
-    return withoutDigest;
-  }
-
-  private async normalizeImageForKubelet(image: string): Promise<string> {
-    const firstSlash = image.indexOf('/');
-    if (firstSlash <= 0) {
-      return image;
-    }
-
-    const registry = image.slice(0, firstSlash);
-    const repository = image.slice(firstSlash + 1);
-    if (!repository) {
-      return image;
-    }
-
-    const hostPortMatch = registry.match(/^([^:]+)(?::(\d+))?$/);
-    if (!hostPortMatch) {
-      return image;
-    }
-    const host = hostPortMatch[1];
-    const port = hostPortMatch[2];
-
-    const svcMatch = host.match(/^([a-z0-9-]+)\.([a-z0-9-]+)\.svc(?:\.cluster\.local)?$/i);
-    if (!svcMatch) {
-      return image;
-    }
-
-    const serviceName = svcMatch[1];
-    const namespace = svcMatch[2];
-
-    // Keep eve-registry service hostnames intact so kubelet uses the
-    // configured insecure-registry host mapping (ClusterIP rewrites break it).
-    if (serviceName === 'eve-registry') {
-      return image;
-    }
-
-    try {
-      const clusterIP = await this.k8sService.getServiceClusterIP(namespace, serviceName);
-      if (!clusterIP) {
-        return image;
-      }
-      const normalizedRegistry = port ? `${clusterIP}:${port}` : clusterIP;
-      return `${normalizedRegistry}/${repository}`;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(
-        `Failed to resolve ClusterIP for registry host ${host}, using original image ref: ${message}`,
-      );
-      return image;
-    }
+  private normalizeImageForKubelet(image: string): Promise<string> {
+    return this.imageResolver.normalizeImageForKubelet(image);
   }
 
   private async resolveEnvironmentScope(envId: string): Promise<{
@@ -3978,50 +3268,6 @@ export class DeployerService {
       }
       throw new Error(`Release ${releaseId} failed image preflight (${fragments.join('; ')})`);
     }
-  }
-
-  /**
-   * Wait for all deployments in an environment namespace to become ready.
-   * Returns the last observed status so callers can include readiness details
-   * in their own response or error handling.
-   */
-  private async waitForDeploymentReadiness(
-    namespace: string,
-    timeoutMs: number = 120000,
-  ): Promise<NonNullable<DeploymentStatus['k8sStatus']>> {
-    const startTime = Date.now();
-    const pollInterval = 2000;
-    let lastStatus = await this.k8sService.getDeploymentStatus(namespace);
-
-    while (!lastStatus.ready && Date.now() - startTime < timeoutMs) {
-      const remaining = timeoutMs - (Date.now() - startTime);
-      await new Promise(resolve => setTimeout(resolve, Math.min(pollInterval, Math.max(remaining, 0))));
-      lastStatus = await this.k8sService.getDeploymentStatus(namespace);
-    }
-
-    if (lastStatus.ready) {
-      this.logger.log(`Environment namespace ${namespace} is ready`);
-    }
-
-    return lastStatus;
-  }
-
-  /**
-   * Wait for a component's deployment to become healthy.
-   * @param namespace - K8s namespace
-   * @param resourceName - K8s deployment name
-   * @param timeoutMs - Maximum wait time (default 120s)
-   */
-  private async waitForComponentHealth(
-    namespace: string,
-    resourceName: string,
-    timeoutMs: number = 120000
-  ): Promise<void> {
-    await waitFor(
-      async () => (await this.k8sService.getDeploymentStatus(namespace, resourceName)).ready,
-      { timeoutMs, intervalMs: 2000, label: `component ${resourceName} health` },
-    );
-    this.logger.log(`Component ${resourceName} is healthy`);
   }
 
   /**

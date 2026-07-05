@@ -12,7 +12,7 @@ describe('DeployerService object-store buckets', () => {
     bucketProvisioner: Record<string, unknown>,
     storageBuckets: Record<string, unknown> = {},
   ) {
-    Object.assign(deployer as any, {
+    Object.assign((deployer as any).objectStoreProvisioner, {
       bucketProvisioner,
       appCredentialProvisioners: createAppCredentialProvisioners(bucketProvisioner as any),
       storageBuckets: {
@@ -36,7 +36,7 @@ describe('DeployerService object-store buckets', () => {
       componentName: string;
     },
   ) {
-    const plan = await (deployer as any).prepareObjectStorePlan({
+    const plan = await (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
       services: { [context.componentName]: service },
       envWorkers: [],
       scope: {
@@ -48,7 +48,7 @@ describe('DeployerService object-store buckets', () => {
         namespace: `eve-${context.orgSlug}-${context.projectSlug}-${context.envName}`,
       },
     });
-    return (deployer as any).resolveObjectStoreBuckets(
+    return (deployer as any).objectStoreProvisioner.resolveObjectStoreBuckets(
       service,
       { envName: context.envName, componentName: context.componentName },
       plan,
@@ -163,7 +163,7 @@ describe('DeployerService object-store buckets', () => {
       setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
       setBucketCors,
     }, { upsert });
-    Object.assign(deployer as any, {
+    Object.assign((deployer as any).objectStoreProvisioner, {
       logger: {
         log,
         warn,
@@ -226,7 +226,7 @@ describe('DeployerService object-store buckets', () => {
       setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
       setBucketCors,
     });
-    Object.assign(deployer as any, {
+    Object.assign((deployer as any).objectStoreProvisioner, {
       logger: {
         log: vi.fn(),
         warn,
@@ -485,7 +485,7 @@ describe('DeployerService object-store buckets', () => {
         },
       },
     });
-    Object.assign(deployer as any, {
+    Object.assign((deployer as any).objectStoreProvisioner, {
       appCredentialProvisioners: [{
         mode: 'irsa',
         availability: () => ({ available: true }),
@@ -515,7 +515,7 @@ describe('DeployerService object-store buckets', () => {
       },
     };
 
-    const plan = await (deployer as any).prepareObjectStorePlan({
+    const plan = await (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
       services,
       envWorkers: [],
       scope: {
@@ -553,7 +553,7 @@ describe('DeployerService object-store buckets', () => {
       ]),
     );
 
-    const envVars = await (deployer as any).resolveObjectStoreBuckets(
+    const envVars = await (deployer as any).objectStoreProvisioner.resolveObjectStoreBuckets(
       services.api,
       { envName: 'dev', componentName: 'api' },
       plan,
@@ -564,8 +564,8 @@ describe('DeployerService object-store buckets', () => {
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'demo-eve-app-acme-media-dev-uploads' },
     ]));
     expect(envVars.some((entry: { name: string }) => entry.name === 'STORAGE_ACCESS_KEY_ID')).toBe(false);
-    expect((deployer as any).resolveObjectStoreServiceAccountName(plan, 'api')).toBe('eve-app');
-    expect((deployer as any).buildObjectStoreServiceAccount(plan)).toEqual(expect.objectContaining({
+    expect((deployer as any).objectStoreProvisioner.resolveObjectStoreServiceAccountName(plan, 'api')).toBe('eve-app');
+    expect((deployer as any).objectStoreProvisioner.buildObjectStoreServiceAccount(plan)).toEqual(expect.objectContaining({
       kind: 'ServiceAccount',
       metadata: expect.objectContaining({
         name: 'eve-app',
