@@ -4,7 +4,6 @@ import {
   Post,
   Param,
   Body,
-  Req,
   HttpCode,
   HttpStatus,
   Headers,
@@ -46,6 +45,7 @@ import { AuthService } from '../auth/auth.service.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { ScopedAccessService } from '../auth/scoped-access.service.js';
+import { CorrelationId, CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('env-db')
 @ApiBearerAuth()
@@ -120,7 +120,8 @@ export class EnvDbController {
   async schema(
     @Param('id') projectId: string,
     @Param('name') envName: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbSchemaResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -128,16 +129,16 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
     return this.envDbService.getSchema(projectId, envName, {
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
       project_id: projectId,
       env_name: envName,
-      principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+      principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
       permissions,
     });
   }
@@ -152,7 +153,8 @@ export class EnvDbController {
   async rls(
     @Param('id') projectId: string,
     @Param('name') envName: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbRlsResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -160,16 +162,16 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
     return this.envDbService.getRls(projectId, envName, {
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
       project_id: projectId,
       env_name: envName,
-      principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+      principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
       permissions,
     });
   }
@@ -184,7 +186,8 @@ export class EnvDbController {
   async extensions(
     @Param('id') projectId: string,
     @Param('name') envName: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbExtensionsResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -192,16 +195,16 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
     return this.envDbService.getExtensions(projectId, envName, {
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
       project_id: projectId,
       env_name: envName,
-      principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+      principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
       permissions,
     });
   }
@@ -221,7 +224,8 @@ export class EnvDbController {
     @Param('id') projectId: string,
     @Param('name') envName: string,
     @Body(new ZodValidationPipe(DbSqlRequestSchema)) body: DbSqlRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbSqlResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -229,18 +233,18 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
     const allowWrite = body.allow_write ?? false;
-    const { permissions, tokenProvided } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions, tokenProvided } = this.resolveEffectivePermissions(caller, jobToken);
 
     this.ensureWriteAllowed({
       allowWrite,
       tokenProvided,
       permissions,
-      user: request.user,
+      user: caller,
     });
 
     return this.envDbService.executeSql(
@@ -250,10 +254,10 @@ export class EnvDbController {
       body.params,
       allowWrite,
       {
-        user_id: request.user?.user_id,
+        user_id: caller?.user_id,
         project_id: projectId,
         env_name: envName,
-        principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+        principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
         permissions,
       },
     );
@@ -274,7 +278,8 @@ export class EnvDbController {
     @Param('id') projectId: string,
     @Param('name') envName: string,
     @Body(new ZodValidationPipe(DbMigrateRequestSchema)) body: DbMigrateRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbMigrateResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -282,23 +287,23 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
-    const { permissions, tokenProvided } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions, tokenProvided } = this.resolveEffectivePermissions(caller, jobToken);
     this.ensureWriteAllowed({
       allowWrite: true,
       tokenProvided,
       permissions,
-      user: request.user,
+      user: caller,
     });
 
     return this.envDbService.migrate(projectId, envName, body.migrations, {
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
       project_id: projectId,
       env_name: envName,
-      principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+      principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
       permissions,
     });
   }
@@ -313,7 +318,8 @@ export class EnvDbController {
   async listMigrations(
     @Param('id') projectId: string,
     @Param('name') envName: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbMigrationsResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -321,16 +327,16 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
     return this.envDbService.listMigrations(projectId, envName, {
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
       project_id: projectId,
       env_name: envName,
-      principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+      principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
       permissions,
     });
   }
@@ -350,7 +356,8 @@ export class EnvDbController {
     @Param('id') projectId: string,
     @Param('name') envName: string,
     @Body(new ZodValidationPipe(DbResetRequestSchema)) body: DbResetRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Headers('eve-job-token') jobToken?: string,
   ): Promise<DbResetResponse> {
     const orgId = await this.envDbService.resolveOrgIdForProject(projectId);
@@ -358,23 +365,23 @@ export class EnvDbController {
       org_id: orgId,
       project_id: projectId,
       permission: 'envdb:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
-    const { permissions, tokenProvided } = this.resolveEffectivePermissions(request.user, jobToken);
+    const { permissions, tokenProvided } = this.resolveEffectivePermissions(caller, jobToken);
     this.ensureWriteAllowed({
       allowWrite: true,
       tokenProvided,
       permissions,
-      user: request.user,
+      user: caller,
     });
 
     return this.envDbService.reset(projectId, envName, body, {
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
       project_id: projectId,
       env_name: envName,
-      principal_type: request.user?.is_service_principal ? 'service_principal' : 'user',
+      principal_type: caller?.is_service_principal ? 'service_principal' : 'user',
       permissions,
     });
   }

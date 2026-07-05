@@ -7,7 +7,6 @@ import {
   Body,
   Param,
   Query,
-  Req,
   Res,
   DefaultValuePipe,
   ParseIntPipe,
@@ -86,6 +85,7 @@ import {
   type JobResultResponse,
   type JobContextResponse,
 } from './jobs.service.js';
+import { CorrelationId, CurrentUser } from '../common/request-decorators.js';
 
 /**
  * Jobs Controller - New Jobs V2 API
@@ -123,12 +123,13 @@ export class JobsController {
   async create(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(CreateJobRequestSchema)) body: CreateJobRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string }
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined
   ): Promise<JobResponse> {
     // Per-job harness overrides and env_overrides are privileged input: gate
     // them on jobs:harness_override and, when ${secret.KEY} placeholders are
     // present, also on secrets:read. docs/plans/per-job-harness-override-plan.md §3.7
-    if (request.user) {
+    if (caller) {
       const needs: Permission[] = [];
       if (body.harness_profile_override || body.env_overrides) {
         needs.push('jobs:harness_override');
@@ -140,10 +141,10 @@ export class JobsController {
         if (refsAnySecret) needs.push('secrets:read');
       }
       if (needs.length > 0) {
-        await this.rbac.requirePermissions(request.user, projectId, needs);
+        await this.rbac.requirePermissions(caller, projectId, needs);
       }
     }
-    return this.jobsService.create(projectId, body, request.user?.user_id, request.correlationId);
+    return this.jobsService.create(projectId, body, caller?.user_id, correlationId);
   }
 
   @RequirePermission('jobs:read')
@@ -263,9 +264,10 @@ export class JobsController {
   async createBatch(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(CreateBatchRequestSchema)) body: CreateBatchRequest,
-    @Req() request: { user?: { user_id?: string }; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<CreateBatchResponse> {
-    return this.jobsService.createBatch(projectId, body, request.correlationId, request.user?.user_id);
+    return this.jobsService.createBatch(projectId, body, correlationId, caller?.user_id);
   }
 
   // ==========================================================================

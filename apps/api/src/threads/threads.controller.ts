@@ -11,7 +11,6 @@ import {
   HttpStatus,
   MessageEvent,
   NotFoundException,
-  Req,
   Sse,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -53,6 +52,7 @@ import type { AuthUser } from '../auth/auth.service.js';
 import { ChatService } from '../chat/chat.service.js';
 import { ConversationEventsService, type ConversationEventFilters } from './conversation-events.service.js';
 import { ThreadsService } from './threads.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('threads')
 @ApiBearerAuth()
@@ -74,13 +74,13 @@ export class ThreadsController {
   })
   async findById(
     @Param('thread_id') threadId: string,
-    @Req() request: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ThreadResponse> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
     return thread;
   }
 
@@ -92,13 +92,13 @@ export class ThreadsController {
   async streamMessages(
     @Param('thread_id') threadId: string,
     @Headers('last-event-id') lastEventId: string | undefined,
-    @Req() request: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<Observable<MessageEvent>> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
     return this.threadsService.streamMessages(threadId, lastEventId);
   }
 
@@ -123,13 +123,13 @@ export class ThreadsController {
     @Query('source') source?: string,
     @Query('after') after?: string,
     @Query('limit') limit?: string,
-    @Req() request?: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller?: AuthUser,
   ): Promise<Observable<MessageEvent>> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request!, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
     return this.conversationEventsService.streamEvents(threadId, this.parseEventFilters({
       kind,
       jobId,
@@ -164,13 +164,13 @@ export class ThreadsController {
     @Query('source') source?: string,
     @Query('after') after?: string,
     @Query('limit') limit?: string,
-    @Req() request?: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller?: AuthUser,
   ): Promise<ConversationEventListResponse> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request!, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
     return this.conversationEventsService.listEvents(threadId, this.parseEventFilters({
       kind,
       jobId,
@@ -195,13 +195,13 @@ export class ThreadsController {
     @Param('thread_id') threadId: string,
     @Query('since') since?: string,
     @Query('limit') limit?: string,
-    @Req() request?: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller?: AuthUser,
   ): Promise<ThreadMessageListResponse> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request!, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
 
     return this.threadsService.listMessages(threadId, {
       since: since ? new Date(since) : undefined,
@@ -223,14 +223,14 @@ export class ThreadsController {
   async continueChat(
     @Param('thread_id') threadId: string,
     @Body(new ZodValidationPipe(ThreadChatRequestSchema)) body: ThreadChatRequest,
-    @Req() request: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ChatRouteResponse> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request, thread.project_id);
-    return this.chatService.continueThread(threadId, body, { user: request.user as AuthUser | undefined });
+    await this.requireThreadAccess(caller, thread.project_id);
+    return this.chatService.continueThread(threadId, body, { user: caller as AuthUser | undefined });
   }
 
   @RequirePermission('threads:write')
@@ -247,13 +247,13 @@ export class ThreadsController {
   async createMessage(
     @Param('thread_id') threadId: string,
     @Body(new ZodValidationPipe(CreateThreadMessageRequestSchema)) body: CreateThreadMessageRequest,
-    @Req() request: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ThreadMessageResponse> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
     return this.threadsService.createMessage(threadId, body);
   }
 
@@ -271,13 +271,13 @@ export class ThreadsController {
   async createEvent(
     @Param('thread_id') threadId: string,
     @Body(new ZodValidationPipe(CreateConversationEventRequestSchema)) body: CreateConversationEventRequest,
-    @Req() request: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ConversationEventResponse> {
     const thread = await this.threadsService.findById(threadId);
     if (!thread || !thread.project_id) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
-    await this.requireThreadAccess(request, thread.project_id);
+    await this.requireThreadAccess(caller, thread.project_id);
     return this.conversationEventsService.createEvent(threadId, body);
   }
 
@@ -296,26 +296,26 @@ export class ThreadsController {
    * User tokens go through RBAC role check.
    */
   private async requireThreadAccess(
-    request: { user?: { user_id?: string; is_job_token?: boolean; project_id?: string } },
+    caller: AuthUser | undefined,
     projectId: string,
   ): Promise<void> {
-    if (!request.user) {
+    if (!caller) {
       throw new UnauthorizedException('Missing user context');
     }
 
     // Job tokens: allow if project matches
-    if (request.user.is_job_token) {
-      if (request.user.project_id !== projectId) {
+    if (caller.is_job_token) {
+      if (caller.project_id !== projectId) {
         throw new UnauthorizedException('Job token project does not match thread project');
       }
       return;
     }
 
     // User tokens: RBAC check
-    if (!request.user.user_id) {
+    if (!caller.user_id) {
       throw new UnauthorizedException('Missing user context');
     }
-    await this.rbacService.requireProjectRole(request.user.user_id, projectId, 'member');
+    await this.rbacService.requireProjectRole(caller.user_id, projectId, 'member');
   }
 
   private parseEventFilters(input: {

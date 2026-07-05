@@ -2,6 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
+  - cluster-config.yaml
   - api-rbac.yaml
   - app-secret.yaml
   - postgres-secret.yaml
@@ -40,3 +41,32 @@ resources:
   - sso-deployment.yaml
   - sso-service.yaml
   - sso-ingress.yaml
+
+patches:
+  # Standard /health readiness+liveness pair.
+  - path: patches/standard-probes.patch.yaml
+    target:
+      kind: Deployment
+      labelSelector: app.kubernetes.io/name in (eve-api, eve-worker, eve-orchestrator)
+  - path: patches/standard-probes.patch.yaml
+    target:
+      kind: StatefulSet
+      name: eve-agent-runtime
+  # Main container: allowPrivilegeEscalation: false.
+  - path: patches/container-security.patch.yaml
+    target:
+      kind: Deployment
+      labelSelector: app.kubernetes.io/name in (eve-api, eve-worker, eve-orchestrator, eve-gateway, eve-sso)
+  - path: patches/container-security.patch.yaml
+    target:
+      kind: StatefulSet
+      name: eve-agent-runtime
+  # Pod: seccompProfile RuntimeDefault (worker's extended block stays inline).
+  - path: patches/pod-security.patch.yaml
+    target:
+      kind: Deployment
+      labelSelector: app.kubernetes.io/name in (eve-api, eve-orchestrator, eve-gateway, eve-sso)
+  - path: patches/pod-security.patch.yaml
+    target:
+      kind: StatefulSet
+      name: eve-agent-runtime

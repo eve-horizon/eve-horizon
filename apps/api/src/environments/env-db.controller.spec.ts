@@ -71,7 +71,8 @@ describe('EnvDbController', () => {
       'proj_test',
       'test',
       { sql: 'SELECT 1', allow_write: true },
-      { user: requestUser, correlationId: 'req_1' },
+      requestUser,
+      'req_1',
       undefined,
     );
 
@@ -112,7 +113,8 @@ describe('EnvDbController', () => {
       'proj_test',
       'test',
       { sql: 'SELECT 1', allow_write: true },
-      { user: requestUser, correlationId: 'req_2' },
+      requestUser,
+      'req_2',
       'job-token-value',
     );
 

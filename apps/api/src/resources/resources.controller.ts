@@ -3,7 +3,6 @@ import {
   Post,
   Body,
   Param,
-  Req,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -28,6 +27,7 @@ import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { ResourcesService } from './resources.service.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import { ScopedAccessService } from '../auth/scoped-access.service.js';
+import { CorrelationId, CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('resources')
 @ApiBearerAuth()
@@ -51,7 +51,8 @@ export class ResourcesController {
   async resolve(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(ResolveResourcesRequestSchema)) body: ResolveResourcesRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<ResolveResourcesListResponse> {
     for (const uri of body.uris) {
       const parsed = parseResourceUri(uri);
@@ -62,13 +63,13 @@ export class ResourcesController {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgdocs:read',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgdocs',
           id: parsed.path,
           action: 'read',
         },
-        request_id: request.correlationId,
+        request_id: correlationId,
       });
     }
 
@@ -81,11 +82,11 @@ export class ResourcesController {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'jobs:read',
-        user: request.user,
-        request_id: request.correlationId,
+        user: caller,
+        request_id: correlationId,
       });
     }
 
-    return this.resources.resolveResources(orgId, body, request.correlationId);
+    return this.resources.resolveResources(orgId, body, correlationId);
   }
 }

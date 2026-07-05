@@ -5,7 +5,6 @@ import {
   Body,
   Param,
   Query,
-  Req,
   Res,
   HttpCode,
   HttpStatus,
@@ -22,6 +21,7 @@ import {
 import { RequirePermission } from '../auth/permission.decorator.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import { IngestService } from './ingest.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('ingest')
 @ApiBearerAuth()
@@ -47,10 +47,10 @@ export class IngestController {
       source_channel?: string;
       callback_url?: string;
     },
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const actorType = request.user?.is_service_principal ? 'app' : 'user';
-    const actorId = request.user?.user_id ?? null;
+    const actorType = caller?.is_service_principal ? 'app' : 'user';
+    const actorId = caller?.user_id ?? null;
     return this.service.create(projectId, body, actorType, actorId);
   }
 

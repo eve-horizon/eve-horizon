@@ -1,4 +1,4 @@
-import { Controller, Get, Headers, Post, Body, HttpCode, HttpStatus, Req, UnauthorizedException, BadRequestException, ForbiddenException, Query } from '@nestjs/common';
+import { Controller, Get, Headers, Post, Body, HttpCode, HttpStatus, UnauthorizedException, BadRequestException, ForbiddenException, Query } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   AuthStatusResponseSchema,
@@ -53,6 +53,8 @@ import { RbacService } from './rbac.service.js';
 import { permissionMatrix, expandPermissions } from './permissions.js';
 import { MailerService } from '../mailer/mailer.service.js';
 import { renderInviteEmail } from '../mailer/templates/invite.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from './auth.types.js';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -312,9 +314,9 @@ export class AuthController {
   @ApiOkResponse({ schema: zodSchemaToOpenApi(AuthIdentityResponseSchema, 'AuthIdentityResponse') })
   async registerIdentity(
     @Body(new ZodValidationPipe(AuthIdentityRequestSchema)) body: AuthIdentityRequest,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AuthIdentityResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -340,9 +342,9 @@ export class AuthController {
   @ApiOkResponse({ schema: zodSchemaToOpenApi(AuthMintResponseSchema, 'AuthMintResponse') })
   async mint(
     @Body(new ZodValidationPipe(AuthMintRequestSchema)) body: AuthMintRequest,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AuthMintResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -424,19 +426,19 @@ export class AuthController {
   })
   async getAppContextAdmin(
     @Query('project_id') projectId: string | undefined,
-    @Req() req: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AppAuthContextAdminResponse> {
     if (!projectId) {
       throw new BadRequestException('project_id is required');
     }
-    if (!req.user?.user_id) {
+    if (!caller?.user_id) {
       throw new UnauthorizedException('User context required');
     }
-    if (!req.user.is_admin) {
+    if (!caller.is_admin) {
       // PermissionGuard.extractProjectId only resolves path params, so this
       // query-string route does its own check rather than relying on a
       // declarative @RequirePermission('projects:admin').
-      await this.rbacService.requireProjectRole(req.user.user_id, projectId, 'admin');
+      await this.rbacService.requireProjectRole(caller.user_id, projectId, 'admin');
     }
     return this.authService.getAppAuthContextAdmin(projectId);
   }
@@ -455,15 +457,15 @@ export class AuthController {
   })
   async getAppAccess(
     @Query('project_id') projectId: string | undefined,
-    @Req() req: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AppAccessResponse> {
     if (!projectId) {
       throw new BadRequestException('project_id is required');
     }
-    if (!req.user?.user_id) {
+    if (!caller?.user_id) {
       throw new UnauthorizedException('User context required');
     }
-    return this.authService.getAppAccess(projectId, req.user.user_id);
+    return this.authService.getAppAccess(projectId, caller.user_id);
   }
 
   @Post('app-invites')
@@ -481,12 +483,12 @@ export class AuthController {
   })
   async createAppInvite(
     @Body(new ZodValidationPipe(AppInviteRequestSchema)) body: AppInviteRequest,
-    @Req() req: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AppInviteResponse> {
-    if (!req.user?.user_id) {
+    if (!caller?.user_id) {
       throw new UnauthorizedException('User context required');
     }
-    return this.authService.createAppInvite(body, { user_id: req.user.user_id });
+    return this.authService.createAppInvite(body, { user_id: caller.user_id });
   }
 
   @Post('magic-link')
@@ -525,9 +527,9 @@ export class AuthController {
   })
   async sendSupabaseInvite(
     @Body() body: { email: string; redirect_to?: string },
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<{ email: string; invited: boolean }> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }

@@ -3,12 +3,13 @@ import {
   ForbiddenException,
   Get,
   Query,
-  Req,
   DefaultValuePipe,
   ParseIntPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { EmailDeliveryService, type EmailDeliveryEventDto } from './email-delivery.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -24,12 +25,12 @@ export class EmailDeliveryAdminController {
   @ApiQuery({ name: 'event_type', required: false, type: String })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   async listBounces(
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('recipient') recipient?: string,
     @Query('event_type') eventType?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
   ): Promise<{ events: EmailDeliveryEventDto[] }> {
-    if (!request.user?.is_admin) {
+    if (!caller?.is_admin) {
       throw new ForbiddenException('system admin required');
     }
     const events = await this.service.list({

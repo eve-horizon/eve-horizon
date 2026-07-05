@@ -8,7 +8,6 @@ import {
   DefaultValuePipe,
   ParseIntPipe,
   UseGuards,
-  Req,
   ForbiddenException,
 } from '@nestjs/common';
 import {
@@ -22,7 +21,8 @@ import {
 import type { HealthStatus } from '@eve/db';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { SystemService } from './system.service.js';
-import type { FastifyRequest } from 'fastify';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 /**
  * System Controller - Remote debugging endpoints
@@ -48,8 +48,8 @@ export class SystemController {
   @Get('status')
   @ApiOperation({ summary: 'Get system health status' })
   @ApiOkResponse({ description: 'System status including API, orchestrator, worker, and postgres' })
-  async getStatus(@Req() req: FastifyRequest) {
-    const user = this.extractUser(req);
+  async getStatus(@CurrentUser() caller: AuthUser | undefined) {
+    const user = this.extractUser(caller);
     return this.systemService.getStatus(user.role, user.orgId);
   }
 
@@ -66,9 +66,9 @@ export class SystemController {
     @Query('project_id') projectId: string | undefined,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
-    @Req() req: FastifyRequest,
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const user = this.extractUser(req);
+    const user = this.extractUser(caller);
     return this.systemService.listEnvs(
       { orgId, projectId, limit, offset },
       user.role,
@@ -94,9 +94,9 @@ export class SystemController {
   async getLogs(
     @Param('service') service: 'api' | 'orchestrator' | 'worker' | 'agent-runtime' | 'postgres',
     @Query('tail', new DefaultValuePipe(100), ParseIntPipe) tail: number,
-    @Req() req: FastifyRequest,
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const user = this.extractUser(req);
+    const user = this.extractUser(caller);
     return this.systemService.getLogs(service, user.role, user.orgId, tail);
   }
 
@@ -104,8 +104,8 @@ export class SystemController {
   @Get('pods')
   @ApiOperation({ summary: 'List pods with status' })
   @ApiOkResponse({ description: 'List of pods with status, labels, and metadata' })
-  async getPods(@Req() req: FastifyRequest) {
-    const user = this.extractUser(req);
+  async getPods(@CurrentUser() caller: AuthUser | undefined) {
+    const user = this.extractUser(caller);
     return this.systemService.getPods(user.role, user.orgId);
   }
 
@@ -121,9 +121,9 @@ export class SystemController {
   @ApiOkResponse({ description: 'Recent cluster events' })
   async getEvents(
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
-    @Req() req: FastifyRequest,
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const user = this.extractUser(req);
+    const user = this.extractUser(caller);
     return this.systemService.getEvents(user.role, user.orgId, limit);
   }
 
@@ -131,8 +131,8 @@ export class SystemController {
   @Get('config')
   @ApiOperation({ summary: 'Get deployment configuration summary' })
   @ApiOkResponse({ description: 'Cluster and deployment configuration' })
-  async getConfig(@Req() req: FastifyRequest) {
-    const user = this.extractUser(req);
+  async getConfig(@CurrentUser() caller: AuthUser | undefined) {
+    const user = this.extractUser(caller);
     return this.systemService.getConfig(user.role, user.orgId);
   }
 
@@ -140,8 +140,8 @@ export class SystemController {
   @Get('users')
   @ApiOperation({ summary: 'List all users with org memberships (system_admin only)' })
   @ApiOkResponse({ description: 'List of all users with their org roles' })
-  async getUsers(@Req() req: FastifyRequest) {
-    this.extractSystemAdmin(req);
+  async getUsers(@CurrentUser() caller: AuthUser | undefined) {
+    this.extractSystemAdmin(caller);
     return this.systemService.listUsers();
   }
 
@@ -149,8 +149,8 @@ export class SystemController {
   @Get('settings')
   @ApiOperation({ summary: 'Get all system settings (system_admin only)' })
   @ApiOkResponse({ description: 'List of all system settings' })
-  async getSettings(@Req() req: FastifyRequest) {
-    const user = this.extractSystemAdmin(req);
+  async getSettings(@CurrentUser() caller: AuthUser | undefined) {
+    const user = this.extractSystemAdmin(caller);
     return this.systemService.getSettings();
   }
 
@@ -158,8 +158,8 @@ export class SystemController {
   @Get('settings/:key')
   @ApiOperation({ summary: 'Get a specific system setting (system_admin only)' })
   @ApiOkResponse({ description: 'System setting value' })
-  async getSetting(@Param('key') key: string, @Req() req: FastifyRequest) {
-    const user = this.extractSystemAdmin(req);
+  async getSetting(@Param('key') key: string, @CurrentUser() caller: AuthUser | undefined) {
+    const user = this.extractSystemAdmin(caller);
     return this.systemService.getSetting(key);
   }
 
@@ -170,9 +170,9 @@ export class SystemController {
   async setSetting(
     @Param('key') key: string,
     @Body() body: { value: string; description?: string },
-    @Req() req: FastifyRequest,
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const user = this.extractSystemAdmin(req);
+    const user = this.extractSystemAdmin(caller);
     return this.systemService.setSetting(key, body.value, user.userId ?? 'admin', body.description);
   }
 
@@ -198,9 +198,7 @@ export class SystemController {
   /**
    * Extract user info from request and enforce admin scope
    */
-  private extractUser(req: FastifyRequest): { role?: string; orgId?: string; userId?: string } {
-    const user = (req as any).user;
-
+  private extractUser(user: AuthUser | undefined): { role?: string; orgId?: string; userId?: string } {
     // If no user (auth disabled), allow all operations as system_admin
     if (!user) {
       return { role: 'system_admin', orgId: undefined, userId: 'admin' };
@@ -212,7 +210,7 @@ export class SystemController {
       role = 'org_admin';
     }
     const orgId = user.org_id;
-    const userId = user.id;
+    const userId = (user as { id?: string }).id;
 
     // Require admin scope (org_admin or system_admin)
     if (role !== 'org_admin' && role !== 'system_admin') {
@@ -225,9 +223,7 @@ export class SystemController {
   /**
    * Extract user info and enforce system_admin scope only
    */
-  private extractSystemAdmin(req: FastifyRequest): { role?: string; userId?: string } {
-    const user = (req as any).user;
-
+  private extractSystemAdmin(user: AuthUser | undefined): { role?: string; userId?: string } {
     // If no user (auth disabled), allow all operations as system_admin
     if (!user) {
       return { role: 'system_admin', userId: 'admin' };
@@ -235,7 +231,7 @@ export class SystemController {
 
     // Extract role and id from user
     const role = user.role;
-    const userId = user.id;
+    const userId = (user as { id?: string }).id;
 
     // Require system_admin scope
     if (role !== 'system_admin') {

@@ -8,7 +8,6 @@ import {
   Body,
   Param,
   Query,
-  Req,
   HttpCode,
   HttpStatus,
   DefaultValuePipe,
@@ -54,6 +53,7 @@ import {
 } from '@eve/shared';
 import { OrgDocumentsService } from './org-documents.service.js';
 import { buildApiError } from '../system/api-errors.js';
+import { CorrelationId, CurrentUser } from '../common/request-decorators.js';
 
 function normalizePathParam(pathParam: string, requestId?: string): string {
   try {
@@ -112,21 +112,22 @@ export class OrgDocumentsController {
   async create(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(CreateOrgDocumentRequestSchema)) body: CreateOrgDocumentRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentDetailResponse> {
     const scopedPath = normalizeScopedPath(body.path);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: scopedPath,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.create(orgId, { ...body, path: scopedPath }, request.user?.user_id, request.correlationId);
+    return this.service.create(orgId, { ...body, path: scopedPath }, caller?.user_id, correlationId);
   }
 
   // --------------------------------------------------------------------------
@@ -156,13 +157,14 @@ export class OrgDocumentsController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('path_prefix') pathPrefix: string | undefined,
     @Query('mode') mode: 'text' | 'semantic' | 'hybrid' | undefined,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentSearchResult> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.service.search(orgId, query, limit, mode ?? 'text', pathPrefix);
   }
@@ -183,13 +185,14 @@ export class OrgDocumentsController {
     @Query('overdue_by') overdueBy: string | undefined,
     @Query('prefix') prefix: string | undefined,
     @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentListResponse> {
     const scopedPrefix = prefix ? normalizeScopedPath(prefix) : undefined;
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: scopedPrefix
         ? {
             type: 'orgdocs',
@@ -197,7 +200,7 @@ export class OrgDocumentsController {
             action: 'read',
           }
         : undefined,
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.service.listStale(orgId, {
       overdueBySeconds: parseDurationSeconds(overdueBy),
@@ -228,36 +231,37 @@ export class OrgDocumentsController {
     @Param('org_id') orgId: string,
     @Query('path') path: string,
     @Body() body: { next_review?: string },
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentDetailResponse> {
     if (!path) {
       throw buildApiError(400, 'resource_uri_invalid', 'path query parameter is required', {
-        requestId: request.correlationId,
+        requestId: correlationId,
       });
     }
     if (!body?.next_review) {
       throw buildApiError(400, 'resource_uri_invalid', 'next_review is required', {
-        requestId: request.correlationId,
+        requestId: correlationId,
       });
     }
     const scopedPath = normalizeScopedPath(path);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: scopedPath,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.service.reviewDocument(
       orgId,
       scopedPath,
       body.next_review,
-      request.user?.user_id,
-      request.correlationId,
+      caller?.user_id,
+      correlationId,
     );
   }
 
@@ -277,7 +281,8 @@ export class OrgDocumentsController {
   })
   async list(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Query('path') path?: string,
     @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit?: number,
   ): Promise<OrgDocumentListResponse> {
@@ -285,7 +290,7 @@ export class OrgDocumentsController {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: scopedPath
         ? {
             type: 'orgdocs',
@@ -293,7 +298,7 @@ export class OrgDocumentsController {
             action: 'read',
           }
         : undefined,
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.service.listByPrefix(orgId, scopedPath ?? '', limit);
   }
@@ -315,26 +320,27 @@ export class OrgDocumentsController {
   async getByPath(
     @Param('org_id') orgId: string,
     @Query('path') path: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentDetailResponse> {
     if (!path) {
       throw buildApiError(400, 'resource_uri_invalid', 'path query parameter is required', {
-        requestId: request.correlationId,
+        requestId: correlationId,
       });
     }
     const scopedPath = normalizeScopedPath(path);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: scopedPath,
         action: 'read',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.getByPath(orgId, scopedPath, request.correlationId);
+    return this.service.getByPath(orgId, scopedPath, correlationId);
   }
 
   // --------------------------------------------------------------------------
@@ -356,26 +362,27 @@ export class OrgDocumentsController {
     @Param('org_id') orgId: string,
     @Query('path') path: string,
     @Body(new ZodValidationPipe(UpdateOrgDocumentRequestSchema)) body: UpdateOrgDocumentRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentDetailResponse> {
     if (!path) {
       throw buildApiError(400, 'resource_uri_invalid', 'path query parameter is required', {
-        requestId: request.correlationId,
+        requestId: correlationId,
       });
     }
     const scopedPath = normalizeScopedPath(path);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: scopedPath,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.update(orgId, scopedPath, body, request.user?.user_id, request.correlationId);
+    return this.service.update(orgId, scopedPath, body, caller?.user_id, correlationId);
   }
 
   // --------------------------------------------------------------------------
@@ -397,26 +404,27 @@ export class OrgDocumentsController {
     @Param('org_id') orgId: string,
     @Query('path') path: string,
     @Body(new ZodValidationPipe(PatchOrgDocumentRequestSchema)) body: PatchOrgDocumentRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentDetailResponse> {
     if (!path) {
       throw buildApiError(400, 'resource_uri_invalid', 'path query parameter is required', {
-        requestId: request.correlationId,
+        requestId: correlationId,
       });
     }
     const scopedPath = normalizeScopedPath(path);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: scopedPath,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.patch(orgId, scopedPath, body, request.user?.user_id, request.correlationId);
+    return this.service.patch(orgId, scopedPath, body, caller?.user_id, correlationId);
   }
 
   // --------------------------------------------------------------------------
@@ -433,26 +441,27 @@ export class OrgDocumentsController {
   async delete(
     @Param('org_id') orgId: string,
     @Query('path') path: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<{ success: boolean; message: string }> {
     if (!path) {
       throw buildApiError(400, 'resource_uri_invalid', 'path query parameter is required', {
-        requestId: request.correlationId,
+        requestId: correlationId,
       });
     }
     const scopedPath = normalizeScopedPath(path);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: scopedPath,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.delete(orgId, scopedPath, request.user?.user_id, request.correlationId);
+    return this.service.delete(orgId, scopedPath, caller?.user_id, correlationId);
   }
 
   // --------------------------------------------------------------------------
@@ -471,13 +480,14 @@ export class OrgDocumentsController {
   async query(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgDocumentQueryRequestSchema)) body: OrgDocumentQueryRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentQueryResponse> {
     const scopedPath = body.path_prefix ? normalizeScopedPath(body.path_prefix) : undefined;
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: scopedPath
         ? {
             type: 'orgdocs',
@@ -485,9 +495,9 @@ export class OrgDocumentsController {
             action: 'read',
           }
         : undefined,
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.query(orgId, body, request.correlationId);
+    return this.service.query(orgId, body, correlationId);
   }
 
   // --------------------------------------------------------------------------
@@ -510,21 +520,22 @@ export class OrgDocumentsController {
     @Param('path') pathParam: string,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentVersionListResponse> {
-    const path = normalizePathParam(pathParam, request.correlationId);
+    const path = normalizePathParam(pathParam, correlationId);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: path,
         action: 'read',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.listVersions(orgId, path, limit, offset, request.correlationId);
+    return this.service.listVersions(orgId, path, limit, offset, correlationId);
   }
 
   @RequirePermission('orgdocs:read')
@@ -541,20 +552,21 @@ export class OrgDocumentsController {
     @Param('org_id') orgId: string,
     @Param('path') pathParam: string,
     @Param('version', ParseIntPipe) version: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgDocumentVersionDetail> {
-    const path = normalizePathParam(pathParam, request.correlationId);
+    const path = normalizePathParam(pathParam, correlationId);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: path,
         action: 'read',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.getVersion(orgId, path, version, request.correlationId);
+    return this.service.getVersion(orgId, path, version, correlationId);
   }
 }

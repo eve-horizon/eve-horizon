@@ -5,7 +5,6 @@ import {
   Delete,
   Body,
   Param,
-  Req,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -39,6 +38,7 @@ import { RbacService } from './rbac.service.js';
 import { AuthService, type AuthUser } from './auth.service.js';
 import { allPermissions } from './permissions.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 function toServicePrincipalResponse(sp: ServicePrincipal): ServicePrincipalResponse {
   return {
@@ -74,9 +74,9 @@ export class ServicePrincipalsController {
   async create(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(CreateServicePrincipalRequestSchema)) body: CreateServicePrincipalRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ServicePrincipalResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -107,9 +107,9 @@ export class ServicePrincipalsController {
   })
   async list(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ServicePrincipalListResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -130,9 +130,9 @@ export class ServicePrincipalsController {
   async get(
     @Param('org_id') orgId: string,
     @Param('sp_id') spId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ServicePrincipalResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -158,9 +158,9 @@ export class ServicePrincipalsController {
   async delete(
     @Param('org_id') orgId: string,
     @Param('sp_id') spId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<void> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -185,9 +185,9 @@ export class ServicePrincipalsController {
     @Param('org_id') orgId: string,
     @Param('sp_id') spId: string,
     @Body(new ZodValidationPipe(MintServicePrincipalTokenRequestSchema)) body: MintServicePrincipalTokenRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<MintServicePrincipalTokenResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -253,9 +253,9 @@ export class ServicePrincipalsController {
   async listTokens(
     @Param('org_id') orgId: string,
     @Param('sp_id') spId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ServicePrincipalTokenListResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -294,9 +294,9 @@ export class ServicePrincipalsController {
     @Param('org_id') orgId: string,
     @Param('sp_id') spId: string,
     @Param('token_id') tokenId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<void> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }

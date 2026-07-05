@@ -1,24 +1,17 @@
 import {
   Controller,
-  Post,
-  Get,
-  Put,
-  Patch,
-  Delete,
   Body,
   Param,
   Query,
   DefaultValuePipe,
   ParseIntPipe,
-  HttpCode,
   HttpStatus,
   NotFoundException,
   BadRequestException,
-  Req,
   ForbiddenException,
 } from '@nestjs/common';
 import { parseBoolean, parseOptionalDate } from '../common/query-params.js';
-import { ApiTags, ApiOperation, ApiQuery, ApiResponse, ApiBody, ApiNoContentResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { OrgsService } from './orgs.service.js';
 import {
   CreateOrgRequestSchema,
@@ -47,8 +40,9 @@ import {
   OrgInviteListResponseSchema,
 } from '@eve/shared';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
-import { zodSchemaToOpenApi } from '../openapi.js';
-import { RequirePermission } from '../auth/permission.decorator.js';
+import { Endpoint } from '../common/endpoint.decorator.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 
 @ApiTags('orgs')
@@ -57,50 +51,64 @@ import { RequirePermission } from '../auth/permission.decorator.js';
 export class OrgsController {
   constructor(private readonly orgsService: OrgsService) {}
 
-  @RequirePermission('orgs:create')
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create an org' })
-  @ApiBody({ schema: zodSchemaToOpenApi(CreateOrgRequestSchema, 'CreateOrgRequest') })
-  @ApiResponse({ status: 201, schema: zodSchemaToOpenApi(OrgResponseSchema, 'OrgResponse') })
+  @Endpoint({
+    method: 'POST',
+    permission: 'orgs:create',
+    status: HttpStatus.CREATED,
+    summary: 'Create an org',
+    body: CreateOrgRequestSchema,
+    bodyName: 'CreateOrgRequest',
+    response: OrgResponseSchema,
+    responseName: 'OrgResponse',
+  })
   async create(
     @Body(new ZodValidationPipe(CreateOrgRequestSchema)) body: CreateOrgRequest,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgResponse> {
-    if (body.owner_user_id && !request.user?.is_admin) {
+    if (body.owner_user_id && !caller?.is_admin) {
       throw new ForbiddenException('Only admins can set owner_user_id');
     }
-    return this.orgsService.create(body, request.user?.user_id);
+    return this.orgsService.create(body, caller?.user_id);
   }
 
-  @RequirePermission('orgs:create')
-  @Post('ensure')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Ensure an org exists by id or name (case-insensitive unique name)' })
-  @ApiBody({ schema: zodSchemaToOpenApi(CreateOrgRequestSchema, 'CreateOrgRequest') })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgResponseSchema, 'OrgResponse') })
+  @Endpoint({
+    method: 'POST',
+    path: 'ensure',
+    permission: 'orgs:create',
+    status: HttpStatus.OK,
+    summary: 'Ensure an org exists by id or name (case-insensitive unique name)',
+    body: CreateOrgRequestSchema,
+    bodyName: 'CreateOrgRequest',
+    response: OrgResponseSchema,
+    responseName: 'OrgResponse',
+  })
   async ensure(
     @Body(new ZodValidationPipe(CreateOrgRequestSchema)) body: CreateOrgRequest,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgResponse> {
-    if (body.owner_user_id && !request.user?.is_admin) {
+    if (body.owner_user_id && !caller?.is_admin) {
       throw new ForbiddenException('Only admins can set owner_user_id');
     }
-    return this.orgsService.ensure(body, request.user?.user_id);
+    return this.orgsService.ensure(body, caller?.user_id);
   }
 
-  @RequirePermission('orgs:read')
-  @Get()
-  @ApiOperation({ summary: 'List orgs' })
-  @ApiQuery({ name: 'limit', required: false })
-  @ApiQuery({ name: 'offset', required: false })
-  @ApiQuery({ name: 'include_deleted', required: false })
-  @ApiQuery({ name: 'name', required: false })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgListResponseSchema, 'OrgListResponse') })
+  @Endpoint({
+    method: 'GET',
+    permission: 'orgs:read',
+    summary: 'List orgs',
+    extraDecorators: [
+      ApiQuery({ name: 'limit', required: false }),
+      ApiQuery({ name: 'offset', required: false }),
+      ApiQuery({ name: 'include_deleted', required: false }),
+      ApiQuery({ name: 'name', required: false }),
+    ],
+    response: OrgListResponseSchema,
+    responseName: 'OrgListResponse',
+  })
   async list(
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('include_deleted') includeDeleted?: string,
     @Query('name') name?: string,
   ): Promise<OrgListResponse> {
@@ -109,15 +117,21 @@ export class OrgsController {
       offset,
       include_deleted: parseBoolean(includeDeleted),
       name,
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
     });
   }
 
-  @RequirePermission('orgs:read')
-  @Get(':org_id')
-  @ApiOperation({ summary: 'Get org by id' })
-  @ApiQuery({ name: 'include_deleted', required: false })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgResponseSchema, 'OrgResponse') })
+  @Endpoint({
+    method: 'GET',
+    path: ':org_id',
+    permission: 'orgs:read',
+    summary: 'Get org by id',
+    extraDecorators: [
+      ApiQuery({ name: 'include_deleted', required: false }),
+    ],
+    response: OrgResponseSchema,
+    responseName: 'OrgResponse',
+  })
   async findById(
     @Param('org_id') orgId: string,
     @Query('include_deleted') includeDeleted?: string,
@@ -129,13 +143,19 @@ export class OrgsController {
     return org;
   }
 
-  @RequirePermission('orgs:read')
-  @Get(':org_id/spend')
-  @ApiOperation({ summary: 'Get spend aggregation for an org' })
-  @ApiQuery({ name: 'since', required: false, description: 'ISO timestamp (inclusive)' })
-  @ApiQuery({ name: 'until', required: false, description: 'ISO timestamp (inclusive)' })
-  @ApiQuery({ name: 'currency', required: false, description: 'Billing currency (e.g. usd)' })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgSpendResponseSchema, 'OrgSpendResponse') })
+  @Endpoint({
+    method: 'GET',
+    path: ':org_id/spend',
+    permission: 'orgs:read',
+    summary: 'Get spend aggregation for an org',
+    extraDecorators: [
+      ApiQuery({ name: 'since', required: false, description: 'ISO timestamp (inclusive)' }),
+      ApiQuery({ name: 'until', required: false, description: 'ISO timestamp (inclusive)' }),
+      ApiQuery({ name: 'currency', required: false, description: 'Billing currency (e.g. usd)' }),
+    ],
+    response: OrgSpendResponseSchema,
+    responseName: 'OrgSpendResponse',
+  })
   async spend(
     @Param('org_id') orgId: string,
     @Query('since') since?: string,
@@ -149,23 +169,30 @@ export class OrgsController {
     });
   }
 
-  @RequirePermission('orgs:read')
-  @Get(':org_id/agents')
-
-  @ApiOperation({ summary: 'List agent directory for org' })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgAgentDirectoryResponseSchema, 'OrgAgentDirectoryResponse') })
+  @Endpoint({
+    method: 'GET',
+    path: ':org_id/agents',
+    permission: 'orgs:read',
+    summary: 'List agent directory for org',
+    response: OrgAgentDirectoryResponseSchema,
+    responseName: 'OrgAgentDirectoryResponse',
+  })
   async listAgents(
     @Param('org_id') orgId: string,
   ): Promise<OrgAgentDirectoryResponse> {
     return this.orgsService.listAgentDirectory(orgId);
   }
 
-  @RequirePermission('orgs:write')
-  @Patch(':org_id')
-
-  @ApiOperation({ summary: 'Update org' })
-  @ApiBody({ schema: zodSchemaToOpenApi(UpdateOrgRequestSchema, 'UpdateOrgRequest') })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgResponseSchema, 'OrgResponse') })
+  @Endpoint({
+    method: 'PATCH',
+    path: ':org_id',
+    permission: 'orgs:write',
+    summary: 'Update org',
+    body: UpdateOrgRequestSchema,
+    bodyName: 'UpdateOrgRequest',
+    response: OrgResponseSchema,
+    responseName: 'OrgResponse',
+  })
   async update(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(UpdateOrgRequestSchema)) body: UpdateOrgRequest
@@ -175,13 +202,17 @@ export class OrgsController {
 
   // ── Members ─────────────────────────────────────────────────────────
 
-  @RequirePermission('orgs:admin')
-  @Post(':org_id/members')
-
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Add or update an org member' })
-  @ApiBody({ schema: zodSchemaToOpenApi(OrgMemberRequestSchema, 'OrgMemberRequest') })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgMemberResponseSchema, 'OrgMemberResponse') })
+  @Endpoint({
+    method: 'POST',
+    path: ':org_id/members',
+    permission: 'orgs:admin',
+    status: HttpStatus.OK,
+    summary: 'Add or update an org member',
+    body: OrgMemberRequestSchema,
+    bodyName: 'OrgMemberRequest',
+    response: OrgMemberResponseSchema,
+    responseName: 'OrgMemberResponse',
+  })
   async addMember(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgMemberRequestSchema)) body: OrgMemberRequest,
@@ -189,22 +220,31 @@ export class OrgsController {
     return this.orgsService.addMember(orgId, body);
   }
 
-  @RequirePermission('orgs:members:read')
-  @Get(':org_id/members')
-
-  @ApiOperation({ summary: 'List org members' })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgMemberListResponseSchema, 'OrgMemberListResponse') })
+  @Endpoint({
+    method: 'GET',
+    path: ':org_id/members',
+    permission: 'orgs:members:read',
+    summary: 'List org members',
+    response: OrgMemberListResponseSchema,
+    responseName: 'OrgMemberListResponse',
+  })
   async listMembers(
     @Param('org_id') orgId: string,
   ): Promise<OrgMemberListResponse> {
     return this.orgsService.listMembers(orgId);
   }
 
-  @RequirePermission('orgs:members:read')
-  @Get(':org_id/members/search')
-  @ApiOperation({ summary: 'Search org members by email or display name prefix' })
-  @ApiQuery({ name: 'q', required: true, description: 'Search prefix (email or display name)' })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgMemberListResponseSchema, 'OrgMemberListResponse') })
+  @Endpoint({
+    method: 'GET',
+    path: ':org_id/members/search',
+    permission: 'orgs:members:read',
+    summary: 'Search org members by email or display name prefix',
+    extraDecorators: [
+      ApiQuery({ name: 'q', required: true, description: 'Search prefix (email or display name)' }),
+    ],
+    response: OrgMemberListResponseSchema,
+    responseName: 'OrgMemberListResponse',
+  })
   async searchMembers(
     @Param('org_id') orgId: string,
     @Query('q') query: string,
@@ -217,40 +257,54 @@ export class OrgsController {
 
   // ── Org-Scoped Invites ──────────────────────────────────────────────
 
-  @RequirePermission('orgs:invite')
-  @Post(':org_id/invites')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create an org invite with optional email sending' })
-  @ApiBody({ schema: zodSchemaToOpenApi(OrgScopedInviteRequestSchema, 'OrgScopedInviteRequest') })
-  @ApiResponse({ status: 201, schema: zodSchemaToOpenApi(OrgInviteResponseSchema, 'OrgInviteResponse') })
+  @Endpoint({
+    method: 'POST',
+    path: ':org_id/invites',
+    permission: 'orgs:invite',
+    status: HttpStatus.CREATED,
+    summary: 'Create an org invite with optional email sending',
+    body: OrgScopedInviteRequestSchema,
+    bodyName: 'OrgScopedInviteRequest',
+    response: OrgInviteResponseSchema,
+    responseName: 'OrgInviteResponse',
+  })
   async createOrgInvite(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgScopedInviteRequestSchema)) body: OrgScopedInviteRequest,
-    @Req() req: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgInviteResponse> {
-    if (!req.user?.user_id) {
+    if (!caller?.user_id) {
       throw new BadRequestException('Authorization required');
     }
-    return this.orgsService.createOrgInvite(orgId, req.user.user_id, body);
+    return this.orgsService.createOrgInvite(orgId, caller.user_id, body);
   }
 
-  @RequirePermission('orgs:invite')
-  @Get(':org_id/invites')
-  @ApiOperation({ summary: 'List org invites' })
-  @ApiResponse({ status: 200, schema: zodSchemaToOpenApi(OrgInviteListResponseSchema, 'OrgInviteListResponse') })
+  @Endpoint({
+    method: 'GET',
+    path: ':org_id/invites',
+    permission: 'orgs:invite',
+    summary: 'List org invites',
+    response: OrgInviteListResponseSchema,
+    responseName: 'OrgInviteListResponse',
+  })
   async listOrgInvites(
     @Param('org_id') orgId: string,
   ): Promise<OrgInviteListResponse> {
     return this.orgsService.listOrgInvites(orgId);
   }
 
-  @RequirePermission('orgs:admin')
-  @Delete(':org_id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete an organization (soft or hard delete)' })
-  @ApiQuery({ name: 'hard', required: false, description: 'Hard delete — physically removes all data' })
-  @ApiQuery({ name: 'force', required: false, description: 'Continue on partial failures' })
-  @ApiNoContentResponse({ description: 'Organization deleted' })
+  @Endpoint({
+    method: 'DELETE',
+    path: ':org_id',
+    permission: 'orgs:admin',
+    status: HttpStatus.NO_CONTENT,
+    summary: 'Delete an organization (soft or hard delete)',
+    extraDecorators: [
+      ApiQuery({ name: 'hard', required: false, description: 'Hard delete — physically removes all data' }),
+      ApiQuery({ name: 'force', required: false, description: 'Continue on partial failures' }),
+    ],
+    responseDescription: 'Organization deleted',
+  })
   async deleteOrg(
     @Param('org_id') orgId: string,
     @Query('hard') hard?: string,
@@ -262,11 +316,14 @@ export class OrgsController {
     });
   }
 
-  @RequirePermission('orgs:admin')
-  @Delete(':org_id/members/:user_id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Remove an org member' })
-  @ApiResponse({ status: 204, description: 'Member removed' })
+  @Endpoint({
+    method: 'DELETE',
+    path: ':org_id/members/:user_id',
+    permission: 'orgs:admin',
+    status: HttpStatus.NO_CONTENT,
+    summary: 'Remove an org member',
+    responseDescription: 'Member removed',
+  })
   async removeMember(
     @Param('org_id') orgId: string,
     @Param('user_id') userId: string,

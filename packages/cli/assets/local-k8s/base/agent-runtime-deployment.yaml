@@ -16,23 +16,28 @@ spec:
       labels:
         app.kubernetes.io/name: eve-agent-runtime
     spec:
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
+      # securityContext + probes injected by base kustomization patches/
       containers:
         - name: agent-runtime
-          securityContext:
-            allowPrivilegeEscalation: false
           image: eve-horizon/agent-runtime:local
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: eve-app
           env:
+            # Shared cluster values come from the eve-cluster-config ConfigMap.
+            # (No envFrom: agent-runtime must not inherit EVE_STORAGE_PUBLIC_ENDPOINT /
+            # EVE_STORAGE_INTERNAL_BUCKET / SSO vars it never had.)
             - name: DATABASE_URL
-              value: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: DATABASE_URL
             - name: EVE_API_URL
-              value: http://eve-api:4701
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_API_URL
             - name: AGENT_RUNTIME_PORT
               value: "4812"
             # EVE_ORG_ID: omitted — agent runtime auto-discovers orgs from the database.
@@ -64,13 +69,25 @@ spec:
             - name: EVE_TOOLCHAIN_IMAGE_TAG
               value: local
             - name: EVE_STORAGE_BACKEND
-              value: minio
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_BACKEND
             - name: EVE_STORAGE_ENDPOINT
-              value: http://eve-minio.eve.svc.cluster.local:9000
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_ENDPOINT
             - name: EVE_STORAGE_REGION
-              value: us-east-1
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_REGION
             - name: EVE_STORAGE_ORG_BUCKET_PREFIX
-              value: eve-org
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_STORAGE_ORG_BUCKET_PREFIX
             - name: EVE_STORAGE_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -95,19 +112,6 @@ spec:
               mountPath: /org
             - name: toolchains
               mountPath: /opt/eve/toolchains
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 20
-            periodSeconds: 10
       terminationGracePeriodSeconds: 120
       volumes:
         - name: org-fs

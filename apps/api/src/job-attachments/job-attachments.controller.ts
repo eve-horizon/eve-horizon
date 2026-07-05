@@ -5,7 +5,6 @@ import {
   Delete,
   Body,
   Param,
-  Req,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -30,6 +29,8 @@ import {
   type JobAttachmentListResponse,
 } from '@eve/shared';
 import { JobAttachmentsService } from './job-attachments.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('job-attachments')
 @ApiBearerAuth()
@@ -51,9 +52,9 @@ export class JobAttachmentsController {
   async create(
     @Param('job_id') jobId: string,
     @Body() body: CreateJobAttachmentRequest,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<JobAttachmentDetailResponse> {
-    return this.service.create(jobId, body, request.user?.user_id);
+    return this.service.create(jobId, body, caller?.user_id);
   }
 
   @RequirePermission('jobs:read')

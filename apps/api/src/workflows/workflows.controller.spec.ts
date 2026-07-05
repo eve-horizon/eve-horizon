@@ -16,7 +16,7 @@ describe('WorkflowsController', () => {
       'proj_123',
       'research',
       { env_overrides: { WEB_SEARCH_API_KEY: '${secret.WEB_SEARCH_API_KEY}' } },
-      { user } as never,
+      user as never,
       'false',
     );
 
@@ -48,7 +48,7 @@ describe('WorkflowsController', () => {
       'proj_123',
       'research',
       { env_overrides: { MODE: 'test' } },
-      { user } as never,
+      user as never,
       undefined,
     );
 
@@ -78,7 +78,7 @@ describe('WorkflowsController', () => {
       'proj_123',
       'research',
       body,
-      { user } as never,
+      user as never,
       undefined,
     );
 

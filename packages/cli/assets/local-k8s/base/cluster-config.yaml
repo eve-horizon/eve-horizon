@@ -1,0 +1,34 @@
+# Cluster-wide non-secret configuration shared by the eve services.
+# Single source of truth for values that were previously copy-pasted inline
+# across the service deployments. Overlays / deployment instance repos
+# override these once here instead of patching N deployments.
+#
+# Consumption:
+#   - eve-worker mounts the whole map via `envFrom` (its env is a superset
+#     of every key here).
+#   - Other workloads reference individual keys via `valueFrom.configMapKeyRef`
+#     so they do not gain env vars they never had (e.g. the api must not
+#     inherit EVE_API_URL, the gateway must not inherit DATABASE_URL).
+#     Inline `env:` entries always override `envFrom` if both are present.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eve-cluster-config
+  namespace: eve
+  labels:
+    app.kubernetes.io/name: eve-cluster-config
+data:
+  # --- Database ---
+  DATABASE_URL: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
+  # --- Service URLs ---
+  EVE_API_URL: http://eve-api:4701
+  EVE_PUBLIC_API_URL: http://api.eve.lvh.me
+  EVE_SSO_URL: http://sso.eve.lvh.me
+  EVE_DEFAULT_DOMAIN: lvh.me
+  # --- Object storage (MinIO locally; access keys stay in minio-credentials) ---
+  EVE_STORAGE_BACKEND: minio
+  EVE_STORAGE_ENDPOINT: http://eve-minio.eve.svc.cluster.local:9000
+  EVE_STORAGE_PUBLIC_ENDPOINT: http://storage.eve.lvh.me
+  EVE_STORAGE_REGION: us-east-1
+  EVE_STORAGE_ORG_BUCKET_PREFIX: eve-org
+  EVE_STORAGE_INTERNAL_BUCKET: eve-internal

@@ -4,7 +4,6 @@ import {
   Get,
   Body,
   Param,
-  Req,
   HttpCode,
   HttpStatus,
   UnauthorizedException,
@@ -38,6 +37,8 @@ import { Public } from './auth.decorator.js';
 import { RequirePermission } from './permission.decorator.js';
 import { fingerprintPublicKey } from './providers/index.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from './auth.types.js';
 
 type PostgresLikeError = {
   code?: string;
@@ -178,9 +179,9 @@ export class AuthAccessRequestsController {
   async approveRequest(
     @Param('id') id: string,
     @Body() body: { notes?: string } | undefined,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessRequestResponse> {
-    const adminUserId = request.user?.user_id;
+    const adminUserId = caller?.user_id;
     if (!adminUserId) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -297,9 +298,9 @@ export class AuthAccessRequestsController {
   async rejectRequest(
     @Param('id') id: string,
     @Body() body: { notes?: string } | undefined,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessRequestResponse> {
-    const adminUserId = request.user?.user_id;
+    const adminUserId = caller?.user_id;
     if (!adminUserId) {
       throw new UnauthorizedException('Authorization required');
     }

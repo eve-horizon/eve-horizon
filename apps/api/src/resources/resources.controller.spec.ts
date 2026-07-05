@@ -41,10 +41,8 @@ describe('ResourcesController', () => {
         ],
         include_content: true,
       },
-      {
-        user: { user_id: 'user_test' },
-        correlationId: 'req_resources_1',
-      },
+      { user_id: 'user_test' },
+      'req_resources_1',
     );
 
     expect(scopedAccess.assert).toHaveBeenCalledTimes(2);

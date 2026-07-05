@@ -3,7 +3,6 @@ import {
   Get,
   Param,
   Query,
-  Req,
   BadRequestException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -17,6 +16,7 @@ import { RequirePermission } from './permission.decorator.js';
 import { RbacService } from './rbac.service.js';
 import { AccessService } from './access.service.js';
 import type { AuthUser } from './auth.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('access')
 @ApiBearerAuth()
@@ -47,9 +47,9 @@ export class AccessController {
     @Query('resource_type') resourceType: string | undefined,
     @Query('resource_id') resourceId: string | undefined,
     @Query('action') action: string | undefined,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessCanResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -94,9 +94,9 @@ export class AccessController {
     @Query('resource_type') resourceType: string | undefined,
     @Query('resource_id') resourceId: string | undefined,
     @Query('action') action: string | undefined,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessExplainResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -130,9 +130,9 @@ export class AccessController {
     @Param('org_id') orgId: string,
     @Param('principal_type') principalType: string,
     @Param('principal_id') principalId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessPrincipalMembershipsResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   IntegrationListResponseSchema,
@@ -22,6 +22,8 @@ import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { IntegrationsService } from './integrations.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('integrations')
 @ApiBearerAuth()
@@ -151,11 +153,11 @@ export class MembershipRequestsController {
   async approve(
     @Param('org_id') orgId: string,
     @Param('request_id') requestId: string,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Body(new ZodValidationPipe(MembershipRequestApproveRequestSchema)) body: MembershipRequestApproveRequest,
   ): Promise<MembershipRequestResponse> {
     return this.integrationsService.approveMembershipRequest(
-      requestId, orgId, request.user?.user_id ?? 'system', body.role, body.email,
+      requestId, orgId, caller?.user_id ?? 'system', body.role, body.email,
     );
   }
 
@@ -170,8 +172,8 @@ export class MembershipRequestsController {
   async deny(
     @Param('org_id') orgId: string,
     @Param('request_id') requestId: string,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<MembershipRequestResponse> {
-    return this.integrationsService.denyMembershipRequest(requestId, orgId, request.user?.user_id ?? 'system');
+    return this.integrationsService.denyMembershipRequest(requestId, orgId, caller?.user_id ?? 'system');
   }
 }

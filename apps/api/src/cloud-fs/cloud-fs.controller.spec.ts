@@ -27,11 +27,9 @@ describe('CloudFsController scoped access', () => {
     const result = await controller.listMounts(
       'org_test',
       {
-        user: {
-          user_id: 'user_job',
-          is_job_token: true,
-          scope: { cloud_fs: { allow_mount_ids: ['mount_a'] } },
-        },
+        user_id: 'user_job',
+        is_job_token: true,
+        scope: { cloud_fs: { allow_mount_ids: ['mount_a'] } },
       },
     );
 
@@ -42,7 +40,7 @@ describe('CloudFsController scoped access', () => {
     const { controller, scopedAccess } = createController();
     const user = { user_id: 'user_job', is_job_token: true, scope: { cloud_fs: { allow_mount_ids: ['mount_a'] } } };
 
-    await controller.browseMount('org_test', 'mount_a', { user }, { path: '/' });
+    await controller.browseMount('org_test', 'mount_a', user, { path: '/' });
 
     expect(scopedAccess.assert).toHaveBeenCalledWith({
       org_id: 'org_test',
@@ -57,7 +55,7 @@ describe('CloudFsController scoped access', () => {
     const { controller, cloudFsService } = createController();
     const user = { user_id: 'user_job', is_job_token: true, scope: { cloud_fs: { allow_mount_ids: ['mount_b'] } } };
 
-    await controller.browse('org_test', { user }, {});
+    await controller.browse('org_test', user, {});
 
     expect(cloudFsService.browse).toHaveBeenCalledWith('org_test', 'mount_b', '/', {
       recursive: false,
@@ -71,13 +69,13 @@ describe('CloudFsController scoped access', () => {
     const { controller } = createController();
     const user = { user_id: 'user_job', is_job_token: true, scope: { cloud_fs: { allow_mount_ids: ['mount_missing'] } } };
 
-    await expect(controller.browse('org_test', { user }, {})).rejects.toBeInstanceOf(NotFoundException);
+    await expect(controller.browse('org_test', user, {})).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('parses browse paging options before calling the service', async () => {
     const { controller, cloudFsService } = createController();
 
-    await controller.browse('org_test', {}, {
+    await controller.browse('org_test', undefined, {
       mount_id: 'mount_a',
       path: '/Reports',
       recursive: 'false',
@@ -97,13 +95,13 @@ describe('CloudFsController scoped access', () => {
   it('rejects invalid browse booleans as bad requests', async () => {
     const { controller } = createController();
 
-    await expect(controller.browse('org_test', {}, { recursive: 'not-bool' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.browse('org_test', undefined, { recursive: 'not-bool' })).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('preserves omitted per-mount path when browsing by folder id', async () => {
     const { controller, cloudFsService } = createController();
 
-    await controller.browseMount('org_test', 'mount_a', {}, {
+    await controller.browseMount('org_test', 'mount_a', undefined, {
       folder_id: 'folder_a',
       page_size: '25',
     });
@@ -119,7 +117,7 @@ describe('CloudFsController scoped access', () => {
   it('parses search paging and MIME options before calling the service', async () => {
     const { controller, cloudFsService } = createController();
 
-    await controller.search('org_test', {}, {
+    await controller.search('org_test', undefined, {
       q: 'budget',
       mount_id: 'mount_a',
       mime_type: 'application/pdf',

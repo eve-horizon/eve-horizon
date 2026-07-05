@@ -4,7 +4,6 @@ import {
   Get,
   Param,
   Post,
-  Req,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -23,6 +22,8 @@ import {
   type ExpandPipelineRequest,
   type PipelineRunWithJobsResponse,
 } from './pipeline-expander.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 // ============================================================================
 // Schemas
@@ -133,7 +134,7 @@ export class PipelineExpanderController {
     @Param('name') pipelineName: string,
     @Body(new ZodValidationPipe(ExpandPipelineRequestSchema))
     body: { git_sha: string; env_name?: string; inputs?: Record<string, unknown>; only?: string; dedupe_key?: string; dry_run?: boolean },
-    @Req() req: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<PipelineRunWithJobsResponse> {
     const request: ExpandPipelineRequest = {
       pipeline_name: pipelineName,
@@ -144,7 +145,7 @@ export class PipelineExpanderController {
       dedupe_key: body.dedupe_key,
       dry_run: body.dry_run,
     };
-    return this.pipelineExpanderService.expandPipeline(projectId, request, req.user?.user_id);
+    return this.pipelineExpanderService.expandPipeline(projectId, request, caller?.user_id);
   }
 
   @RequirePermission('pipelines:read')

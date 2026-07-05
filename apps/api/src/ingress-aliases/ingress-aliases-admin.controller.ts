@@ -9,14 +9,14 @@ import {
   ParseIntPipe,
   Post,
   Query,
-  Req,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { IngressAliasesAdminService } from './ingress-aliases-admin.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 const ReclaimIngressAliasRequestSchema = z.object({
   reason: z.string().min(1),
@@ -57,9 +57,10 @@ export class IngressAliasesAdminController {
   async reclaim(
     @Param('alias') alias: string,
     @Body(new ZodValidationPipe(ReclaimIngressAliasRequestSchema)) body: ReclaimIngressAliasRequest,
-    @Req() req: FastifyRequest,
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const actorUserId = (req as any).user?.id ? String((req as any).user.id) : null;
+    const callerId = (caller as { id?: unknown } | undefined)?.id;
+    const actorUserId = callerId ? String(callerId) : null;
     return this.ingressAliases.reclaim(alias, body.reason, actorUserId);
   }
 }

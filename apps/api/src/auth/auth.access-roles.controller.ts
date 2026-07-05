@@ -7,7 +7,6 @@ import {
   Body,
   Param,
   Query,
-  Req,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -47,6 +46,7 @@ import { RbacService } from './rbac.service.js';
 import type { AuthUser } from './auth.service.js';
 import { allPermissions } from './permissions.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 function toRoleResponse(role: AccessRole): AccessRoleResponse {
   return {
@@ -101,9 +101,9 @@ export class AccessRolesController {
   async createRole(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(CreateAccessRoleRequestSchema)) body: CreateAccessRoleRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessRoleResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -139,9 +139,9 @@ export class AccessRolesController {
   })
   async listRoles(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessRoleListResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin && !user.is_service_principal) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'member');
@@ -159,9 +159,9 @@ export class AccessRolesController {
   async getRole(
     @Param('org_id') orgId: string,
     @Param('role_id') roleId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessRoleResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin && !user.is_service_principal) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'member');
@@ -184,9 +184,9 @@ export class AccessRolesController {
     @Param('org_id') orgId: string,
     @Param('role_id') roleId: string,
     @Body(new ZodValidationPipe(UpdateAccessRoleRequestSchema)) body: UpdateAccessRoleRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessRoleResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -218,9 +218,9 @@ export class AccessRolesController {
   async deleteRole(
     @Param('org_id') orgId: string,
     @Param('role_id') roleId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<void> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -242,9 +242,9 @@ export class AccessRolesController {
   async createBinding(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(CreateAccessBindingRequestSchema)) body: CreateAccessBindingRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessBindingResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -326,9 +326,9 @@ export class AccessRolesController {
     @Query('project_id') projectId?: string,
     @Query('principal_type') principalType?: string,
     @Query('principal_id') principalId?: string,
-    @Req() request?: { user?: AuthUser },
+    @CurrentUser() caller?: AuthUser,
   ): Promise<AccessBindingListResponse> {
-    const user = this.requireAuth(request!);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin && !user.is_service_principal) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'member');
@@ -353,9 +353,9 @@ export class AccessRolesController {
   async deleteBinding(
     @Param('org_id') orgId: string,
     @Param('bind_id') bindId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<void> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -369,12 +369,11 @@ export class AccessRolesController {
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
-  private requireAuth(request: { user?: AuthUser }): AuthUser {
-    const user = request.user;
-    if (!user?.user_id) {
+  private requireAuth(caller: AuthUser | undefined): AuthUser {
+    if (!caller?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
-    return user;
+    return caller;
   }
 
   private validatePermissions(permissions: string[]): void {

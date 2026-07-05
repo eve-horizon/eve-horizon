@@ -156,7 +156,7 @@ describe('AuthController /auth/supabase/invite', () => {
 
     const response = await controller.sendSupabaseInvite(
       { email: 'invitee@example.com', redirect_to: 'http://app.example.com' },
-      { user: { user_id: 'user_admin', is_admin: true } },
+      { user_id: 'user_admin', is_admin: true },
     );
 
     expect(response).toEqual({ email: 'invitee@example.com', invited: true });
@@ -263,9 +263,7 @@ describe('AuthController app-scoped magic links', () => {
       },
     });
 
-    await expect(controller.getAppContextAdmin('proj_123', {
-      user: { user_id: 'user_admin', is_admin: false },
-    })).resolves.toMatchObject({
+    await expect(controller.getAppContextAdmin('proj_123', { user_id: 'user_admin', is_admin: false })).resolves.toMatchObject({
       auth: {
         org_access: {
           domain_signup: {
@@ -297,9 +295,7 @@ describe('AuthController app-scoped magic links', () => {
       auth: null,
     });
 
-    await controller.getAppContextAdmin('proj_123', {
-      user: { user_id: 'user_root', is_admin: true },
-    });
+    await controller.getAppContextAdmin('proj_123', { user_id: 'user_root', is_admin: true });
     expect(rbacService.requireProjectRole).not.toHaveBeenCalled();
   });
 
@@ -324,9 +320,7 @@ describe('AuthController app-scoped magic links', () => {
       }],
     });
 
-    await expect(controller.getAppAccess('proj_123', {
-      user: { user_id: 'user_123' },
-    })).resolves.toMatchObject({
+    await expect(controller.getAppAccess('proj_123', { user_id: 'user_123' })).resolves.toMatchObject({
       project_id: 'proj_123',
       admin_orgs: [{ id: 'org_123' }],
     });
@@ -348,9 +342,7 @@ describe('AuthController app-scoped magic links', () => {
       email: 'invitee@example.com',
       redirect_to: 'http://app.example.com',
       resend: false,
-    }, {
-      user: { user_id: 'user_admin' },
-    })).resolves.toEqual({
+    }, { user_id: 'user_admin' })).resolves.toEqual({
       status: 'invited',
       org_id: 'org_123',
       email: 'invitee@example.com',

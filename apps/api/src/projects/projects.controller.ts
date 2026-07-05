@@ -15,7 +15,6 @@ import {
   UsePipes,
   NotFoundException,
   BadRequestException,
-  Req,
 } from '@nestjs/common';
 import { parseBoolean, parseOptionalDate } from '../common/query-params.js';
 import { ApiBody, ApiCreatedResponse, ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -77,6 +76,8 @@ import {
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 
 @ApiTags('projects')
@@ -97,9 +98,9 @@ export class ProjectsController {
   })
   async create(
     @Body() body: CreateProjectRequest,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ProjectResponse> {
-    return this.projectsService.create(body, request.user?.user_id);
+    return this.projectsService.create(body, caller?.user_id);
   }
 
   @RequirePermission('projects:create')
@@ -114,9 +115,9 @@ export class ProjectsController {
   })
   async ensure(
     @Body() body: EnsureProjectRequest,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ProjectResponse> {
-    return this.projectsService.ensure(body, request.user?.user_id);
+    return this.projectsService.ensure(body, caller?.user_id);
   }
 
   @RequirePermission('projects:create')
@@ -131,9 +132,9 @@ export class ProjectsController {
   })
   async bootstrap(
     @Body() body: BootstrapProjectRequest,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<BootstrapProjectResponse> {
-    return this.projectsService.bootstrap(body, request.user?.user_id);
+    return this.projectsService.bootstrap(body, caller?.user_id);
   }
 
   @RequirePermission('projects:read')
@@ -151,7 +152,7 @@ export class ProjectsController {
   async list(
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('include_deleted') includeDeleted?: string,
     @Query('org_id') orgId?: string,
     @Query('name') name?: string,
@@ -162,7 +163,7 @@ export class ProjectsController {
       include_deleted: parseBoolean(includeDeleted),
       org_id: orgId,
       name,
-      user_id: request.user?.user_id,
+      user_id: caller?.user_id,
     });
   }
 

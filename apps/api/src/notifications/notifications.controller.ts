@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   NotificationSendRequestSchema,
@@ -11,6 +11,7 @@ import type { AuthUser } from '../auth/auth.service.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { NotificationsService } from './notifications.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -30,9 +31,9 @@ export class NotificationsController {
   async send(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(NotificationSendRequestSchema)) body: NotificationSendRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<NotificationSendResponse> {
-    const user = request.user;
+    const user = caller;
     return this.notificationsService.sendForProject(projectId, body, {
       callerProjectId: user?.is_job_token ? user.project_id : undefined,
     });

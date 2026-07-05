@@ -20,6 +20,7 @@ import type {
 } from '@eve/shared';
 import { ScopedAccessService } from '../auth/scoped-access.service.js';
 import type { AuthUser } from '../auth/auth.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('cloud-fs')
 @ApiBearerAuth()
@@ -50,11 +51,11 @@ export class CloudFsController {
   @ApiQuery({ name: 'project_id', required: false, description: 'Filter by project ID' })
   async listMounts(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('project_id') projectId?: string,
   ): Promise<CloudFsMountListResponse> {
     const mounts = await this.cloudFsService.listMounts(orgId, projectId);
-    return { mounts: this.filterMountsForUser(mounts, request.user) };
+    return { mounts: this.filterMountsForUser(mounts, caller) };
   }
 
   @RequirePermission('cloud_fs:read')
@@ -65,9 +66,9 @@ export class CloudFsController {
   async getMount(
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<CloudFsMountResponse> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', caller);
     return this.cloudFsService.getMount(mountId, orgId);
   }
 
@@ -79,10 +80,10 @@ export class CloudFsController {
   async updateMount(
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Body() body: UpdateCloudFsMountRequest,
   ): Promise<CloudFsMountResponse> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'admin', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'admin', caller);
     return this.cloudFsService.updateMount(mountId, orgId, body);
   }
 
@@ -94,9 +95,9 @@ export class CloudFsController {
   async removeMount(
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<{ ok: boolean }> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'admin', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'admin', caller);
     await this.cloudFsService.removeMount(mountId, orgId);
     return { ok: true };
   }
@@ -115,11 +116,11 @@ export class CloudFsController {
   @ApiQuery({ name: 'order_by', required: false, enum: ['name', 'name_desc', 'modified', 'modified_desc'] })
   async browse(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query() rawQuery: Record<string, unknown>,
   ): Promise<CloudFsBrowseResponse> {
     const query = this.parseBrowseQuery(rawQuery);
-    const resolvedMountId = await this.resolveReadableMountId(orgId, query.mount_id, request.user);
+    const resolvedMountId = await this.resolveReadableMountId(orgId, query.mount_id, caller);
     return this.cloudFsService.browse(orgId, resolvedMountId, query.path, {
       recursive: query.recursive,
       pageToken: query.page_token,
@@ -144,13 +145,13 @@ export class CloudFsController {
   async browseMount(
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query() rawQuery: Record<string, unknown>,
   ): Promise<CloudFsBrowseResponse> {
     const query = this.parseBrowseQuery(rawQuery);
     const folderId = this.getStringQueryValue(rawQuery, 'folder_id');
     const requestedPath = this.getStringQueryValue(rawQuery, 'path');
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', caller);
     return this.cloudFsService.browseMount(orgId, mountId, folderId, requestedPath, {
       recursive: query.recursive,
       pageToken: query.page_token,
@@ -169,9 +170,9 @@ export class CloudFsController {
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
     @Param('file_id') fileId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<CloudFsEntry> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', caller);
     return this.cloudFsService.getFileMeta(orgId, mountId, fileId);
   }
 
@@ -185,10 +186,10 @@ export class CloudFsController {
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
     @Param('file_id') fileId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Res() res: any,
   ): Promise<void> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:read', 'read', caller);
     const result = await this.cloudFsService.downloadFile(orgId, mountId, fileId);
 
     // Fastify uses .header() not .setHeader()
@@ -219,12 +220,12 @@ export class CloudFsController {
   async uploadFile(
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Headers('x-cloud-fs-path') targetPath: string,
     @Headers('content-type') mimeType: string,
     @Req() req: { rawBody?: Buffer; body?: Buffer },
   ): Promise<{ file_id: string; web_view_link: string }> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', caller);
     if (!targetPath) throw new BadRequestException('X-Cloud-FS-Path header is required');
     // rawBody is set by the custom Fastify content-type parser in main.ts;
     // fall back to req.body which the catch-all parser also provides as Buffer.
@@ -244,10 +245,10 @@ export class CloudFsController {
   async createFolder(
     @Param('org_id') orgId: string,
     @Param('mount_id') mountId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Body() body: { name: string; parent_id?: string },
   ): Promise<CloudFsEntry> {
-    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', request.user);
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', caller);
     return this.cloudFsService.createFolder(orgId, mountId, body.name, body.parent_id);
   }
 
@@ -265,11 +266,11 @@ export class CloudFsController {
   @ApiQuery({ name: 'order_by', required: false, enum: ['name', 'name_desc', 'modified', 'modified_desc'] })
   async search(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query() rawQuery: Record<string, unknown>,
   ): Promise<CloudFsSearchResponse> {
     const query = this.parseSearchQuery(rawQuery);
-    const resolvedMountId = await this.resolveReadableMountId(orgId, query.mount_id, request.user);
+    const resolvedMountId = await this.resolveReadableMountId(orgId, query.mount_id, caller);
     return this.cloudFsService.search(orgId, resolvedMountId, query.q, {
       pageToken: query.page_token,
       pageSize: query.page_size,

@@ -9,7 +9,6 @@ import {
   Param,
   Post,
   Query,
-  Req,
   Sse,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
@@ -37,6 +36,7 @@ import type { AuthUser } from '../auth/auth.service.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { ConversationsService } from './conversations.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('conversations')
 @ApiBearerAuth()
@@ -56,9 +56,9 @@ export class ConversationsController {
   async ensure(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(EnsureConversationRequestSchema)) body: EnsureConversationRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ConversationResponse> {
-    return this.conversationsService.ensure(projectId, body, { user: request.user });
+    return this.conversationsService.ensure(projectId, body, { user: caller });
   }
 
   @RequirePermission('threads:read')
@@ -90,9 +90,9 @@ export class ConversationsController {
     @Param('project_id') projectId: string,
     @Param('app_key') appKey: string,
     @Body(new ZodValidationPipe(ConversationTurnRequestSchema)) body: ConversationTurnRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ConversationTurnResponse> {
-    return this.conversationsService.sendTurn(projectId, appKey, body, { user: request.user });
+    return this.conversationsService.sendTurn(projectId, appKey, body, { user: caller });
   }
 
   @RequirePermission('threads:read')

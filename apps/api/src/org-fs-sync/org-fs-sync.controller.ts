@@ -90,6 +90,7 @@ import { ScopedAccessService } from '../auth/scoped-access.service.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { ORG_FS_INTERNAL_TOKEN_HEADER, OrgFsSyncService } from './org-fs-sync.service.js';
+import { CorrelationId, CurrentUser } from '../common/request-decorators.js';
 
 function extractInternalToken(headers: Record<string, string | string[] | undefined> | undefined): string | undefined {
   const direct = headers?.[ORG_FS_INTERNAL_TOKEN_HEADER];
@@ -153,15 +154,16 @@ export class OrgFsSyncController {
   async enrollDevice(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgFsEnrollDeviceRequestSchema)) body: OrgFsEnrollDeviceRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsEnrollDeviceResponse> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
-    return this.service.enrollDevice(orgId, body, request.user?.user_id, request.correlationId);
+    return this.service.enrollDevice(orgId, body, caller?.user_id, correlationId);
   }
 
   @RequirePermission('orgfs:write')
@@ -176,25 +178,26 @@ export class OrgFsSyncController {
   async createLink(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgFsCreateLinkRequestSchema)) body: OrgFsCreateLinkRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsCreateLinkResponse> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgfs',
         id: normalizeScopedPath(body.remote_path),
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.service.createLink(
       orgId,
       body,
-      linkOwnerPrincipal(request.user),
-      request.user?.user_id,
-      request.correlationId,
+      linkOwnerPrincipal(caller),
+      caller?.user_id,
+      correlationId,
     );
   }
 
@@ -207,14 +210,15 @@ export class OrgFsSyncController {
   })
   async listLinks(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsListLinksResponse> {
     const links = await this.service.listLinks(orgId);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
     const visible: OrgFsListLinksResponse['data'] = [];
@@ -222,7 +226,7 @@ export class OrgFsSyncController {
       const allowed = await this.scopedAccess.can({
         org_id: orgId,
         permission: 'orgfs:read',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: link.remote_path,
@@ -250,30 +254,31 @@ export class OrgFsSyncController {
     @Param('org_id') orgId: string,
     @Param('link_id') linkId: string,
     @Body(new ZodValidationPipe(OrgFsUpdateLinkRequestSchema)) body: OrgFsUpdateLinkRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsCreateLinkResponse['link']> {
     const linkPath = await this.service.getLinkRemotePath(orgId, linkId);
     if (linkPath) {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: linkPath,
           action: 'write',
         },
-        request_id: request.correlationId,
+        request_id: correlationId,
       });
     } else {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
-        request_id: request.correlationId,
+        user: caller,
+        request_id: correlationId,
       });
     }
-    return this.service.updateLink(orgId, linkId, body, request.correlationId);
+    return this.service.updateLink(orgId, linkId, body, correlationId);
   }
 
   @RequirePermission('orgfs:write')
@@ -288,30 +293,31 @@ export class OrgFsSyncController {
   async rotateLinkToken(
     @Param('org_id') orgId: string,
     @Param('link_id') linkId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsRotateLinkTokenResponse> {
     const linkPath = await this.service.getLinkRemotePath(orgId, linkId);
     if (linkPath) {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: linkPath,
           action: 'write',
         },
-        request_id: request.correlationId,
+        request_id: correlationId,
       });
     } else {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
-        request_id: request.correlationId,
+        user: caller,
+        request_id: correlationId,
       });
     }
-    return this.service.rotateLinkGatewayToken(orgId, linkId, request.correlationId);
+    return this.service.rotateLinkGatewayToken(orgId, linkId, correlationId);
   }
 
   @RequirePermission('orgfs:write')
@@ -325,30 +331,31 @@ export class OrgFsSyncController {
   async deleteLink(
     @Param('org_id') orgId: string,
     @Param('link_id') linkId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsDeleteLinkResponse> {
     const linkPath = await this.service.getLinkRemotePath(orgId, linkId);
     if (linkPath) {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: linkPath,
           action: 'write',
         },
-        request_id: request.correlationId,
+        request_id: correlationId,
       });
     } else {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
-        request_id: request.correlationId,
+        user: caller,
+        request_id: correlationId,
       });
     }
-    return this.service.deleteLink(orgId, linkId, request.correlationId);
+    return this.service.deleteLink(orgId, linkId, correlationId);
   }
 
   @RequirePermission('orgfs:read')
@@ -360,13 +367,14 @@ export class OrgFsSyncController {
   })
   async status(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsStatusResponse> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.service.getStatus(orgId);
   }
@@ -384,14 +392,15 @@ export class OrgFsSyncController {
     @Param('org_id') orgId: string,
     @Query('after_seq', new DefaultValuePipe(0), ParseIntPipe) afterSeq: number,
     @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsEventListResponse> {
     const events = await this.service.listEvents(orgId, afterSeq, limit);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
     const visible: OrgFsEventListResponse['data'] = [];
@@ -399,7 +408,7 @@ export class OrgFsSyncController {
       const allowed = await this.scopedAccess.can({
         org_id: orgId,
         permission: 'orgfs:read',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: event.path,
@@ -427,13 +436,14 @@ export class OrgFsSyncController {
   async streamEvents(
     @Param('org_id') orgId: string,
     @Query('after_seq', new DefaultValuePipe(0), ParseIntPipe) afterSeq: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<Observable<MessageEvent>> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.service.streamEvents(orgId, afterSeq);
   }
@@ -448,7 +458,8 @@ export class OrgFsSyncController {
   })
   async listConflicts(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
     @Query('open_only') openOnly?: string,
   ): Promise<OrgFsListConflictsResponse> {
     const conflicts = await this.service.listConflicts(
@@ -458,8 +469,8 @@ export class OrgFsSyncController {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
 
     const visible: OrgFsListConflictsResponse['data'] = [];
@@ -467,7 +478,7 @@ export class OrgFsSyncController {
       const allowed = await this.scopedAccess.can({
         org_id: orgId,
         permission: 'orgfs:read',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: conflict.path,
@@ -495,30 +506,31 @@ export class OrgFsSyncController {
     @Param('org_id') orgId: string,
     @Param('conflict_id') conflictId: string,
     @Body(new ZodValidationPipe(OrgFsResolveConflictRequestSchema)) body: OrgFsResolveConflictRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsResolveConflictResponse> {
     const conflictPath = await this.service.getConflictPath(orgId, conflictId);
     if (conflictPath) {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
+        user: caller,
         resource: {
           type: 'orgfs',
           id: conflictPath,
           action: 'write',
         },
-        request_id: request.correlationId,
+        request_id: correlationId,
       });
     } else {
       await this.scopedAccess.assert({
         org_id: orgId,
         permission: 'orgfs:write',
-        user: request.user,
-        request_id: request.correlationId,
+        user: caller,
+        request_id: correlationId,
       });
     }
-    return this.service.resolveConflict(orgId, conflictId, body, request.user?.user_id, request.correlationId);
+    return this.service.resolveConflict(orgId, conflictId, body, caller?.user_id, correlationId);
   }
 
   // --- Presigned URL endpoints ---
@@ -555,7 +567,8 @@ export class OrgFsSyncController {
   async getDownloadUrl(
     @Param('org_id') orgId: string,
     @Query('path') path: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsDownloadUrlResponse> {
     if (!path) {
       throw new BadRequestException('path query parameter is required');
@@ -563,15 +576,15 @@ export class OrgFsSyncController {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgfs',
         id: normalizeScopedPath(path),
         action: 'read',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.service.getDownloadUrl(orgId, path, request.correlationId);
+    return this.service.getDownloadUrl(orgId, path, correlationId);
   }
 
   @RequirePermission('orgfs:read')
@@ -589,13 +602,14 @@ export class OrgFsSyncController {
     @Query('prefix') prefix: string | undefined,
     @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
     @Query('after') after: string | undefined,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsObjectListResponse> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.service.listObjects(orgId, { prefix, limit, after });
   }
@@ -612,16 +626,17 @@ export class OrgFsSyncController {
   async createShare(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgFsCreateShareRequestSchema)) body: OrgFsCreateShareRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsShare> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
-    const actorId = request.user?.user_id ?? 'system';
-    return this.service.createShare(orgId, body, actorId, request.correlationId);
+    const actorId = caller?.user_id ?? 'system';
+    return this.service.createShare(orgId, body, actorId, correlationId);
   }
 
   @RequirePermission('orgfs:admin')
@@ -631,13 +646,14 @@ export class OrgFsSyncController {
   @ApiOkResponse({ schema: zodSchemaToOpenApi(OrgFsShareListResponseSchema, 'OrgFsShareListResponse') })
   async listShares(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsShareListResponse> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.service.listShares(orgId);
   }
@@ -651,15 +667,16 @@ export class OrgFsSyncController {
   async revokeShare(
     @Param('org_id') orgId: string,
     @Param('token') token: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsShare> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
-    return this.service.revokeShare(orgId, token, request.correlationId);
+    return this.service.revokeShare(orgId, token, correlationId);
   }
 
   // --- Public paths ---
@@ -674,16 +691,17 @@ export class OrgFsSyncController {
   async createPublicPath(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(OrgFsCreatePublicPathRequestSchema)) body: OrgFsCreatePublicPathRequest,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsPublicPath> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
-    const actorId = request.user?.user_id ?? 'system';
-    return this.service.createPublicPath(orgId, body, actorId, request.correlationId);
+    const actorId = caller?.user_id ?? 'system';
+    return this.service.createPublicPath(orgId, body, actorId, correlationId);
   }
 
   @RequirePermission('orgfs:read')
@@ -693,13 +711,14 @@ export class OrgFsSyncController {
   @ApiOkResponse({ schema: zodSchemaToOpenApi(OrgFsPublicPathListResponseSchema, 'OrgFsPublicPathListResponse') })
   async listPublicPaths(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsPublicPathListResponse> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.service.listPublicPaths(orgId);
   }
@@ -713,15 +732,16 @@ export class OrgFsSyncController {
   async deletePublicPath(
     @Param('org_id') orgId: string,
     @Param('id') id: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<void> {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
-    return this.service.deletePublicPath(orgId, id, request.correlationId);
+    return this.service.deletePublicPath(orgId, id, correlationId);
   }
 }
 

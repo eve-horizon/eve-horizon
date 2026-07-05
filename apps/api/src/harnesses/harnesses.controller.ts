@@ -7,7 +7,6 @@ import {
   Param,
   Post,
   Query,
-  Req,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -36,6 +35,7 @@ import type { AuthUser } from '../auth/auth.service.js';
 import type { Permission } from '../auth/permissions.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { HarnessesService } from './harnesses.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('harnesses')
 @Controller()
@@ -99,12 +99,12 @@ export class HarnessesController {
   async validate(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(HarnessProfileValidateRequestSchema)) body: HarnessProfileValidateRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<HarnessProfileValidateResponse> {
     // Gate override validation on the same permissions as job creation so a
     // caller without jobs:harness_override cannot probe for secret presence or
     // harness availability. docs/plans/per-job-harness-override-plan.md §3.7.
-    if (request.user) {
+    if (caller) {
       const needs: Permission[] = [];
       if (body.harness_profile_override || body.env_overrides) {
         needs.push('jobs:harness_override');
@@ -116,12 +116,12 @@ export class HarnessesController {
         if (refsAnySecret) needs.push('secrets:read');
       }
       if (needs.length > 0) {
-        await this.rbac.requirePermissions(request.user, projectId, needs);
+        await this.rbac.requirePermissions(caller, projectId, needs);
       }
     }
     return this.harnessesService.validateInlineOverride({
       projectId,
-      userId: request.user?.user_id,
+      userId: caller?.user_id,
       request: body,
     });
   }

@@ -2,12 +2,13 @@ import {
   Controller,
   Get,
   Param,
-  Req,
   NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { UsersService } from './users.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -21,10 +22,10 @@ export class UsersController {
   @ApiOkResponse({ description: 'User profile with memberships' })
   async show(
     @Param('user_id') userId: string,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ) {
-    const callerId = request.user?.user_id;
-    const isAdmin = request.user?.is_admin ?? false;
+    const callerId = caller?.user_id;
+    const isAdmin = caller?.is_admin ?? false;
 
     // "me" is shorthand for the current user
     const targetId = userId === 'me' ? callerId : userId;

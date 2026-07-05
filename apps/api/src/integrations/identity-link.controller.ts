@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   IdentityLinkTokenRequestSchema,
@@ -9,6 +9,8 @@ import {
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { IntegrationsService } from './integrations.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('identity')
 @ApiBearerAuth()
@@ -25,10 +27,10 @@ export class IdentityLinkController {
     schema: zodSchemaToOpenApi(IdentityLinkTokenResponseSchema, 'IdentityLinkTokenResponse'),
   })
   async generateLinkToken(
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Body(new ZodValidationPipe(IdentityLinkTokenRequestSchema)) body: IdentityLinkTokenRequest,
   ): Promise<IdentityLinkTokenResponse> {
-    const userId = request.user?.user_id;
+    const userId = caller?.user_id;
     if (!userId) {
       throw new Error('Authentication required');
     }

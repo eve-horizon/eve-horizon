@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Req, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, Param, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import {
   ChatRouteRequestSchema,
@@ -13,6 +13,7 @@ import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { ChatService } from './chat.service.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import type { AuthUser } from '../auth/auth.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('chat')
 @ApiBearerAuth()
@@ -32,9 +33,9 @@ export class ChatController {
   async routeMessage(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(ChatRouteRequestSchema)) body: ChatRouteRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ChatRouteResponse> {
-    return this.chatService.routeMessage(projectId, body, { user: request.user });
+    return this.chatService.routeMessage(projectId, body, { user: caller });
   }
 
   @RequirePermission('chat:write')
@@ -49,7 +50,7 @@ export class ChatController {
   async simulateMessage(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(ChatSimulateRequestSchema)) body: ChatSimulateRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<ChatRouteResponse> {
     const routeRequest: ChatRouteRequest = {
       provider: body.provider,
@@ -62,6 +63,6 @@ export class ChatController {
       hints: body.hints,
     };
 
-    return this.chatService.routeMessage(projectId, routeRequest, { user: request.user });
+    return this.chatService.routeMessage(projectId, routeRequest, { user: caller });
   }
 }

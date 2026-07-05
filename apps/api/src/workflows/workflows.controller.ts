@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, Query, Req } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags, ApiQuery } from '@nestjs/swagger';
 import {
   WorkflowListResponseSchema,
@@ -24,6 +24,7 @@ import type { Permission } from '../auth/permissions.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { WorkflowsService } from './workflows.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('workflows')
 @ApiBearerAuth()
@@ -81,22 +82,22 @@ export class WorkflowsController {
     @Param('id') projectId: string,
     @Param('name') name: string,
     @Body(new ZodValidationPipe(WorkflowInvokeRequestSchema)) body: WorkflowInvokeRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('wait') wait?: string,
   ): Promise<WorkflowInvokeResponse | WorkflowInvokeResult> {
-    if (request.user && body?.env_overrides) {
+    if (caller && body?.env_overrides) {
       const needs: Permission[] = ['jobs:harness_override'];
       if (envOverridesReferenceSecrets(body.env_overrides)) {
         needs.push('secrets:read');
       }
-      await this.rbac.requirePermissions(request.user, projectId, needs);
+      await this.rbac.requirePermissions(caller, projectId, needs);
     }
-    if (request.user && body?.scope) {
-      await this.rbac.requirePermissions(request.user, projectId, ['jobs:harness_override']);
+    if (caller && body?.scope) {
+      await this.rbac.requirePermissions(caller, projectId, ['jobs:harness_override']);
     }
 
     const shouldWait = wait === 'true';
-    return this.workflowsService.invoke(projectId, name, body, shouldWait, request.user?.user_id);
+    return this.workflowsService.invoke(projectId, name, body, shouldWait, caller?.user_id);
   }
 
   @RequirePermission('workflows:write')
@@ -109,8 +110,8 @@ export class WorkflowsController {
   async retry(
     @Param('id') projectId: string,
     @Body(new ZodValidationPipe(WorkflowRetryRequestSchema)) body: WorkflowRetryRequest,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<WorkflowRetryResponse> {
-    return this.workflowsService.retry(projectId, body, request.user?.user_id);
+    return this.workflowsService.retry(projectId, body, caller?.user_id);
   }
 }

@@ -4,7 +4,6 @@ import {
   Get,
   Body,
   Param,
-  Req,
   HttpCode,
   HttpStatus,
   UnauthorizedException,
@@ -22,6 +21,8 @@ import {
 import { RequirePermission } from './permission.decorator.js';
 import { RbacService } from './rbac.service.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from './auth.types.js';
 
 interface InviteRequest {
   org_id: string;
@@ -67,9 +68,9 @@ export class AuthInvitesController {
   })
   async createInvite(
     @Body() body: InviteRequest,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgInviteResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
@@ -105,9 +106,9 @@ export class AuthInvitesController {
   })
   async listInvites(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgInviteListResponse> {
-    const user = request.user;
+    const user = caller;
     if (!user?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }

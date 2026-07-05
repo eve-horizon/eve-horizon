@@ -1,0 +1,21 @@
+# Standard /health probe pair shared by the core eve services.
+# Applied via kustomization.yaml `patches` to: eve-api, eve-worker,
+# eve-orchestrator (Deployments) and eve-agent-runtime (StatefulSet).
+# gateway/sso/supabase-auth use different probe settings and keep theirs inline.
+- op: add
+  path: /spec/template/spec/containers/0/readinessProbe
+  value:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 10
+- op: add
+  path: /spec/template/spec/containers/0/livenessProbe
+  value:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 20
+    periodSeconds: 10

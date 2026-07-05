@@ -1,11 +1,8 @@
 import {
   Controller,
-  Post,
-  Get,
   Body,
   Param,
   Query,
-  HttpCode,
   HttpStatus,
   ParseIntPipe,
   DefaultValuePipe,
@@ -13,17 +10,13 @@ import {
 } from '@nestjs/common';
 import { parseBoolean } from '../common/query-params.js';
 import {
-  ApiBody,
-  ApiCreatedResponse,
-  ApiOkResponse,
-  ApiOperation,
+  ApiNotFoundResponse,
   ApiParam,
   ApiQuery,
   ApiTags,
-  ApiNotFoundResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { RequirePermission } from '../auth/permission.decorator.js';
+import { Endpoint } from '../common/endpoint.decorator.js';
 import { AttemptsService } from './attempts.service.js';
 import {
   ContinueAttemptRequestSchema,
@@ -36,7 +29,6 @@ import {
   type LogsResponse,
 } from '@eve/shared';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
-import { zodSchemaToOpenApi } from '../openapi.js';
 
 /**
  * Attempts Controller - Adapted for the new Jobs schema
@@ -50,15 +42,18 @@ import { zodSchemaToOpenApi } from '../openapi.js';
 export class AttemptsController {
   constructor(private readonly attemptsService: AttemptsService) {}
 
-  @RequirePermission('jobs:write')
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create a new attempt for a job' })
-  @ApiParam({ name: 'project_id', description: 'Project ID', type: String })
-  @ApiParam({ name: 'job_id', description: 'Job ID', type: String })
-  @ApiCreatedResponse({
-    description: 'Attempt created',
-    schema: zodSchemaToOpenApi(AttemptResponseSchema, 'AttemptResponse'),
+  @Endpoint({
+    method: 'POST',
+    permission: 'jobs:write',
+    status: HttpStatus.CREATED,
+    summary: 'Create a new attempt for a job',
+    extraDecorators: [
+      ApiParam({ name: 'project_id', description: 'Project ID', type: String }),
+      ApiParam({ name: 'job_id', description: 'Job ID', type: String }),
+    ],
+    responseDescription: 'Attempt created',
+    response: AttemptResponseSchema,
+    responseName: 'AttemptResponse',
   })
   async create(
     @Param('project_id') projectId: string,
@@ -67,17 +62,20 @@ export class AttemptsController {
     return this.attemptsService.create(projectId, jobId);
   }
 
-  @RequirePermission('jobs:read')
-  @Get()
-  @ApiOperation({ summary: 'List attempts for a job' })
-  @ApiParam({ name: 'project_id', description: 'Project ID', type: String })
-  @ApiParam({ name: 'job_id', description: 'Job ID', type: String })
-  @ApiQuery({ name: 'limit', required: false, schema: { type: 'number', default: 10 } })
-  @ApiQuery({ name: 'offset', required: false, schema: { type: 'number', default: 0 } })
-  @ApiQuery({ name: 'include_deleted', required: false })
-  @ApiOkResponse({
-    description: 'Attempt list',
-    schema: zodSchemaToOpenApi(AttemptListResponseSchema, 'AttemptListResponse'),
+  @Endpoint({
+    method: 'GET',
+    permission: 'jobs:read',
+    summary: 'List attempts for a job',
+    extraDecorators: [
+      ApiParam({ name: 'project_id', description: 'Project ID', type: String }),
+      ApiParam({ name: 'job_id', description: 'Job ID', type: String }),
+      ApiQuery({ name: 'limit', required: false, schema: { type: 'number', default: 10 } }),
+      ApiQuery({ name: 'offset', required: false, schema: { type: 'number', default: 0 } }),
+      ApiQuery({ name: 'include_deleted', required: false }),
+    ],
+    responseDescription: 'Attempt list',
+    response: AttemptListResponseSchema,
+    responseName: 'AttemptListResponse',
   })
   async list(
     @Param('project_id') projectId: string,
@@ -93,18 +91,22 @@ export class AttemptsController {
     });
   }
 
-  @RequirePermission('jobs:read')
-  @Get(':att_num')
-  @ApiOperation({ summary: 'Get an attempt by number' })
-  @ApiParam({ name: 'project_id', description: 'Project ID', type: String })
-  @ApiParam({ name: 'job_id', description: 'Job ID', type: String })
-  @ApiParam({ name: 'att_num', description: 'Attempt number', type: Number })
-  @ApiQuery({ name: 'include_deleted', required: false })
-  @ApiOkResponse({
-    description: 'Attempt details',
-    schema: zodSchemaToOpenApi(AttemptResponseSchema, 'AttemptResponse'),
+  @Endpoint({
+    method: 'GET',
+    path: ':att_num',
+    permission: 'jobs:read',
+    summary: 'Get an attempt by number',
+    extraDecorators: [
+      ApiParam({ name: 'project_id', description: 'Project ID', type: String }),
+      ApiParam({ name: 'job_id', description: 'Job ID', type: String }),
+      ApiParam({ name: 'att_num', description: 'Attempt number', type: Number }),
+      ApiQuery({ name: 'include_deleted', required: false }),
+      ApiNotFoundResponse({ description: 'Attempt not found' }),
+    ],
+    responseDescription: 'Attempt details',
+    response: AttemptResponseSchema,
+    responseName: 'AttemptResponse',
   })
-  @ApiNotFoundResponse({ description: 'Attempt not found' })
   async findByNumber(
     @Param('project_id') projectId: string,
     @Param('job_id') jobId: string,
@@ -123,16 +125,21 @@ export class AttemptsController {
     return attempt;
   }
 
-  @RequirePermission('jobs:write')
-  @Post(':att_num/continue')
-  @ApiOperation({ summary: 'Continue an attempt with follow-up input' })
-  @ApiParam({ name: 'project_id', description: 'Project ID', type: String })
-  @ApiParam({ name: 'job_id', description: 'Job ID', type: String })
-  @ApiParam({ name: 'att_num', description: 'Attempt number', type: Number })
-  @ApiBody({ schema: zodSchemaToOpenApi(ContinueAttemptRequestSchema, 'ContinueAttemptRequest') })
-  @ApiOkResponse({
-    description: 'Attempt continued',
-    schema: zodSchemaToOpenApi(AttemptResponseSchema, 'AttemptResponse'),
+  @Endpoint({
+    method: 'POST',
+    path: ':att_num/continue',
+    permission: 'jobs:write',
+    summary: 'Continue an attempt with follow-up input',
+    extraDecorators: [
+      ApiParam({ name: 'project_id', description: 'Project ID', type: String }),
+      ApiParam({ name: 'job_id', description: 'Job ID', type: String }),
+      ApiParam({ name: 'att_num', description: 'Attempt number', type: Number }),
+    ],
+    body: ContinueAttemptRequestSchema,
+    bodyName: 'ContinueAttemptRequest',
+    responseDescription: 'Attempt continued',
+    response: AttemptResponseSchema,
+    responseName: 'AttemptResponse',
   })
   async continue(
     @Param('project_id') projectId: string,
@@ -143,16 +150,20 @@ export class AttemptsController {
     return this.attemptsService.continue(projectId, jobId, attNum, body);
   }
 
-  @RequirePermission('jobs:read')
-  @Get(':att_num/logs')
-  @ApiOperation({ summary: 'Get attempt logs (optionally after a sequence)' })
-  @ApiParam({ name: 'project_id', description: 'Project ID', type: String })
-  @ApiParam({ name: 'job_id', description: 'Job ID', type: String })
-  @ApiParam({ name: 'att_num', description: 'Attempt number', type: Number })
-  @ApiQuery({ name: 'after', required: false, description: 'Return logs after this sequence number' })
-  @ApiOkResponse({
-    description: 'Logs response',
-    schema: zodSchemaToOpenApi(LogsResponseSchema, 'LogsResponse'),
+  @Endpoint({
+    method: 'GET',
+    path: ':att_num/logs',
+    permission: 'jobs:read',
+    summary: 'Get attempt logs (optionally after a sequence)',
+    extraDecorators: [
+      ApiParam({ name: 'project_id', description: 'Project ID', type: String }),
+      ApiParam({ name: 'job_id', description: 'Job ID', type: String }),
+      ApiParam({ name: 'att_num', description: 'Attempt number', type: Number }),
+      ApiQuery({ name: 'after', required: false, description: 'Return logs after this sequence number' }),
+    ],
+    responseDescription: 'Logs response',
+    response: LogsResponseSchema,
+    responseName: 'LogsResponse',
   })
   async getLogs(
     @Param('project_id') projectId: string,

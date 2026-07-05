@@ -9,13 +9,13 @@ import {
   Post,
   Put,
   Query,
-  Req,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import { ScopedAccessService } from '../auth/scoped-access.service.js';
 import { AgentMemoryService } from './agent-memory.service.js';
+import { CorrelationId, CurrentUser } from '../common/request-decorators.js';
 
 function normalizePath(path: string): string {
   const trimmed = path.trim();
@@ -56,21 +56,22 @@ export class AgentMemoryController {
       expires_at?: string;
       lifecycle_status?: 'active' | 'stale' | 'archived' | 'expired';
     },
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     const path = this.memory.memoryPath(agentSlug, body.category, body.key);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: path,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.memory.setMemory(orgId, agentSlug, body, request.user?.user_id, request.correlationId);
+    return this.memory.setMemory(orgId, agentSlug, body, caller?.user_id, correlationId);
   }
 
   @RequirePermission('orgdocs:read')
@@ -85,7 +86,8 @@ export class AgentMemoryController {
     @Query('category') category: string | undefined,
     @Query('tags') tags: string | undefined,
     @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     const prefix = category
       ? this.memory.memoryPath(agentSlug, category, 'placeholder-key').replace('/placeholder-key.md', '/')
@@ -93,13 +95,13 @@ export class AgentMemoryController {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: prefix,
         action: 'read',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.memory.listMemory(orgId, agentSlug, {
       category,
@@ -117,7 +119,8 @@ export class AgentMemoryController {
     @Param('agent_slug') agentSlug: string,
     @Param('key') key: string,
     @Query('category') category: string | undefined,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     const path = category
       ? this.memory.memoryPath(agentSlug, category, key)
@@ -125,13 +128,13 @@ export class AgentMemoryController {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: path,
         action: 'read',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.memory.getMemory(orgId, agentSlug, key, category);
   }
@@ -155,19 +158,20 @@ export class AgentMemoryController {
       expires_at?: string;
       lifecycle_status?: 'active' | 'stale' | 'archived' | 'expired';
     },
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     const path = this.memory.memoryPath(agentSlug, body.category, key);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: path,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
     return this.memory.setMemory(
       orgId,
@@ -176,8 +180,8 @@ export class AgentMemoryController {
         ...body,
         key,
       },
-      request.user?.user_id,
-      request.correlationId,
+      caller?.user_id,
+      correlationId,
     );
   }
 
@@ -190,21 +194,22 @@ export class AgentMemoryController {
     @Param('agent_slug') agentSlug: string,
     @Param('key') key: string,
     @Query('category') category: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     const path = this.memory.memoryPath(agentSlug, category, key);
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
+      user: caller,
       resource: {
         type: 'orgdocs',
         id: path,
         action: 'write',
       },
-      request_id: request.correlationId,
+      request_id: correlationId,
     });
-    return this.memory.deleteMemory(orgId, agentSlug, category, key, request.user?.user_id, request.correlationId);
+    return this.memory.deleteMemory(orgId, agentSlug, category, key, caller?.user_id, correlationId);
   }
 
   @RequirePermission('orgdocs:read')
@@ -215,13 +220,14 @@ export class AgentMemoryController {
     @Query('q') q: string,
     @Query('agent') agent: string | undefined,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.searchMemory(orgId, q, { agent, limit });
   }
@@ -235,13 +241,14 @@ export class AgentMemoryController {
     @Param('namespace') namespace: string,
     @Param('key') key: string,
     @Body() body: { value: unknown; ttl_seconds?: number },
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.kvPut(orgId, agentSlug, namespace, key, body.value, body.ttl_seconds);
   }
@@ -254,13 +261,14 @@ export class AgentMemoryController {
     @Param('agent_slug') agentSlug: string,
     @Param('namespace') namespace: string,
     @Param('key') key: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.kvGet(orgId, agentSlug, namespace, key);
   }
@@ -273,13 +281,14 @@ export class AgentMemoryController {
     @Param('agent_slug') agentSlug: string,
     @Param('namespace') namespace: string,
     @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.kvList(orgId, agentSlug, namespace, limit);
   }
@@ -292,13 +301,14 @@ export class AgentMemoryController {
     @Param('agent_slug') agentSlug: string,
     @Param('namespace') namespace: string,
     @Body() body: { keys?: string[] },
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.kvMget(orgId, agentSlug, namespace, body.keys ?? []);
   }
@@ -311,13 +321,14 @@ export class AgentMemoryController {
     @Param('agent_slug') agentSlug: string,
     @Param('namespace') namespace: string,
     @Param('key') key: string,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.kvDelete(orgId, agentSlug, namespace, key);
   }
@@ -335,13 +346,14 @@ export class AgentMemoryController {
     @Query('sources') sources: string | undefined,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('agent') agent: string | undefined,
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:read',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
     return this.memory.unifiedSearch(orgId, q, {
       sources: parseCsv(sources),
@@ -367,15 +379,16 @@ export class AgentMemoryController {
       threshold?: number;
       interval?: string;
     },
-    @Req() request: { user?: AuthUser; correlationId?: string },
+    @CurrentUser() caller: AuthUser | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ) {
     // Distillation writes to org docs — assert orgdocs:write in addition to threads:write
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgdocs:write',
-      user: request.user,
-      request_id: request.correlationId,
+      user: caller,
+      request_id: correlationId,
     });
-    return this.memory.distillThread(orgId, threadId, body, request.user?.user_id, request.correlationId);
+    return this.memory.distillThread(orgId, threadId, body, caller?.user_id, correlationId);
   }
 }

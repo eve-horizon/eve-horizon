@@ -5,7 +5,6 @@ import {
   Query,
   DefaultValuePipe,
   ParseIntPipe,
-  Req,
 } from '@nestjs/common';
 import {
   ApiOkResponse,
@@ -28,6 +27,8 @@ import {
   type OrgAgentsListResponse,
 } from '@eve/shared';
 import { OrgQueriesService } from './org-queries.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('org-queries')
 @ApiBearerAuth()
@@ -54,7 +55,7 @@ export class OrgQueriesController {
   })
   async listJobs(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('status') status?: string,
     @Query('agent_slug') agentSlug?: string,
     @Query('project_id') projectId?: string,
@@ -64,7 +65,7 @@ export class OrgQueriesController {
     return this.orgQueriesService.findJobs(
       orgId,
       { status, agent_slug: agentSlug, project_id: projectId, limit, cursor },
-      request.user?.is_admin ? undefined : request.user?.user_id,
+      caller?.is_admin ? undefined : caller?.user_id,
     );
   }
 
@@ -82,11 +83,11 @@ export class OrgQueriesController {
   })
   async jobStats(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgJobStatsResponse> {
     return this.orgQueriesService.jobStats(
       orgId,
-      request.user?.is_admin ? undefined : request.user?.user_id,
+      caller?.is_admin ? undefined : caller?.user_id,
     );
   }
 
@@ -108,7 +109,7 @@ export class OrgQueriesController {
   })
   async listEvents(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
     @Query('type') type?: string,
     @Query('since') since?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
@@ -117,7 +118,7 @@ export class OrgQueriesController {
     return this.orgQueriesService.findEvents(
       orgId,
       { type, since, limit, cursor },
-      request.user?.is_admin ? undefined : request.user?.user_id,
+      caller?.is_admin ? undefined : caller?.user_id,
     );
   }
 
@@ -135,11 +136,11 @@ export class OrgQueriesController {
   })
   async listAgents(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: { user_id?: string; is_admin?: boolean } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<OrgAgentsListResponse> {
     return this.orgQueriesService.findAgents(
       orgId,
-      request.user?.is_admin ? undefined : request.user?.user_id,
+      caller?.is_admin ? undefined : caller?.user_id,
     );
   }
 }

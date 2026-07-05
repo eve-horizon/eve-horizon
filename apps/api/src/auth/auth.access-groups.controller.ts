@@ -6,7 +6,6 @@ import {
   Delete,
   Body,
   Param,
-  Req,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -46,6 +45,7 @@ import { RequirePermission } from './permission.decorator.js';
 import { RbacService } from './rbac.service.js';
 import type { AuthUser } from './auth.service.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
+import { CurrentUser } from '../common/request-decorators.js';
 
 function toGroupResponse(group: AccessGroup): AccessGroupResponse {
   return {
@@ -99,9 +99,9 @@ export class AccessGroupsController {
   async create(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(CreateAccessGroupRequestSchema)) body: CreateAccessGroupRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessGroupResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -132,9 +132,9 @@ export class AccessGroupsController {
   })
   async list(
     @Param('org_id') orgId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessGroupListResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
     if (!user.is_admin && !user.is_service_principal) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'member');
     }
@@ -151,9 +151,9 @@ export class AccessGroupsController {
   async get(
     @Param('org_id') orgId: string,
     @Param('group_id') groupInput: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessGroupResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
     if (!user.is_admin && !user.is_service_principal) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'member');
     }
@@ -171,9 +171,9 @@ export class AccessGroupsController {
     @Param('org_id') orgId: string,
     @Param('group_id') groupInput: string,
     @Body(new ZodValidationPipe(UpdateAccessGroupRequestSchema)) body: UpdateAccessGroupRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessGroupResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -207,9 +207,9 @@ export class AccessGroupsController {
   async delete(
     @Param('org_id') orgId: string,
     @Param('group_id') groupInput: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<void> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -234,9 +234,9 @@ export class AccessGroupsController {
     @Param('org_id') orgId: string,
     @Param('group_id') groupInput: string,
     @Body(new ZodValidationPipe(CreateAccessGroupMemberRequestSchema)) body: CreateAccessGroupMemberRequest,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessGroupMemberResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -267,9 +267,9 @@ export class AccessGroupsController {
   async listMembers(
     @Param('org_id') orgId: string,
     @Param('group_id') groupInput: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<AccessGroupMemberListResponse> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
     if (!user.is_admin && !user.is_service_principal) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'member');
     }
@@ -292,9 +292,9 @@ export class AccessGroupsController {
     @Param('group_id') groupInput: string,
     @Param('principal_type') principalType: string,
     @Param('principal_id') principalId: string,
-    @Req() request: { user?: AuthUser },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<void> {
-    const user = this.requireAuth(request);
+    const user = this.requireAuth(caller);
 
     if (!user.is_admin) {
       await this.rbacService.requireOrgRole(user.user_id, orgId, 'admin');
@@ -315,11 +315,11 @@ export class AccessGroupsController {
     }
   }
 
-  private requireAuth(request: { user?: AuthUser }): AuthUser {
-    if (!request.user?.user_id) {
+  private requireAuth(caller: AuthUser | undefined): AuthUser {
+    if (!caller?.user_id) {
       throw new UnauthorizedException('Authorization required');
     }
-    return request.user;
+    return caller;
   }
 
   private async resolveGroup(orgId: string, groupInput: string): Promise<AccessGroup> {

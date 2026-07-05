@@ -10,7 +10,6 @@ import {
   ParseIntPipe,
   Post,
   Query,
-  Req,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -46,6 +45,8 @@ import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { BuildsService } from './builds.service.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 @ApiTags('builds')
 @ApiBearerAuth()
@@ -65,9 +66,9 @@ export class BuildsController {
   async createSpec(
     @Param('project_id') projectId: string,
     @Body(new ZodValidationPipe(CreateBuildSpecRequestSchema)) body: CreateBuildSpecRequest,
-    @Req() request: { user?: { user_id?: string } },
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<BuildSpecResponse> {
-    return this.buildsService.createSpec(projectId, body, request.user?.user_id);
+    return this.buildsService.createSpec(projectId, body, caller?.user_id);
   }
 
   @RequirePermission('builds:read')
