@@ -14,7 +14,8 @@ COPY packages/auth-react ./packages/auth-react
 COPY packages/auth ./packages/auth
 COPY apps/dashboard ./apps/dashboard
 
-# Build auth-react first (dashboard depends on it)
+# Build auth then auth-react (auth-react re-exports auth's wire types)
+RUN pnpm --filter @eve-horizon/auth build
 RUN pnpm --filter @eve-horizon/auth-react build
 RUN pnpm --filter @eve/dashboard build
 
