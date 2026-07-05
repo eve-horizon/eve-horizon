@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import type { Db, Event } from '@eve/db';
 import { projectManifestQueries, projectQueries } from '@eve/db';
 import * as yaml from 'yaml';
@@ -74,6 +74,7 @@ export interface TriggerMatchResult {
  */
 @Injectable()
 export class TriggerMatcherService {
+  private readonly logger = new Logger(TriggerMatcherService.name);
   private manifests: ReturnType<typeof projectManifestQueries>;
   private projects: ReturnType<typeof projectQueries>;
 
@@ -97,7 +98,7 @@ export class TriggerMatcherService {
     // Load project manifest
     const manifest = await this.manifests.findLatestByProject(event.project_id);
     if (!manifest) {
-      console.warn(
+      this.logger.warn(
         `Event ${event.id} (type: ${event.type}) → no manifest synced for project ${event.project_id}. ` +
         `Run "eve project sync" to enable workflow triggers.`,
       );
@@ -107,7 +108,7 @@ export class TriggerMatcherService {
     // Parse manifest YAML
     const parsed = this.parseManifest(manifest.manifest_yaml);
     if (!parsed) {
-      console.warn(
+      this.logger.warn(
         `Event ${event.id} → manifest for project ${event.project_id} failed to parse`,
       );
       return { matches, evaluations };
@@ -180,7 +181,7 @@ export class TriggerMatcherService {
       }
       return parsed as Record<string, unknown>;
     } catch (error) {
-      console.error('Failed to parse manifest YAML:', error);
+      this.logger.error('Failed to parse manifest YAML:', error instanceof Error ? error.stack : String(error));
       return null;
     }
   }

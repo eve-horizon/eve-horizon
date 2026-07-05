@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { CgroupMetricsReader, CgroupMetrics } from './cgroup-metrics';
 import { ConcurrencyLimiter } from './concurrency-limiter';
 
@@ -22,6 +23,7 @@ export interface TunerStatus {
 }
 
 export class ConcurrencyTuner {
+  private readonly logger = new Logger(ConcurrencyTuner.name);
   private metricsReader = new CgroupMetricsReader();
   private intervalId: ReturnType<typeof setInterval> | undefined;
   private _running = false;
@@ -85,7 +87,7 @@ export class ConcurrencyTuner {
       this.limiter.setLimit(newLimit);
       this._lastAdjustment = new Date();
       this._adjustmentCount++;
-      console.log(
+      this.logger.log(
         JSON.stringify({
           event: 'orchestrator.tuner.adjust',
           from: currentLimit,

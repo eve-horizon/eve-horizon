@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Inject, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { exchangeRateQueries, type Db } from '@eve/db';
 import { generateExchangeRateId } from '@eve/shared';
@@ -25,6 +25,7 @@ type FxUpdaterJob = {
  */
 @Injectable()
 export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(FxUpdaterService.name);
   private jobs: FxUpdaterJob[] = [];
   private exchangeRates: ReturnType<typeof exchangeRateQueries>;
 
@@ -34,7 +35,7 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_FX_UPDATER_ENABLED !== 'true') {
-      console.log('[fx] FX updater disabled (set EVE_FX_UPDATER_ENABLED=true to enable)');
+      this.logger.log('[fx] FX updater disabled (set EVE_FX_UPDATER_ENABLED=true to enable)');
       return;
     }
 
@@ -44,7 +45,7 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
     this.registerJob('fx:sats', satsCron, () => this.refreshSatsRate());
     this.registerJob('fx:fiat', fiatCron, () => this.refreshFiatRates());
 
-    console.log(`[fx] FX updater enabled (sats="${satsCron}", fiat="${fiatCron}")`);
+    this.logger.log(`[fx] FX updater enabled (sats="${satsCron}", fiat="${fiatCron}")`);
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -52,7 +53,7 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
       try {
         job.stop();
       } catch (err) {
-        console.warn(`[fx] Failed stopping FX job "${key}": ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn(`[fx] Failed stopping FX job "${key}": ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     this.jobs = [];
@@ -66,7 +67,7 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
         cronExpr,
         () => {
           fn().catch((err) => {
-            console.error(`[fx] FX job "${key}" failed:`, err instanceof Error ? err.message : String(err));
+            this.logger.error(`[fx] FX job "${key}" failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null, // onComplete
@@ -75,14 +76,14 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
       );
       this.jobs.push({ key, job });
     } catch (err) {
-      console.error(`[fx] Failed to register FX job "${key}" (${cronExpr}):`, err instanceof Error ? err.message : String(err));
+      this.logger.error(`[fx] Failed to register FX job "${key}" (${cronExpr}): ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   private async refreshSatsRate(): Promise<void> {
     const source = (process.env.EVE_FX_SATS_SOURCE ?? 'coingecko').toLowerCase();
     if (source !== 'coingecko') {
-      console.log(`[fx] sats refresh skipped: unsupported source "${source}"`);
+      this.logger.log(`[fx] sats refresh skipped: unsupported source "${source}"`);
       return;
     }
 
@@ -125,7 +126,7 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
   private async refreshFiatRates(): Promise<void> {
     const source = (process.env.EVE_FX_FIAT_SOURCE ?? 'ecb').toLowerCase();
     if (source !== 'ecb') {
-      console.log(`[fx] fiat refresh skipped: unsupported source "${source}"`);
+      this.logger.log(`[fx] fiat refresh skipped: unsupported source "${source}"`);
       return;
     }
 
@@ -171,7 +172,7 @@ export class FxUpdaterService implements OnModuleInit, OnModuleDestroy {
       if (target === 'usd') continue;
       const eurTarget = target === 'eur' ? 1 : rates.get(target);
       if (!eurTarget) {
-        console.warn(`[fx] ecb: missing rate for "${target}"`);
+        this.logger.warn(`[fx] ecb: missing rate for "${target}"`);
         continue;
       }
 

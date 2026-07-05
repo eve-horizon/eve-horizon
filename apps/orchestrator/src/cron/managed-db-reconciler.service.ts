@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { managedDbQueries, managedDbSnapshotQueries, createDb, type Db, orgQueries, projectQueries, environmentQueries } from '@eve/db';
 import {
@@ -43,6 +43,7 @@ class ManagedDbProvisioningError extends Error {
  */
 @Injectable()
 export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ManagedDbReconcilerService.name);
   private cronJob: CronJob | null = null;
   private reconciling = false;
 
@@ -62,7 +63,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_MANAGED_DB_RECONCILER_ENABLED !== 'true') {
-      console.log('[managed-db-reconciler] Disabled (set EVE_MANAGED_DB_RECONCILER_ENABLED=true to enable)');
+      this.logger.log('[managed-db-reconciler] Disabled (set EVE_MANAGED_DB_RECONCILER_ENABLED=true to enable)');
       return;
     }
 
@@ -78,22 +79,16 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         cron,
         () => {
           this.reconcile().catch((err) => {
-            console.error(
-              '[managed-db-reconciler] Reconcile failed:',
-              err instanceof Error ? err.message : String(err),
-            );
+            this.logger.error(`[managed-db-reconciler] Reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[managed-db-reconciler] Enabled (cron="${cron}")`);
+      this.logger.log(`[managed-db-reconciler] Enabled (cron="${cron}")`);
     } catch (err) {
-      console.error(
-        '[managed-db-reconciler] Failed to start cron:',
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[managed-db-reconciler] Failed to start cron: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -115,24 +110,18 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
       // Release locks held longer than 10 minutes (crash recovery)
       const stale = await this.managedDb.forceReleaseStaleOperationLocks(10);
       if (stale.length > 0) {
-        console.warn(
-          `[managed-db-reconciler] Released ${stale.length} stale lock(s):`,
-          stale.map(s => s.id).join(', '),
-        );
+        this.logger.warn(`[managed-db-reconciler] Released ${stale.length} stale lock(s): ${stale.map(s => s.id).join(', ')}`);
       }
 
       const tenants = await this.managedDb.listTenantsNeedingReconciliation();
       if (tenants.length > 0) {
-        console.log(`[managed-db-reconciler] Processing ${tenants.length} tenant(s)`);
+        this.logger.log(`[managed-db-reconciler] Processing ${tenants.length} tenant(s)`);
 
         for (const tenant of tenants) {
           try {
             await this.reconcileTenant(tenant);
           } catch (err) {
-            console.error(
-              `[managed-db-reconciler] Failed to reconcile tenant ${tenant.id}:`,
-              err instanceof Error ? err.message : String(err),
-            );
+            this.logger.error(`[managed-db-reconciler] Failed to reconcile tenant ${tenant.id}: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
       }
@@ -152,19 +141,16 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     const orphans = await this.managedDb.findOrphanedTenants();
     if (orphans.length === 0) return;
 
-    console.log(`[managed-db-reconciler] Found ${orphans.length} orphaned tenant(s)`);
+    this.logger.log(`[managed-db-reconciler] Found ${orphans.length} orphaned tenant(s)`);
 
     for (const orphan of orphans) {
       try {
         if (orphan.status !== 'deleting') {
           await this.managedDb.softDeleteTenant(orphan.id);
-          console.log(`[managed-db-reconciler] Marked orphan ${orphan.id} for deletion`);
+          this.logger.log(`[managed-db-reconciler] Marked orphan ${orphan.id} for deletion`);
         }
       } catch (err) {
-        console.error(
-          `[managed-db-reconciler] Failed to clean up orphan ${orphan.id}:`,
-          err instanceof Error ? err.message : String(err),
-        );
+        this.logger.error(`[managed-db-reconciler] Failed to clean up orphan ${orphan.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -190,7 +176,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     const token = crypto.randomUUID();
     const locked = await this.managedDb.acquireOperationLock(tenant.id, token);
     if (!locked) {
-      console.log(`[managed-db-reconciler] Tenant ${tenant.id} locked by another operation, skipping`);
+      this.logger.log(`[managed-db-reconciler] Tenant ${tenant.id} locked by another operation, skipping`);
       return;
     }
 
@@ -246,7 +232,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
       return;
     }
 
-    console.log(
+    this.logger.log(
       `[managed-db-reconciler] Provisioning tenant ${tenant.id} on instance ${instance.id} ` +
       `(${instance.provider}/${instance.provider_instance_id})`,
     );
@@ -269,7 +255,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         credentialSecretRef: connectionUrl,
         setReady: true,
       });
-      console.log(`[managed-db-reconciler] Tenant ${tenant.id} provisioned (local: ${tenant.db_name})`);
+      this.logger.log(`[managed-db-reconciler] Tenant ${tenant.id} provisioned (local: ${tenant.db_name})`);
     } else {
       if (desiredExtensions.length > 0) {
         throw new ManagedDbProvisioningError(
@@ -282,7 +268,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         providerTenantId: `${instance.provider}:${tenant.db_name}`,
         setReady: true,
       });
-      console.log(`[managed-db-reconciler] Tenant ${tenant.id} provisioned (stub: ${instance.provider})`);
+      this.logger.log(`[managed-db-reconciler] Tenant ${tenant.id} provisioned (stub: ${instance.provider})`);
     }
   }
 
@@ -311,7 +297,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         );
       }
 
-      console.log(
+      this.logger.log(
         `[managed-db-reconciler] Installing extension(s) for tenant ${tenant.id}: ` +
         missingExtensions.join(', '),
       );
@@ -324,7 +310,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     }
 
     if (tenant.desired_class) {
-      console.log(`[managed-db-reconciler] Scaling tenant ${tenant.id} to ${tenant.desired_class}`);
+      this.logger.log(`[managed-db-reconciler] Scaling tenant ${tenant.id} to ${tenant.desired_class}`);
     }
     await this.managedDb.transitionStatus(tenant.id, token, 'ready', {
       desiredClass: null,
@@ -335,7 +321,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     tenant: { id: string; instance_id: string; db_name: string; db_user: string; provider_tenant_id: string | null },
     token: string,
   ): Promise<void> {
-    console.log(`[managed-db-reconciler] Rotating credentials for tenant ${tenant.id}`);
+    this.logger.log(`[managed-db-reconciler] Rotating credentials for tenant ${tenant.id}`);
 
     if (tenant.provider_tenant_id?.startsWith('local:')) {
       const instance = await this.managedDb.findInstanceById(tenant.instance_id);
@@ -348,7 +334,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
           await this.managedDb.transitionStatus(tenant.id, token, 'ready', {
             credentialSecretRef: connectionUrl,
           });
-          console.log(`[managed-db-reconciler] Rotated credentials for local tenant ${tenant.id}`);
+          this.logger.log(`[managed-db-reconciler] Rotated credentials for local tenant ${tenant.id}`);
           return;
         } finally {
           await adminSql.end();
@@ -376,12 +362,12 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     },
     token: string,
   ): Promise<void> {
-    console.log(`[managed-db-reconciler] Deleting tenant ${tenant.id}`);
+    this.logger.log(`[managed-db-reconciler] Deleting tenant ${tenant.id}`);
 
     // Snapshot-on-delete: create a safety snapshot before destroying
     if (this.resolveTenantSnapshotSetting(tenant.snapshot_on_delete, tenant.class) && tenant.credential_secret_ref) {
       try {
-        console.log(`[managed-db-reconciler] Creating pre-delete snapshot for ${tenant.id}`);
+        this.logger.log(`[managed-db-reconciler] Creating pre-delete snapshot for ${tenant.id}`);
         const [org, project, environment] = await Promise.all([
           this.orgs.findById(tenant.org_id),
           this.projects.findById(tenant.project_id),
@@ -397,7 +383,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         });
       } catch (err) {
         // Best-effort: log warning but don't block teardown
-        console.warn(`[managed-db-reconciler] Pre-delete snapshot failed for ${tenant.id}:`, err instanceof Error ? err.message : String(err));
+        this.logger.warn(`[managed-db-reconciler] Pre-delete snapshot failed for ${tenant.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -409,7 +395,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     }
 
     await this.managedDb.markTenantDeleted(tenant.id);
-    console.log(`[managed-db-reconciler] Tenant ${tenant.id} deleted`);
+    this.logger.log(`[managed-db-reconciler] Tenant ${tenant.id} deleted`);
   }
 
   private async createPreDeleteSnapshot(tenant: {
@@ -427,7 +413,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
   }): Promise<void> {
     const snapshotStorage = createSnapshotStorageClient();
     if (!snapshotStorage) {
-      console.warn('[managed-db-reconciler] Storage not configured, skipping pre-delete snapshot');
+      this.logger.warn('[managed-db-reconciler] Storage not configured, skipping pre-delete snapshot');
       return;
     }
     const snapshotId = generateManagedDbSnapshotId();
@@ -475,7 +461,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         db_size_bytes: result.dbSizeBytes,
         pg_version: result.pgVersion,
       });
-      console.log(`[managed-db-reconciler] Pre-delete snapshot ${snapshotId} completed (${result.sizeBytes} bytes)`);
+      this.logger.log(`[managed-db-reconciler] Pre-delete snapshot ${snapshotId} completed (${result.sizeBytes} bytes)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.snapshots.failSnapshot(snapshotId, message);
@@ -754,7 +740,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
   private async seedLocalInstance(): Promise<void> {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) {
-      console.warn('[managed-db-reconciler] Cannot seed local instance: DATABASE_URL not set');
+      this.logger.warn('[managed-db-reconciler] Cannot seed local instance: DATABASE_URL not set');
       return;
     }
 
@@ -762,7 +748,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     const instances = await this.managedDb.listInstances();
     const existing = instances.find(i => i.provider === 'local');
     if (existing) {
-      console.log(`[managed-db-reconciler] Local instance already exists: ${existing.id}`);
+      this.logger.log(`[managed-db-reconciler] Local instance already exists: ${existing.id}`);
       return;
     }
 
@@ -784,6 +770,6 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
       capacity_json: { max_tenants: 50 },
     });
 
-    console.log(`[managed-db-reconciler] Seeded local managed DB instance: ${instance.id} (${host}:${port})`);
+    this.logger.log(`[managed-db-reconciler] Seeded local managed DB instance: ${instance.id} (${host}:${port})`);
   }
 }

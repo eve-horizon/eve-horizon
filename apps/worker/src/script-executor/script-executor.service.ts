@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
@@ -132,6 +132,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 @Injectable()
 export class ScriptExecutorService {
+  private readonly logger = new Logger(ScriptExecutorService.name);
   private logs: ReturnType<typeof executionLogQueries>;
   private jobs: ReturnType<typeof jobQueries>;
 
@@ -273,10 +274,10 @@ export class ScriptExecutorService {
         if (tokenResult) {
           jobToken = tokenResult.access_token;
         } else {
-          console.warn(`[script-executor] Could not mint job token for ${jobId} — script will run without auth`);
+          this.logger.warn(`[script-executor] Could not mint job token for ${jobId} — script will run without auth`);
         }
       } catch (err) {
-        console.warn(`[script-executor] Token mint failed for ${jobId}:`, err);
+        this.logger.warn(`[script-executor] Token mint failed for ${jobId}: ${err instanceof Error ? err.stack : String(err)}`);
       }
 
       // 3c. Write ~/.eve/credentials.json into a workspace-scoped HOME so the
@@ -286,7 +287,7 @@ export class ScriptExecutorService {
         try {
           await this.writeScriptCredentials(scriptHome, jobToken);
         } catch (err) {
-          console.warn(`[script-executor] Failed to write credentials.json for ${jobId}:`, err);
+          this.logger.warn(`[script-executor] Failed to write credentials.json for ${jobId}: ${err instanceof Error ? err.stack : String(err)}`);
         }
       }
 
@@ -341,7 +342,7 @@ export class ScriptExecutorService {
           await handlePushPolicy(gitWorkspace, gitConfig, result.success);
         } catch (gitError) {
           const msg = gitError instanceof Error ? gitError.message : String(gitError);
-          console.error(`[script-git-policy] ${msg}`);
+          this.logger.error(`[script-git-policy] ${msg}`);
           result.success = false;
           result.exitCode = result.exitCode === 0 ? 1 : result.exitCode;
           result.error = result.error ? `${result.error}; ${msg}` : msg;
@@ -417,9 +418,9 @@ export class ScriptExecutorService {
         SET git_json = ${this.db.json(gitMeta as never)}::jsonb
         WHERE id = ${attemptId}::uuid
       `;
-      console.log(`Updated git_json for script attempt ${attemptId}:`, gitMeta);
+      this.logger.log(`Updated git_json for script attempt ${attemptId}: ${JSON.stringify(gitMeta)}`);
     } catch (error) {
-      console.error(`Failed to update git_json for script attempt ${attemptId}:`, error);
+      this.logger.error(`Failed to update git_json for script attempt ${attemptId}:`, error instanceof Error ? error.stack : String(error));
     }
   }
 
@@ -486,7 +487,7 @@ export class ScriptExecutorService {
       `;
       return result?.sha ?? null;
     } catch (error) {
-      console.warn(`Failed to get environment release SHA: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`Failed to get environment release SHA: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }
@@ -505,7 +506,7 @@ export class ScriptExecutorService {
       const defaults = result.parsed_defaults as { git?: { ref?: string; branch?: string } };
       return defaults.git?.ref ?? defaults.git?.branch ?? null;
     } catch (error) {
-      console.warn(`Failed to get manifest git ref: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`Failed to get manifest git ref: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }
@@ -583,7 +584,7 @@ export class ScriptExecutorService {
       };
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to prepare workspace with git controls: ${errMsg}`);
+      this.logger.error(`Failed to prepare workspace with git controls: ${errMsg}`);
 
       await this.appendLog(args.attemptId, 'error', {
         message: `Workspace preparation failed: ${errMsg}`,
@@ -618,7 +619,7 @@ export class ScriptExecutorService {
 
       // Ensure workspace directory exists
       await fs.mkdir(workspacePath, { recursive: true });
-      console.log(`Created workspace directory: ${workspacePath}`);
+      this.logger.log(`Created workspace directory: ${workspacePath}`);
 
       const repoPath = path.join(workspacePath, 'repo');
       const localRepoPath = getLocalRepoPath(repoUrl);
@@ -628,7 +629,7 @@ export class ScriptExecutorService {
       }
 
       if (localRepoPath) {
-        console.log(`Copying local repository from ${localRepoPath} to ${repoPath}`);
+        this.logger.log(`Copying local repository from ${localRepoPath} to ${repoPath}`);
         const stats = await fs.stat(localRepoPath);
         if (!stats.isDirectory()) {
           throw new Error('file:// path is not a directory');
@@ -637,7 +638,7 @@ export class ScriptExecutorService {
       } else {
         const cloneUrl = await this.injectGitAuth(repoUrl, projectId, resolvedSecrets);
         const cloneArgs = ['clone', '--depth', '1', '--', cloneUrl, repoPath];
-        console.log(`Cloning repository from ${redactRepoUrl(cloneUrl)} to ${repoPath}`);
+        this.logger.log(`Cloning repository from ${redactRepoUrl(cloneUrl)} to ${repoPath}`);
         try {
           await runGit(cloneArgs);
         } catch (err) {
@@ -652,7 +653,7 @@ export class ScriptExecutorService {
         }
       }
 
-      console.log(`Repository ready at ${repoPath}`);
+      this.logger.log(`Repository ready at ${repoPath}`);
 
       await this.appendLog(attemptId, 'status', {
         message: 'Workspace prepared successfully',
@@ -663,7 +664,7 @@ export class ScriptExecutorService {
       return repoPath;
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to prepare workspace: ${errMsg}`);
+      this.logger.error(`Failed to prepare workspace: ${errMsg}`);
 
       await this.appendLog(attemptId, 'error', {
         message: `Workspace preparation failed: ${errMsg}`,
@@ -981,10 +982,10 @@ export class ScriptExecutorService {
   private async cleanupWorkspace(workspacePath: string): Promise<void> {
     try {
       await fs.rm(workspacePath, { recursive: true, force: true });
-      console.log(`Cleaned up workspace: ${workspacePath}`);
+      this.logger.log(`Cleaned up workspace: ${workspacePath}`);
     } catch (error) {
       // Best-effort cleanup, don't fail the job
-      console.warn(`Failed to cleanup workspace ${workspacePath}:`, error);
+      this.logger.warn(`Failed to cleanup workspace ${workspacePath}: ${error instanceof Error ? error.stack : String(error)}`);
     }
   }
 
@@ -1006,7 +1007,7 @@ export class ScriptExecutorService {
       if (requiredForEnvOverrides) {
         throw new Error(`Secret resolution failed for env_overrides: ${result.error ?? 'unknown error'}`);
       }
-      console.error(
+      this.logger.error(
         `Cannot resolve secrets for git auth: ${result.error}. ` +
         `Clone will proceed without authentication.`,
       );
@@ -1036,7 +1037,7 @@ export class ScriptExecutorService {
         try {
           const url = new URL(repoUrl);
           if (url.hostname.includes('github.com')) {
-            console.warn(
+            this.logger.warn(
               `No GITHUB_TOKEN found for project ${projectId}. ` +
               `If ${repoUrl} is private, clone will fail. ` +
               `Set GITHUB_TOKEN via: eve secrets set GITHUB_TOKEN <value> --project <id>`
@@ -1048,7 +1049,7 @@ export class ScriptExecutorService {
 
       return buildAuthenticatedHttpsUrl(repoUrl, token.value);
     } catch (err) {
-      console.warn(`Git auth injection failed: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Git auth injection failed: ${err instanceof Error ? err.message : err}`);
     }
     return repoUrl;
   }
@@ -1064,7 +1065,7 @@ export class ScriptExecutorService {
     try {
       await this.logs.appendLog(attemptId, type, content);
     } catch (error) {
-      console.error(`Failed to append log for attempt ${attemptId}:`, error);
+      this.logger.error(`Failed to append log for attempt ${attemptId}:`, error instanceof Error ? error.stack : String(error));
     }
   }
 }

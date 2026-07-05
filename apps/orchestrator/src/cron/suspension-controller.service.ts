@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import {
   orgQueries,
@@ -25,6 +25,7 @@ import {
  */
 @Injectable()
 export class SuspensionControllerService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(SuspensionControllerService.name);
   private job: CronJob | null = null;
   private running = false;
 
@@ -42,7 +43,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_SUSPENSION_CONTROLLER_ENABLED !== 'true') {
-      console.log(
+      this.logger.log(
         '[suspension] Suspension controller disabled (set EVE_SUSPENSION_CONTROLLER_ENABLED=true to enable)',
       );
       return;
@@ -55,22 +56,16 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
         cron,
         () => {
           this.tick().catch((err) => {
-            console.error(
-              '[suspension] Tick failed:',
-              err instanceof Error ? err.message : String(err),
-            );
+            this.logger.error(`[suspension] Tick failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[suspension] Suspension controller enabled (cron="${cron}")`);
+      this.logger.log(`[suspension] Suspension controller enabled (cron="${cron}")`);
     } catch (err) {
-      console.error(
-        `[suspension] Failed to register cron (${cron}):`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[suspension] Failed to register cron (${cron}): ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -79,10 +74,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
       try {
         this.job.stop();
       } catch (err) {
-        console.warn(
-          '[suspension] Failed stopping cron:',
-          err instanceof Error ? err.message : String(err),
-        );
+        this.logger.warn(`[suspension] Failed stopping cron: ${err instanceof Error ? err.message : String(err)}`);
       }
       this.job = null;
     }
@@ -103,10 +95,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
         try {
           await this.evaluateOrg(org);
         } catch (err) {
-          console.error(
-            `[suspension] Error evaluating org ${org.id} (${org.slug}):`,
-            err instanceof Error ? err.message : String(err),
-          );
+          this.logger.error(`[suspension] Error evaluating org ${org.id} (${org.slug}): ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     } finally {
@@ -170,7 +159,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
         await this.environments.suspend(env.id, reason);
         suspendedCount++;
 
-        console.log(
+        this.logger.log(
           `[suspension] Suspended env "${env.name}" (${env.id}) for project ${project.slug}: ${reason}`,
         );
 
@@ -180,7 +169,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
         //   await scaleNamespaceToZero(env.namespace);
         // For now this is a soft suspension (DB status only).
         if (env.namespace) {
-          console.log(
+          this.logger.log(
             `[suspension] STUB: Would scale namespace "${env.namespace}" to zero replicas`,
           );
         }
@@ -188,7 +177,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
     }
 
     if (suspendedCount > 0) {
-      console.log(
+      this.logger.log(
         `[suspension] Suspended ${suspendedCount} environment(s) for org ${org.slug} (balance: ${currentBalance.toFixed(4)})`,
       );
     }
@@ -213,7 +202,7 @@ export class SuspensionControllerService implements OnModuleInit, OnModuleDestro
     }
 
     if (suspendedCount > 0) {
-      console.log(
+      this.logger.log(
         `[suspension] Org ${org.slug} is now eligible for resume: ${suspendedCount} environment(s) still suspended. Manual resume required.`,
       );
     }

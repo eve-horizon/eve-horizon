@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { managedDbSnapshotQueries, type Db } from '@eve/db';
 import {
@@ -23,6 +23,7 @@ import { CronExpressionParser } from 'cron-parser';
  */
 @Injectable()
 export class ManagedDbSnapshotSchedulerService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ManagedDbSnapshotSchedulerService.name);
   private cronJob: CronJob | null = null;
   private running = false;
 
@@ -34,7 +35,7 @@ export class ManagedDbSnapshotSchedulerService implements OnModuleInit, OnModule
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_MANAGED_DB_SNAPSHOT_SCHEDULER_ENABLED !== 'true') {
-      console.log('[snapshot-scheduler] Disabled (set EVE_MANAGED_DB_SNAPSHOT_SCHEDULER_ENABLED=true to enable)');
+      this.logger.log('[snapshot-scheduler] Disabled (set EVE_MANAGED_DB_SNAPSHOT_SCHEDULER_ENABLED=true to enable)');
       return;
     }
 
@@ -45,16 +46,16 @@ export class ManagedDbSnapshotSchedulerService implements OnModuleInit, OnModule
         cron,
         () => {
           this.tick().catch((err) => {
-            console.error('[snapshot-scheduler] Tick failed:', err instanceof Error ? err.message : String(err));
+            this.logger.error(`[snapshot-scheduler] Tick failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[snapshot-scheduler] Started (cron: ${cron})`);
+      this.logger.log(`[snapshot-scheduler] Started (cron: ${cron})`);
     } catch (err) {
-      console.error('[snapshot-scheduler] Failed to start:', err instanceof Error ? err.message : String(err));
+      this.logger.error(`[snapshot-scheduler] Failed to start: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -117,7 +118,7 @@ export class ManagedDbSnapshotSchedulerService implements OnModuleInit, OnModule
       }
 
       if (created > 0) {
-        console.log(`[snapshot-scheduler] Created ${created} scheduled snapshot(s)`);
+        this.logger.log(`[snapshot-scheduler] Created ${created} scheduled snapshot(s)`);
       }
     } finally {
       this.running = false;
@@ -155,7 +156,7 @@ export class ManagedDbSnapshotSchedulerService implements OnModuleInit, OnModule
     try {
       const snapshotStorage = createSnapshotStorageClient();
       if (!snapshotStorage) {
-        console.warn('[snapshot-scheduler] Storage not configured, skipping snapshot');
+        this.logger.warn('[snapshot-scheduler] Storage not configured, skipping snapshot');
         return;
       }
       const snapshotId = generateManagedDbSnapshotId();
@@ -207,15 +208,15 @@ export class ManagedDbSnapshotSchedulerService implements OnModuleInit, OnModule
             pg_version: result.pgVersion,
           });
           await this.snapshots.updateTenantLastSnapshotAt(tenant.id);
-          console.log(`[snapshot-scheduler] Snapshot ${snapshotId} completed`);
+          this.logger.log(`[snapshot-scheduler] Snapshot ${snapshotId} completed`);
         })
         .catch(async (err) => {
           const message = err instanceof Error ? err.message : String(err);
           await this.snapshots.failSnapshot(snapshotId, message);
-          console.error(`[snapshot-scheduler] Snapshot ${snapshotId} failed: ${message}`);
+          this.logger.error(`[snapshot-scheduler] Snapshot ${snapshotId} failed: ${message}`);
         });
     } catch (err) {
-      console.error(`[snapshot-scheduler] Failed to create snapshot for tenant ${tenant.id}:`, err);
+      this.logger.error(`[snapshot-scheduler] Failed to create snapshot for tenant ${tenant.id}:`, err instanceof Error ? err.stack : String(err));
     }
   }
 }

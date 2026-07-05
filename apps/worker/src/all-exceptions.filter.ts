@@ -7,6 +7,22 @@ import {
   Logger,
 } from '@nestjs/common';
 
+/**
+ * Global exception filter that preserves error messages in 500 envelopes
+ * (Nest's default filter replaces plain-Error messages with a generic
+ * "Internal server error").
+ *
+ * XAP-4 status: OPT-IN. Only the worker registers this filter (main.ts);
+ * api/gateway/orchestrator/agent-runtime deliberately keep Nest's default
+ * envelopes — registering it there would change their 500 response bodies.
+ * It stays app-local rather than in @eve/shared because @eve/shared is
+ * framework-free (no @nestjs/* dependency) and this file needs
+ * @nestjs/common at runtime; a dedicated Nest-coupled workspace package for
+ * one single-consumer file isn't justified. To adopt in another service:
+ * copy this file (or extract it to a shared Nest-coupled package once there
+ * are two consumers) and add `app.useGlobalFilters(new AllExceptionsFilter())`
+ * after `NestFactory.create` in that service's main.ts.
+ */
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);

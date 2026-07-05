@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import {
   environmentCostSnapshotQueries,
@@ -38,6 +38,7 @@ const PLATFORM_NAMESPACES = new Set([
 
 @Injectable()
 export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(EnvCostCollectorService.name);
   private cronJob: CronJob | null = null;
 
   private readonly environments: ReturnType<typeof environmentQueries>;
@@ -54,7 +55,7 @@ export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_ENV_COST_COLLECTOR_ENABLED !== 'true') {
-      console.log('[env-cost] Collector disabled (set EVE_ENV_COST_COLLECTOR_ENABLED=true to enable)');
+      this.logger.log('[env-cost] Collector disabled (set EVE_ENV_COST_COLLECTOR_ENABLED=true to enable)');
       return;
     }
 
@@ -64,16 +65,16 @@ export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
         cron,
         () => {
           this.collect().catch((err) => {
-            console.error('[env-cost] Collection failed:', err instanceof Error ? err.message : String(err));
+            this.logger.error(`[env-cost] Collection failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[env-cost] Collector enabled (cron="${cron}")`);
+      this.logger.log(`[env-cost] Collector enabled (cron="${cron}")`);
     } catch (err) {
-      console.error('[env-cost] Failed to start cron:', err instanceof Error ? err.message : String(err));
+      this.logger.error(`[env-cost] Failed to start cron: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -91,7 +92,7 @@ export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
   async collect(source?: CostSource, now = new Date()): Promise<void> {
     const costSource = source ?? this.createSourceFromEnv();
     if (!costSource) {
-      console.warn('[env-cost] EVE_OPENCOST_URL not configured; skipping collection');
+      this.logger.warn('[env-cost] EVE_OPENCOST_URL not configured; skipping collection');
       return;
     }
 
@@ -106,7 +107,7 @@ export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
       if (!env.namespace) continue;
       const project = await this.projects.findById(env.project_id);
       if (!project) {
-        console.warn(`[env-cost] Project ${env.project_id} not found for env ${env.id}; skipping`);
+        this.logger.warn(`[env-cost] Project ${env.project_id} not found for env ${env.id}; skipping`);
         continue;
       }
       let orgLabel = orgLabelCache.get(project.org_id);
@@ -130,11 +131,11 @@ export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
     try {
       allocations = await costSource.fetchMonthToDate({ start: windowStart, end: now });
     } catch (err) {
-      console.warn('[env-cost] Source fetch failed:', err instanceof Error ? err.message : String(err));
+      this.logger.warn(`[env-cost] Source fetch failed: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
     if (allocations.length === 0) {
-      console.warn('[env-cost] Source returned no usable allocations; leaving last-good snapshots untouched');
+      this.logger.warn('[env-cost] Source returned no usable allocations; leaving last-good snapshots untouched');
       return;
     }
 
@@ -204,12 +205,12 @@ export class EnvCostCollectorService implements OnModuleInit, OnModuleDestroy {
 
     const elapsed = Date.now() - startedAt;
     const unmapped = Array.from(unmappedNamespaces).sort();
-    console.log(
+    this.logger.log(
       `[env-cost] Collection complete: ${envRows} env rows, ${overhead.length} overhead allocations, ` +
       `${unmapped.length} unmapped namespaces (${elapsed}ms)`,
     );
     if (unmapped.length > 0) {
-      console.warn(`[env-cost] Unmapped namespaces counted as overhead: ${unmapped.join(', ')}`);
+      this.logger.warn(`[env-cost] Unmapped namespaces counted as overhead: ${unmapped.join(', ')}`);
     }
   }
 

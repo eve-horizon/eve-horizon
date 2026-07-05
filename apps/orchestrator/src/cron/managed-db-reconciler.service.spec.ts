@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { ManagedDbReconcilerService } from './managed-db-reconciler.service.js';
 
@@ -30,7 +31,7 @@ describe('ManagedDbReconcilerService.reconcile', () => {
   });
 
   it('logs a warning when stale locks are released', async () => {
-    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const consoleSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const forceReleaseStaleOperationLocks = vi.fn().mockResolvedValue([
       { id: 'mdbt_abc', operation_token: 'tok-123' },
     ]);
@@ -55,7 +56,9 @@ describe('ManagedDbReconcilerService.reconcile', () => {
 
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('Released 1 stale lock(s)'),
-      'mdbt_abc',
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('mdbt_abc'),
     );
     consoleSpy.mockRestore();
   });

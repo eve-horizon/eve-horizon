@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import {
@@ -396,7 +396,10 @@ type JobDispatchOutcome =
 
 @Injectable()
 export class LoopService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(LoopService.name);
   private readonly config = loadConfig();
+  /** Routing target for agent jobs, computed once from the config snapshot. */
+  private readonly agentRuntimeConfigured = Boolean(this.config.EVE_AGENT_RUNTIME_URL);
   private readonly limiter: ConcurrencyLimiter;
   private readonly tuner: ConcurrencyTuner;
   private readonly recovery: RecoveryService;
@@ -422,11 +425,11 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     this.loopIntervalMs = Math.max(100, this.config.ORCH_LOOP_INTERVAL_MS);
     this.heartbeatIntervalTicks = ticksForIntervalMs(this.loopIntervalMs, 60_000);
     this.pipelineReconcileIntervalTicks = readPositiveInt(
-      process.env.EVE_ORCH_PIPELINE_RECONCILE_INTERVAL_TICKS,
+      this.config.EVE_ORCH_PIPELINE_RECONCILE_INTERVAL_TICKS,
       ticksForIntervalMs(this.loopIntervalMs, 30_000),
     );
     this.wakeOnIntervalTicks = readPositiveInt(
-      process.env.EVE_ORCH_WAKE_ON_INTERVAL_TICKS,
+      this.config.EVE_ORCH_WAKE_ON_INTERVAL_TICKS,
       ticksForIntervalMs(this.loopIntervalMs, 15_000),
     );
     this.lastConcurrencyChange = new Date();
@@ -458,7 +461,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     await this.recovery.recoverOrphanedJobs();
     await this.recoverCompletedAttempts();
 
-    console.log(
+    this.logger.log(
       `Starting orchestrator polling loop (${this.loopIntervalMs}ms interval, concurrency: ${this.limiter.limit})`,
     );
     this.startLoop();
@@ -505,7 +508,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    console.log(
+    this.logger.log(
       `Found ${completedAttempts.length} running attempt(s) with completion logs, recovering...`,
     );
 
@@ -518,12 +521,12 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           const elapsedMs = Date.now() - dispatchStart;
           const graceMs = 30 * 1000; // 30 seconds
           if (elapsedMs < graceMs) {
-            console.log(
+            this.logger.log(
               `Skipping recovery for job ${attempt.job_id}; active dispatch will handle finalization`,
             );
             continue;
           }
-          console.log(
+          this.logger.log(
             `Force-recovering job ${attempt.job_id}; dispatch stuck for ${Math.round(elapsedMs / 1000)}s`,
           );
           this.inFlightJobs.delete(attempt.job_id);
@@ -560,7 +563,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           errorMessage,
         });
         if (!completed) {
-          console.log(`Attempt ${attempt.attempt_id} already finalized; skipping completed-attempt recovery`);
+          this.logger.log(`Attempt ${attempt.attempt_id} already finalized; skipping completed-attempt recovery`);
           continue;
         }
         const job = await jobs.findById(attempt.job_id);
@@ -571,18 +574,18 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
         if (outcome === 'success') {
           await jobs.markJobDone(attempt.job_id);
-          console.log(`Recovered completed job ${attempt.job_id}`);
+          this.logger.log(`Recovered completed job ${attempt.job_id}`);
         } else if (outcome === 'waiting') {
           // Don't mark done or failed; the next tick will handle re-execution
-          console.log(`Recovered waiting job ${attempt.job_id}; will re-process on next tick`);
+          this.logger.log(`Recovered waiting job ${attempt.job_id}; will re-process on next tick`);
         } else {
           await jobs.markJobFailed(attempt.job_id, errorMessage ?? 'Recovered failed attempt');
-          console.log(`Recovered failed job ${attempt.job_id}`);
+          this.logger.log(`Recovered failed job ${attempt.job_id}`);
         }
 
         const released = await gates.releaseGates(attempt.job_id);
         if (released > 0) {
-          console.log(`Released ${released} gate(s) for recovered job ${attempt.job_id}`);
+          this.logger.log(`Released ${released} gate(s) for recovered job ${attempt.job_id}`);
         }
 
         // Close workflow root when all children reach terminal state
@@ -591,7 +594,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         }
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        console.error(`Failed to recover completed attempt ${attempt.attempt_id}: ${errMsg}`);
+        this.logger.error(`Failed to recover completed attempt ${attempt.attempt_id}: ${errMsg}`);
       }
     }
   }
@@ -605,7 +608,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       const projects = projectQueries(this.db);
       const project = await projects.findById(job.project_id);
       if (!project) {
-        console.warn(`[receipt] Skipping receipt for attempt ${attempt.id}: missing project ${job.project_id}`);
+        this.logger.warn(`[receipt] Skipping receipt for attempt ${attempt.id}: missing project ${job.project_id}`);
         return;
       }
 
@@ -619,7 +622,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         try {
           systemDefaults = parseBillingDefaultsV1(billingDefaultsSetting.value);
         } catch (err) {
-          console.warn(
+          this.logger.warn(
             `[receipt] Invalid system billing.defaults; falling back to defaults: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
@@ -662,7 +665,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
             source: fxRow.source,
           };
         } else {
-          console.warn(`[receipt] Missing FX rate usd->${billingCurrency}; billed totals will use rate=1`);
+          this.logger.warn(`[receipt] Missing FX rate usd->${billingCurrency}; billed totals will use rate=1`);
         }
       }
 
@@ -719,7 +722,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         billedCurrency: materialized.billed_currency,
       });
     } catch (err) {
-      console.error(
+      this.logger.error(
         `[receipt] Failed to persist receipt for attempt ${attempt.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -744,7 +747,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
       const project = await projectQueries(this.db).findById(job.project_id);
       if (!project) {
-        console.warn(`[charge] Skipping charge for attempt ${attempt.id}: missing project ${job.project_id}`);
+        this.logger.warn(`[charge] Skipping charge for attempt ${attempt.id}: missing project ${job.project_id}`);
         return;
       }
 
@@ -765,10 +768,10 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         source_id: attempt.id,
       });
 
-      console.log(`[charge] Charged org ${project.org_id} ${billedTotal} ${billedCurrency} for attempt ${attempt.id}`);
+      this.logger.log(`[charge] Charged org ${project.org_id} ${billedTotal} ${billedCurrency} for attempt ${attempt.id}`);
     } catch (err) {
       // Charging failures must NOT fail the attempt finalization.
-      console.warn(
+      this.logger.warn(
         `[charge] Failed to charge for attempt ${attempt.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -805,7 +808,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         await this.tick();
       } while (this.tickRerunRequested && !this._stopping);
     } catch (err) {
-      console.error('Error in orchestrator tick:', err);
+      this.logger.error('Error in orchestrator tick:', err instanceof Error ? err.stack : String(err));
     } finally {
       this.tickInProgress = false;
     }
@@ -937,7 +940,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         try {
           systemDefaults = parseBillingDefaultsV1(billingDefaultsSetting.value);
         } catch (err) {
-          console.warn(
+          this.logger.warn(
             `[budget] Invalid system billing.defaults; falling back: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
@@ -971,7 +974,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       return { blocked: false };
     } catch (err) {
       // Budget checks should never crash the scheduler; fail open.
-      console.warn(`[budget] Admission check failed for job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`[budget] Admission check failed for job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
       return { blocked: false };
     }
   }
@@ -993,7 +996,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           )
       `;
     } catch (err) {
-      console.warn(`[budget] Failed to annotate budget block for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`[budget] Failed to annotate budget block for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1008,7 +1011,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           AND (hints ? 'budget_blocked' OR hints ? 'budget_blocked_reason')
       `;
     } catch (err) {
-      console.warn(`[budget] Failed to clear budget block for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`[budget] Failed to clear budget block for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1031,7 +1034,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     // Only workflow step jobs (with a parent) can have conditions
     if (!job.parent_id) {
-      console.warn(`[workflow] Job ${job.id} has condition but no parent_id — ignoring condition`);
+      this.logger.warn(`[workflow] Job ${job.id} has condition but no parent_id — ignoring condition`);
       return null;
     }
 
@@ -1040,7 +1043,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       /^(\w[\w-]*)\s*\.\s*status\s*(==|!=)\s*['"]([^'"]*)['"]\s*$/,
     );
     if (!match) {
-      console.warn(`[workflow] Job ${job.id} has unparseable condition "${condition}" — running unconditionally`);
+      this.logger.warn(`[workflow] Job ${job.id} has unparseable condition "${condition}" — running unconditionally`);
       return null;
     }
 
@@ -1054,7 +1057,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       dependencies.find((dep) => dep.step_name === refStepName || dep.hints?.step_name === refStepName)
       ?? await jobs.findSiblingByStepName(job.parent_id, refStepName);
     if (!siblingJob) {
-      console.warn(`[workflow] Job ${job.id} condition references step "${refStepName}" but sibling not found — running unconditionally`);
+      this.logger.warn(`[workflow] Job ${job.id} condition references step "${refStepName}" but sibling not found — running unconditionally`);
       return null;
     }
 
@@ -1062,7 +1065,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     if (siblingJob.phase !== 'done' && siblingJob.phase !== 'cancelled') {
       // Dependency not yet complete — this shouldn't happen since depends_on
       // gates readiness, but guard against it
-      console.warn(`[workflow] Job ${job.id} condition step "${refStepName}" is still in phase "${siblingJob.phase}" — deferring`);
+      this.logger.warn(`[workflow] Job ${job.id} condition step "${refStepName}" is still in phase "${siblingJob.phase}" — deferring`);
       return null;
     }
 
@@ -1094,9 +1097,9 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     const statusDisplay = actualStatus !== undefined ? `"${actualStatus}"` : 'undefined';
     if (shouldRun) {
-      console.log(`[workflow] Step "${job.step_name}" (${job.id}): condition "${condition}" passed (actual: ${statusDisplay})`);
+      this.logger.log(`[workflow] Step "${job.step_name}" (${job.id}): condition "${condition}" passed (actual: ${statusDisplay})`);
     } else {
-      console.log(`[workflow] Step "${job.step_name}" (${job.id}): condition "${condition}" not met (actual: ${statusDisplay}) — skipping`);
+      this.logger.log(`[workflow] Step "${job.step_name}" (${job.id}): condition "${condition}" not met (actual: ${statusDisplay}) — skipping`);
     }
 
     return {
@@ -1125,9 +1128,9 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         WHERE id = ${job.id}
           AND phase NOT IN ('done', 'cancelled')
       `;
-      console.log(`[workflow] Skipped step "${job.step_name}" (${job.id}): ${reason}`);
+      this.logger.log(`[workflow] Skipped step "${job.step_name}" (${job.id}): ${reason}`);
     } catch (err) {
-      console.error(`[workflow] Failed to skip conditional job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.error(`[workflow] Failed to skip conditional job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1135,7 +1138,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     run: PipelineRun,
     pipelineRuns: ReturnType<typeof pipelineRunQueries>,
   ): Promise<void> {
-    console.log(`Claimed pipeline run ${run.id} (${run.pipeline_name})`);
+    this.logger.log(`Claimed pipeline run ${run.id} (${run.pipeline_name})`);
 
     const result = await this.workerService.executePipelineRun(run.id);
     if (result.success) {
@@ -1151,7 +1154,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       error_message: result.error ?? 'Pipeline runner failed',
     });
 
-    console.error(`Pipeline run ${run.id} failed: ${result.error ?? 'unknown error'}`);
+    this.logger.error(`Pipeline run ${run.id} failed: ${result.error ?? 'unknown error'}`);
 
     await this.emitPipelineFailureEvent(run, result.error ?? 'Pipeline runner failed');
   }
@@ -1161,7 +1164,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
    * Called during heartbeat ticks.
    */
   private logMetrics() {
-    console.log(
+    this.logger.log(
       JSON.stringify({
         metric: 'orchestrator.in_flight',
         value: this.limiter.inFlight,
@@ -1205,7 +1208,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
   setConcurrency(newLimit: number) {
     this.limiter.setLimit(newLimit);
     this.lastConcurrencyChange = new Date();
-    console.log(`Concurrency limit updated via admin API: ${newLimit}`);
+    this.logger.log(`Concurrency limit updated via admin API: ${newLimit}`);
   }
 
   private async tick() {
@@ -1213,14 +1216,14 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     // Log heartbeat roughly once per minute regardless of loop cadence.
     if (this.tickCount % this.heartbeatIntervalTicks === 0) {
-      console.log(
+      this.logger.log(
         `Orchestrator heartbeat: ${this.tickCount} ticks, ${this.jobsProcessed} jobs processed, ${this.limiter.inFlight}/${this.limiter.limit} in-flight`,
       );
       this.logMetrics();
     }
 
     const recoveryIntervalTicks = parseInt(
-      process.env.EVE_ORCH_RECOVERY_INTERVAL_TICKS ?? '1',
+      this.config.EVE_ORCH_RECOVERY_INTERVAL_TICKS ?? '1',
       10,
     );
     if (recoveryIntervalTicks > 0 && this.tickCount % Math.max(1, recoveryIntervalTicks) === 0) {
@@ -1228,7 +1231,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     }
 
     const staleRecoveryIntervalTicks = parseInt(
-      process.env.EVE_ORCH_STALE_RECOVERY_INTERVAL_TICKS ?? '1',
+      this.config.EVE_ORCH_STALE_RECOVERY_INTERVAL_TICKS ?? '1',
       10,
     );
     if (
@@ -1277,7 +1280,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         const pipeline = await this.claimNextPipelineRun();
         if (pipeline) {
           this.dispatchPipeline(pipeline).catch((err) =>
-            console.error(`Pipeline dispatch error: ${err}`),
+            this.logger.error(`Pipeline dispatch error: ${err}`),
           );
           continue; // Check for more capacity
         }
@@ -1291,14 +1294,14 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         const claimed = await this.claimNextJobWithBudgetCheck(jobs);
         if (claimed) {
           this.dispatchJob(claimed).catch((err) =>
-            console.error(`Job dispatch error: ${err}`),
+            this.logger.error(`Job dispatch error: ${err}`),
           );
           continue; // Check for more capacity
         }
         const claimedAssigned = await this.claimNextAssignedJobWithBudgetCheck(jobs);
         if (claimedAssigned) {
           this.dispatchJob(claimedAssigned).catch((err) =>
-            console.error(`Assigned job dispatch error: ${err}`),
+            this.logger.error(`Assigned job dispatch error: ${err}`),
           );
           continue; // Check for more capacity
         }
@@ -1308,7 +1311,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       } else {
         // No capacity
         if (!this._capacityLoggedOnce) {
-          console.debug(
+          this.logger.debug(
             `Orchestrator at capacity (${this.limiter.inFlight}/${this.limiter.limit}), skipping claims`,
           );
           this._capacityLoggedOnce = true;
@@ -1334,10 +1337,10 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       await this.processPipelineRun(run, pipelineRuns);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Unhandled error in pipeline dispatch for run ${run.id}: ${errMsg}`);
+      this.logger.error(`Unhandled error in pipeline dispatch for run ${run.id}: ${errMsg}`);
     } finally {
       this.limiter.release();
-      console.debug(`Pipeline dispatch complete for ${run.id} (in-flight: ${this.limiter.inFlight}/${this.limiter.limit})`);
+      this.logger.debug(`Pipeline dispatch complete for ${run.id} (in-flight: ${this.limiter.inFlight}/${this.limiter.limit})`);
 
       if (this.limiter.hasCapacity && !this._stopping) {
         this.requestTick();
@@ -1358,15 +1361,15 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       await this.processJob(claimed);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Unhandled error in job dispatch for ${claimed.job.id}: ${errMsg}`);
+      this.logger.error(`Unhandled error in job dispatch for ${claimed.job.id}: ${errMsg}`);
     } finally {
       const wasTracked = this.inFlightJobs.delete(claimed.job.id);
       if (wasTracked) {
         this.limiter.release();
       } else {
-        console.log(`Job ${claimed.job.id} was force-recovered; skipping limiter release`);
+        this.logger.log(`Job ${claimed.job.id} was force-recovered; skipping limiter release`);
       }
-      console.debug(`Job dispatch complete for ${claimed.job.id} (in-flight: ${this.limiter.inFlight}/${this.limiter.limit})`);
+      this.logger.debug(`Job dispatch complete for ${claimed.job.id} (in-flight: ${this.limiter.inFlight}/${this.limiter.limit})`);
 
       if (this.limiter.hasCapacity && !this._stopping) {
         this.requestTick();
@@ -1388,7 +1391,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     const gates = gateQueries(this.db);
 
     this.jobsProcessed++;
-    console.log(`Claimed job ${job.id} (phase: ${job.phase})`);
+    this.logger.log(`Claimed job ${job.id} (phase: ${job.phase})`);
 
     // Use config defaults for cleanup (new Jobs system doesn't have per-job cleanup settings)
     const cleanupOnSuccess = this.config.EVE_CLEANUP_WORKSPACE_ON_SUCCESS;
@@ -1412,7 +1415,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       const projectId = job.project_id;
 
       // Step 3: Attempt is already created by claim()
-      console.log(`Using attempt ${attempt.id} (number: ${attempt.attempt_number})`);
+      this.logger.log(`Using attempt ${attempt.id} (number: ${attempt.attempt_number})`);
 
       // Step 4: Create workspace directory
       workspacePath = this.resolveWorkspacePath(job, attempt);
@@ -1486,7 +1489,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     if (requiredGates.length > 0) {
       const released = await gates.releaseGates(job.id);
       if (released > 0) {
-        console.log(`Released ${released} gate(s) for job ${job.id}`);
+        this.logger.log(`Released ${released} gate(s) for job ${job.id}`);
       }
     }
 
@@ -1498,11 +1501,11 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     if (shouldCleanup && workspacePath) {
       try {
         await fs.rm(workspacePath, { recursive: true, force: true });
-        console.log(`Cleaned workspace at ${workspacePath}`);
+        this.logger.log(`Cleaned workspace at ${workspacePath}`);
       } catch (cleanupError) {
         const errMsg =
           cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-        console.warn(`Failed to clean workspace ${workspacePath}: ${errMsg}`);
+        this.logger.warn(`Failed to clean workspace ${workspacePath}: ${errMsg}`);
       }
     }
 
@@ -1538,7 +1541,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     let attemptSucceeded: boolean | null = null;
     let lastErrorMessage: string | null = null;
 
-    console.error(`Error processing job ${job.id}:`, error);
+    this.logger.error(`Error processing job ${job.id}:`, error instanceof Error ? error.stack : String(error));
     const errMsg = error instanceof Error ? error.message : String(error);
 
     // Ensure the attempt is marked as failed (it may still be in 'running' state)
@@ -1552,22 +1555,22 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         const currentJob = await jobs.findById(job.id);
         if (currentJob && (currentJob.phase === 'done' || currentJob.phase === 'cancelled')) {
           attemptSucceeded = currentJob.phase === 'done';
-          console.log(
+          this.logger.log(
             `Job ${job.id} already in terminal phase '${currentJob.phase}' after external finalization (error path)`,
           );
           return { attemptSucceeded, lastErrorMessage };
         }
-        console.warn(
+        this.logger.warn(
           `Attempt ${attempt.id} for job ${job.id} already finalized; still transitioning job phase`,
         );
       } else {
-        console.log(`Marked attempt ${attempt.id} as failed due to error`);
+        this.logger.log(`Marked attempt ${attempt.id} as failed due to error`);
         await this.tryPersistAttemptReceipt(job, completedAttempt);
         await this.tryChargeForReceipt(job, completedAttempt);
       }
     } catch (attemptError) {
       // Log but don't throw - we still want to mark the job as failed
-      console.error(`Failed to mark attempt ${attempt.id} as failed:`, attemptError);
+      this.logger.error(`Failed to mark attempt ${attempt.id} as failed:`, attemptError instanceof Error ? attemptError.stack : String(attemptError));
     }
 
     await jobs.markJobFailed(job.id, errMsg);
@@ -1619,7 +1622,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           enrichedDescription += '\n\n---\n## Prior Step Results\n\n' + priorResults.join('\n\n---\n\n');
         }
       } catch (err) {
-        console.warn(`Failed to enrich prior step results for ${job.id}:`, err);
+        this.logger.warn(`Failed to enrich prior step results for ${job.id}: ${err instanceof Error ? err.stack : String(err)}`);
       }
     }
     return enrichedDescription;
@@ -1662,7 +1665,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           AND phase = 'backlog'
         RETURNING id
       `;
-      console.log(`Staged dispatch: promoted ${promoted.length} children for job ${job.id}`);
+      this.logger.log(`Staged dispatch: promoted ${promoted.length} children for job ${job.id}`);
 
       const currentHints = (job.hints ?? {}) as Record<string, unknown>;
       if (promoted.length === 0) {
@@ -1707,7 +1710,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
             updated_at = NOW()
           WHERE id = ${job.id}
         `;
-        console.log(`Stored wake_on [${eveControl.wakeOn.join(', ')}] for job ${job.id}`);
+        this.logger.log(`Stored wake_on [${eveControl.wakeOn.join(', ')}] for job ${job.id}`);
       }
 
       const isBlocked = await jobs.isBlocked(job.id);
@@ -1718,20 +1721,20 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       };
 
       if (!isBlocked) {
-        console.warn(
+        this.logger.warn(
           `Job ${job.id} requested waiting without blockers; deferring for ${WAITING_BACKOFF_MS}ms`,
         );
         requeueOptions.deferUntil = deferUntil;
       }
 
       await jobs.requeueReady(job.id, 'orchestrator', requeueOptions);
-      console.log(`Requeued job ${job.id} to ready`);
+      this.logger.log(`Requeued job ${job.id} to ready`);
       attemptSucceeded = true;
       return { attemptSucceeded, lastErrorMessage };
     }
 
     if (outcome === 'success') {
-      console.log(`Worker succeeded for job ${job.id}`);
+      this.logger.log(`Worker succeeded for job ${job.id}`);
 
       // Promote resolved git metadata from attempt to job
       const latestAttempt = await jobs.getLatestAttempt(job.id);
@@ -1740,7 +1743,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       }
 
       await jobs.markJobDone(job.id);
-      console.log(`Marked job ${job.id} as done`);
+      this.logger.log(`Marked job ${job.id} as done`);
       attemptSucceeded = true;
 
       // Emit completion event for post-session review (learning loop)
@@ -1755,7 +1758,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       // Deliver result to chat thread if this was a chat-originated job
       void this.deliverChatResult(job, result);
     } else {
-      console.log(`Worker failed for job ${job.id}: ${result.error}`);
+      this.logger.log(`Worker failed for job ${job.id}: ${result.error}`);
 
       // Check retry policy before marking as permanently failed
       const retryPolicy = (job.hints as Record<string, any>)?.retry;
@@ -1775,7 +1778,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           const delaySec = backoffBase * Math.pow(multiplier, currentAttempt - 1);
           const deferUntil = new Date(Date.now() + delaySec * 1000);
 
-          console.log(
+          this.logger.log(
             `Job ${job.id}: scheduling auto-retry #${currentAttempt + 1}/${maxAttempts} in ${delaySec}s`,
           );
 
@@ -1802,7 +1805,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         status: 'failed',
         durationMs: result.durationMs,
       });
-      console.log(`Marked job ${job.id} as failed (retries exhausted or non-retryable)`);
+      this.logger.log(`Marked job ${job.id} as failed (retries exhausted or non-retryable)`);
 
       // Staged cleanup: cancel backlog children on lead failure
       await this.cancelStagedBacklogChildren(job, 'Parent failed without promotion');
@@ -1831,7 +1834,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     let lastErrorMessage: string | null = null;
 
     // Step 5b: Execute worker
-    console.log(`Executing worker for job ${job.id}, attempt ${attempt.id}`);
+    this.logger.log(`Executing worker for job ${job.id}, attempt ${attempt.id}`);
 
     const project = await projectQueries(this.db).findById(projectId);
     if (!project) {
@@ -1869,7 +1872,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         routing,
       );
 
-      if (process.env.EVE_AGENT_RUNTIME_URL) {
+      if (this.agentRuntimeConfigured) {
         result = await this.workerService.executeAgentRuntime(invocation, {
           workerImage,
           timeoutMs: jobTimeoutMs,
@@ -1886,7 +1889,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     const outcome = resolveOrchestrationOutcome(result, eveControl.status);
 
     if (eveControl.status && outcome !== (result.success ? 'success' : 'failed')) {
-      console.warn(
+      this.logger.warn(
         `Worker status override for job ${job.id}: ${result.success ? 'success' : 'failed'} -> ${outcome}`,
       );
     }
@@ -1916,14 +1919,14 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
       if (currentJob && (currentJob.phase === 'done' || currentJob.phase === 'cancelled')) {
         attemptSucceeded = currentJob.phase === 'done';
-        console.log(
+        this.logger.log(
           `Job ${job.id} already in terminal phase '${currentJob.phase}' after external finalization`,
         );
         return { kind: 'externally_finalized', attemptSucceeded, lastErrorMessage };
       }
 
       const externalError = latestAttempt?.error_message ?? result.error ?? 'Attempt terminated externally';
-      console.warn(
+      this.logger.warn(
         `Attempt ${attempt.id} for job ${job.id} was externally finalized (status=${latestAttempt?.status}); recovering job phase`,
       );
 
@@ -1943,7 +1946,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
       return { kind: 'externally_finalized', attemptSucceeded, lastErrorMessage };
     }
-    console.log(`Completed attempt ${attempt.id} with exit code ${result.exitCode}`);
+    this.logger.log(`Completed attempt ${attempt.id} with exit code ${result.exitCode}`);
 
     return { kind: 'completed', result, eveControl, outcome, completedAttempt };
   }
@@ -1972,7 +1975,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     });
 
     const harnessSpec = selection.harness;
-    console.log(
+    this.logger.log(
       `Harness: ${selection.harness} (source: ${selection.source}, checked: ${selection.checked.join(', ')})`
     );
 
@@ -1985,7 +1988,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     const profileSource = (job as { harness_profile_source?: string | null }).harness_profile_source ?? null;
     executionLogQueries(this.db).appendLog(attempt.id, 'routing', {
       execution_type: executionType,
-      target: process.env.EVE_AGENT_RUNTIME_URL ? 'agent-runtime' : 'worker',
+      target: this.agentRuntimeConfigured ? 'agent-runtime' : 'worker',
       harness: selection.harness,
       harness_source: selection.source,
       harness_checked: selection.checked,
@@ -2000,7 +2003,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         max_tokens: (job.hints as Record<string, unknown>)?.max_tokens,
         max_cost: (job.hints as Record<string, unknown>)?.max_cost,
       },
-    }).catch(err => console.warn(`Failed to log routing decision: ${err}`));
+    }).catch(err => this.logger.warn(`Failed to log routing decision: ${err}`));
 
     return { harnessSpec, profileHash, profileSource };
   }
@@ -2116,7 +2119,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
    */
   private async prepareJobWorkspace(workspacePath: string): Promise<void> {
     await fs.mkdir(workspacePath, { recursive: true });
-    console.log(`Workspace at ${workspacePath}`);
+    this.logger.log(`Workspace at ${workspacePath}`);
   }
 
   /**
@@ -2158,7 +2161,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         } else {
           logMsg = `Job ${job.id} blocked on gates: ${gateResult.blocked_by.join(', ')}`;
         }
-        console.log(logMsg);
+        this.logger.log(logMsg);
 
         // Mark the attempt as failed with a gate-specific message
         await jobs.completeAttempt(attempt.id, 'failed', {
@@ -2184,7 +2187,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         if (g.startsWith('git:branch:')) return `${g} (branch lock)`;
         return g;
       }).join(', ');
-      console.log(`Acquired gates for job ${job.id}: ${gatesList}`);
+      this.logger.log(`Acquired gates for job ${job.id}: ${gatesList}`);
     }
     return 'acquired';
   }
@@ -2230,10 +2233,10 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       const allSucceeded = failed === 0 && succeeded === total;
       if (allSucceeded) {
         await jobs.markJobDone(parentId);
-        console.log(`Closed workflow root ${parentId} as done (${succeeded}/${total} current steps succeeded)`);
+        this.logger.log(`Closed workflow root ${parentId} as done (${succeeded}/${total} current steps succeeded)`);
       } else {
         await jobs.cancelJob(parentId, `Workflow failed: ${succeeded}/${total} current steps succeeded`);
-        console.log(`Closed workflow root ${parentId} as cancelled (${succeeded}/${total} current steps succeeded)`);
+        this.logger.log(`Closed workflow root ${parentId} as cancelled (${succeeded}/${total} current steps succeeded)`);
       }
 
       // Sync ingest record and fire callback now that the workflow is truly complete
@@ -2241,7 +2244,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         allSucceeded ? null : `Workflow failed (${succeeded}/${total} current steps succeeded)`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to close workflow root ${parentId}: ${msg}`);
+      this.logger.error(`Failed to close workflow root ${parentId}: ${msg}`);
     }
   }
 
@@ -2277,10 +2280,10 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         const allSucceeded = failed === 0 && succeeded === total;
         if (allSucceeded) {
           await jobs.markJobDone(zombie.id);
-          console.log(`Sweep: closed zombie workflow root ${zombie.id} as done (${succeeded}/${zombie.total} current steps succeeded)`);
+          this.logger.log(`Sweep: closed zombie workflow root ${zombie.id} as done (${succeeded}/${zombie.total} current steps succeeded)`);
         } else {
           await jobs.cancelJob(zombie.id, `Workflow failed: ${succeeded}/${zombie.total} current steps succeeded`);
-          console.log(`Sweep: closed zombie workflow root ${zombie.id} as cancelled (${succeeded}/${zombie.total} current steps succeeded)`);
+          this.logger.log(`Sweep: closed zombie workflow root ${zombie.id} as cancelled (${succeeded}/${zombie.total} current steps succeeded)`);
         }
 
         // Sync ingest record and fire callback for zombified workflow roots
@@ -2292,7 +2295,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`Zombie workflow root sweep failed: ${msg}`);
+      this.logger.error(`Zombie workflow root sweep failed: ${msg}`);
     }
   }
 
@@ -2338,7 +2341,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to emit job.attempt.completed event for ${job.id}: ${message}`);
+      this.logger.error(`Failed to emit job.attempt.completed event for ${job.id}: ${message}`);
     }
   }
 
@@ -2387,7 +2390,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to emit job failure event for ${job.id}: ${message}`);
+      this.logger.error(`Failed to emit job failure event for ${job.id}: ${message}`);
     }
   }
 
@@ -2428,10 +2431,10 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         job_id: job.id,
       });
 
-      console.log(`Relayed summary from job ${job.id} to coordination thread ${coordThreadId.thread_id}`);
+      this.logger.log(`Relayed summary from job ${job.id} to coordination thread ${coordThreadId.thread_id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to relay to coordination thread for job ${job.id}: ${message}`);
+      this.logger.error(`Failed to relay to coordination thread for job ${job.id}: ${message}`);
     }
   }
 
@@ -2456,11 +2459,11 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         RETURNING id
       `;
       if (cancelled.length > 0) {
-        console.log(`Staged cleanup: cancelled ${cancelled.length} backlog children for job ${job.id}`);
+        this.logger.log(`Staged cleanup: cancelled ${cancelled.length} backlog children for job ${job.id}`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to cancel staged backlog children for job ${job.id}: ${message}`);
+      this.logger.error(`Failed to cancel staged backlog children for job ${job.id}: ${message}`);
     }
   }
 
@@ -2509,14 +2512,14 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
       if (!response.ok) {
         const body = await response.text();
-        console.error(`Failed to deliver chat result for job ${job.id}: HTTP ${response.status} — ${body}`);
+        this.logger.error(`Failed to deliver chat result for job ${job.id}: HTTP ${response.status} — ${body}`);
         return;
       }
 
-      console.log(`Delivered chat result for job ${job.id} to thread ${threadId}`);
+      this.logger.log(`Delivered chat result for job ${job.id} to thread ${threadId}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to deliver chat result for job ${job.id}: ${msg}`);
+      this.logger.error(`Failed to deliver chat result for job ${job.id}: ${msg}`);
     }
   }
 
@@ -2592,12 +2595,12 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           await this.db`
             UPDATE jobs SET defer_until = NULL, updated_at = NOW() WHERE id = ${job.id}
           `;
-          console.log(`Woke job ${job.id} (wake_on condition met)`);
+          this.logger.log(`Woke job ${job.id} (wake_on condition met)`);
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to process wake_on conditions: ${message}`);
+      this.logger.error(`Failed to process wake_on conditions: ${message}`);
     }
   }
 
@@ -2618,7 +2621,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       await pipelineRuns.setStepOutput(job.run_id, job.step_name, resultJson as Record<string, unknown>);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`Failed to record pipeline outputs for ${job.run_id}:${job.step_name}: ${message}`);
+      this.logger.warn(`Failed to record pipeline outputs for ${job.run_id}:${job.step_name}: ${message}`);
     }
   }
 
@@ -2628,12 +2631,12 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     const workerType = hinted ?? await this.resolveDefaultWorkerType(job.project_id, job.env_name ?? null);
     if (!workerType) return undefined;
 
-    const mapping = parseWorkerUrlMapping(process.env.EVE_WORKER_URLS ?? '');
+    const mapping = parseWorkerUrlMapping(this.config.EVE_WORKER_URLS);
     if (mapping.has(workerType)) {
       return workerType;
     }
 
-    console.warn(`Worker type "${workerType}" not mapped in EVE_WORKER_URLS; using default worker`);
+    this.logger.warn(`Worker type "${workerType}" not mapped in EVE_WORKER_URLS; using default worker`);
     return undefined;
   }
 
@@ -2697,7 +2700,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       // Get the latest attempt for the root job
       const latestAttempt = await jobs.getLatestAttempt(rootJobId);
       if (!latestAttempt) {
-        console.warn(`No attempt found for root job ${rootJobId}, cannot copy pipeline output`);
+        this.logger.warn(`No attempt found for root job ${rootJobId}, cannot copy pipeline output`);
         return;
       }
 
@@ -2706,10 +2709,10 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         pipeline_output: run.step_outputs_json,
       });
 
-      console.log(`Copied pipeline output to root job ${rootJobId} attempt ${latestAttempt.id}`);
+      this.logger.log(`Copied pipeline output to root job ${rootJobId} attempt ${latestAttempt.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to copy pipeline output to root job for run ${runId}: ${message}`);
+      this.logger.error(`Failed to copy pipeline output to root job for run ${runId}: ${message}`);
     }
   }
 
@@ -2777,7 +2780,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           status: 'running',
           started_at: new Date(),
         });
-        console.log(`Pipeline run ${runId}: pending → running (${started}/${total} jobs started)`);
+        this.logger.log(`Pipeline run ${runId}: pending → running (${started}/${total} jobs started)`);
       }
 
       // All jobs reached a terminal phase — finalise the run
@@ -2802,7 +2805,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
             completed_at: now,
             error_message: errMsg,
           });
-          console.log(`Pipeline run ${runId}: → failed (${failed} job(s) failed, ${done} succeeded)`);
+          this.logger.log(`Pipeline run ${runId}: → failed (${failed} job(s) failed, ${done} succeeded)`);
 
           // Re-fetch so the failure event has up-to-date fields
           const updatedRun = await pipelineRuns.findRunById(runId);
@@ -2815,12 +2818,12 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
             started_at: run.started_at ?? now,
             completed_at: now,
           });
-          console.log(`Pipeline run ${runId}: → succeeded (${done}/${total} jobs done)`);
+          this.logger.log(`Pipeline run ${runId}: → succeeded (${done}/${total} jobs done)`);
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to sync pipeline run status for ${runId}: ${message}`);
+      this.logger.error(`Failed to sync pipeline run status for ${runId}: ${message}`);
     }
   }
 
@@ -2863,14 +2866,14 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           job_id: job.id,
           completed_at: new Date(),
         });
-        console.log(`Ingest ${ingestId}: → done (job ${job.id} succeeded)`);
+        this.logger.log(`Ingest ${ingestId}: → done (job ${job.id} succeeded)`);
       } else {
         await ingests.updateStatus(ingestId, 'failed', {
           job_id: job.id,
           completed_at: new Date(),
           error_message: errorMessage ?? 'Processing job failed',
         });
-        console.log(`Ingest ${ingestId}: → failed (job ${job.id} failed)`);
+        this.logger.log(`Ingest ${ingestId}: → failed (job ${job.id} failed)`);
       }
 
       // Fire callback if configured (fire-and-forget)
@@ -2879,7 +2882,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to sync ingest record status for job ${job.id}: ${message}`);
+      this.logger.error(`Failed to sync ingest record status for job ${job.id}: ${message}`);
     }
   }
 
@@ -2915,18 +2918,18 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           signal: AbortSignal.timeout(10000),
         });
         if (resp.ok) {
-          console.log(`Ingest ${record.id}: callback delivered (${resp.status})`);
+          this.logger.log(`Ingest ${record.id}: callback delivered (${resp.status})`);
           return;
         }
-        console.warn(`Ingest ${record.id}: callback returned ${resp.status}, attempt ${attempt + 1}/${delays.length}`);
+        this.logger.warn(`Ingest ${record.id}: callback returned ${resp.status}, attempt ${attempt + 1}/${delays.length}`);
       } catch (err) {
-        console.warn(`Ingest ${record.id}: callback failed, attempt ${attempt + 1}/${delays.length}: ${(err as Error).message}`);
+        this.logger.warn(`Ingest ${record.id}: callback failed, attempt ${attempt + 1}/${delays.length}: ${(err as Error).message}`);
       }
       if (attempt < delays.length - 1) {
         await new Promise((r) => setTimeout(r, delays[attempt]));
       }
     }
-    console.error(`Ingest ${record.id}: callback exhausted all ${delays.length} retries`);
+    this.logger.error(`Ingest ${record.id}: callback exhausted all ${delays.length} retries`);
   }
 
   /**
@@ -2953,12 +2956,12 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       `;
 
       for (const run of orphaned) {
-        console.log(`Reconciling orphaned pipeline run ${run.id}`);
+        this.logger.log(`Reconciling orphaned pipeline run ${run.id}`);
         await this.syncPipelineRunStatus(run.id);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to reconcile orphaned pipeline runs: ${message}`);
+      this.logger.error(`Failed to reconcile orphaned pipeline runs: ${message}`);
     }
   }
 
@@ -2987,7 +2990,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to emit pipeline failure event for ${run.id}: ${message}`);
+      this.logger.error(`Failed to emit pipeline failure event for ${run.id}: ${message}`);
     }
   }
 
@@ -3001,7 +3004,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     userId?: string
   ): Promise<Record<string, string>> {
     if (!this.config.EVE_INTERNAL_API_KEY || !this.config.EVE_API_URL) {
-      console.warn(
+      this.logger.warn(
         `[resolveSecrets] Missing EVE_INTERNAL_API_KEY or EVE_API_URL — cannot resolve secrets for harness selection (project: ${projectId})`
       );
       return {};
@@ -3019,7 +3022,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (!response.ok) {
-        console.warn(
+        this.logger.warn(
           `[resolveSecrets] Secrets API returned ${response.status} for project ${projectId}`
         );
         return {};
@@ -3028,7 +3031,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       const json = await response.json();
       const parsed = SecretResolveResponseSchema.safeParse(json);
       if (!parsed.success) {
-        console.warn(
+        this.logger.warn(
           `[resolveSecrets] Invalid response from secrets API for project ${projectId}: ${parsed.error.message}`
         );
         return {};
@@ -3044,7 +3047,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       return env;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[resolveSecrets] Failed to resolve secrets for project ${projectId}: ${message}`);
+      this.logger.warn(`[resolveSecrets] Failed to resolve secrets for project ${projectId}: ${message}`);
       return {};
     }
   }
@@ -3073,7 +3076,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       return deriveOrgFsMountContext(bindings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(
+      this.logger.warn(
         `Failed to resolve orgfs scope for job ${job.id} (${userId}); defaulting to no mount: ${message}`,
       );
       return NO_ORG_FS_MOUNT;
@@ -3091,7 +3094,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (job.token_scope !== null && job.token_scope !== undefined && !parsedScope.success) {
-      console.warn(`Job ${job.id} has invalid token_scope; defaulting to no mount and no token scope`);
+      this.logger.warn(`Job ${job.id} has invalid token_scope; defaulting to no mount and no token scope`);
       return { orgFsMount: NO_ORG_FS_MOUNT, tokenScope: null };
     }
 
@@ -3109,7 +3112,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    console.log('Orchestrator shutting down — stopping new claims...');
+    this.logger.log('Orchestrator shutting down — stopping new claims...');
 
     // 1. Stop claiming new work
     this.stopClaiming();
@@ -3125,17 +3128,17 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     // 4. Wait for in-flight dispatches to complete (30s timeout)
     if (this.limiter.inFlight > 0) {
-      console.log(`Draining ${this.limiter.inFlight} in-flight dispatch(es)...`);
+      this.logger.log(`Draining ${this.limiter.inFlight} in-flight dispatch(es)...`);
       const drained = await this.limiter.drain(30_000);
       if (drained) {
-        console.log('All in-flight dispatches completed.');
+        this.logger.log('All in-flight dispatches completed.');
       } else {
-        console.warn(
+        this.logger.warn(
           `Shutdown timeout: ${this.limiter.inFlight} dispatch(es) still in-flight after 30s.`,
         );
       }
     }
 
-    console.log('Orchestrator loop shutdown complete.');
+    this.logger.log('Orchestrator loop shutdown complete.');
   }
 }

@@ -6,10 +6,9 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { LoggerService } from '@nestjs/common';
 import {
   CORRELATION_HEADER,
-  createJsonLogger,
-  ensureCorrelationId,
-  initOtel,
-  runWithCorrelationContext,
+  initServiceTelemetry,
+  registerCorrelationIdHook,
+  registerRawBodyJsonParser,
 } from '@eve/shared';
 import { AppModule } from './app.module';
 import { attachRegisteredSchemas } from './openapi.js';
@@ -17,9 +16,7 @@ import { attachRegisteredSchemas } from './openapi.js';
 async function bootstrap() {
   const port = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 4747;
 
-  await initOtel('eve-api');
-
-  const logger = createJsonLogger('api') as LoggerService;
+  const logger = (await initServiceTelemetry('api')) as LoggerService;
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -51,27 +48,7 @@ async function bootstrap() {
   });
 
   const fastify = app.getHttpAdapter().getInstance();
-  try {
-    fastify.removeContentTypeParser('application/json');
-    fastify.removeContentTypeParser('application/*+json');
-  } catch {
-    // Ignore if parser wasn't registered yet.
-  }
-  const rawBodyParser = (req: any, body: string, done: (err: Error | null, value?: any) => void) => {
-    req.rawBody = body;
-    if (!body) {
-      done(null, {});
-      return;
-    }
-    try {
-      done(null, JSON.parse(body));
-    } catch (err) {
-      done(err as Error);
-    }
-  };
-
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, rawBodyParser);
-  fastify.addContentTypeParser('application/*+json', { parseAs: 'string' }, rawBodyParser);
+  registerRawBodyJsonParser(fastify);
 
   // Catch-all parser for non-JSON content types (binary uploads, etc.)
   // Only matches types without a more specific parser, so JSON handling is unaffected.
@@ -80,13 +57,7 @@ async function bootstrap() {
     done(null, body);
   });
 
-  fastify.addHook('onRequest', (request: any, reply: any, done: () => void) => {
-    const incoming = request.headers?.[CORRELATION_HEADER];
-    const correlationId = ensureCorrelationId(incoming);
-    request.correlationId = correlationId;
-    reply.header(CORRELATION_HEADER, correlationId);
-    runWithCorrelationContext({ correlationId, traceId: correlationId }, done);
-  });
+  registerCorrelationIdHook(fastify);
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Eve Horizon API')

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ensureCorrelationId,
   getCorrelationContext,
@@ -6,7 +7,9 @@ import {
   withCorrelationContext,
   parseWorkerUrlMapping,
 } from '@eve/shared';
-import type { AttemptId, HarnessInvocation, HarnessResult } from '@eve/shared';
+import type { AttemptId, Config, HarnessInvocation, HarnessResult } from '@eve/shared';
+
+const logger = new Logger('worker-client');
 
 interface RunnerEvent {
   id: string;
@@ -18,14 +21,6 @@ interface RunnerEvent {
     error?: string;
     exitCode?: number;
   };
-}
-
-function resolvePollIntervalMs(raw: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(raw ?? '', 10);
-  if (!Number.isFinite(parsed) || parsed < 100) {
-    return fallback;
-  }
-  return parsed;
 }
 
 /**
@@ -55,9 +50,9 @@ async function pollForCompletion(
     `&attempt_id=${encodeURIComponent(attemptId)}` +
     `&since=${encodeURIComponent(since)}` +
     `&limit=5`;
-  console.log(`[orch-poll] Starting poll for attemptId=${attemptId} jobId=${jobId} projectId=${projectId}`);
-  console.log(`[orch-poll] URL: ${url}`);
-  console.log(`[orch-poll] Has internal API key: ${!!config.EVE_INTERNAL_API_KEY}`);
+  logger.log(`[orch-poll] Starting poll for attemptId=${attemptId} jobId=${jobId} projectId=${projectId}`);
+  logger.log(`[orch-poll] URL: ${url}`);
+  logger.log(`[orch-poll] Has internal API key: ${!!config.EVE_INTERNAL_API_KEY}`);
 
   while (Date.now() - startTime < timeoutMs) {
     pollCount++;
@@ -80,7 +75,7 @@ async function pollForCompletion(
         );
 
         if (completionEvent) {
-          console.log(`[orch-poll] Found completion event after ${pollCount} polls (${Date.now() - startTime}ms): type=${completionEvent.type}`);
+          logger.log(`[orch-poll] Found completion event after ${pollCount} polls (${Date.now() - startTime}ms): type=${completionEvent.type}`);
           if (completionEvent.type === 'runner.completed') {
             return completionEvent.payload_json.result!;
           } else {
@@ -99,17 +94,17 @@ async function pollForCompletion(
         if (elapsed - lastLoggedStatus >= 30000) {
           lastLoggedStatus = elapsed;
           const attemptIds = events.map((e: RunnerEvent) => e.payload_json?.attemptId).filter(Boolean);
-          console.log(`[orch-poll] Poll #${pollCount} (${Math.round(elapsed / 1000)}s): ${events.length} events returned, none match attemptId=${attemptId}. Response keys: ${Object.keys(json).join(',')}. Event attemptIds: [${attemptIds.join(', ')}]`);
+          logger.log(`[orch-poll] Poll #${pollCount} (${Math.round(elapsed / 1000)}s): ${events.length} events returned, none match attemptId=${attemptId}. Response keys: ${Object.keys(json).join(',')}. Event attemptIds: [${attemptIds.join(', ')}]`);
         }
       } else {
         const body = await response.text().catch(() => '<unreadable>');
         if (pollCount <= 3 || Date.now() - startTime - lastLoggedStatus >= 30000) {
           lastLoggedStatus = Date.now() - startTime;
-          console.error(`[orch-poll] Poll #${pollCount}: HTTP ${response.status} ${response.statusText}. Body: ${body.slice(0, 500)}`);
+          logger.error(`[orch-poll] Poll #${pollCount}: HTTP ${response.status} ${response.statusText}. Body: ${body.slice(0, 500)}`);
         }
       }
     } catch (err) {
-      console.warn(`[orch-poll] Poll #${pollCount} exception: ${err instanceof Error ? err.message : String(err)}`);
+      logger.warn(`[orch-poll] Poll #${pollCount} exception: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Check job phase periodically to detect cancellation.
@@ -127,7 +122,7 @@ async function pollForCompletion(
           const jobData = await jobResponse.json();
           const phase = jobData.phase ?? jobData.data?.phase;
           if (phase === 'cancelled' || phase === 'done') {
-            console.log(`[orch-poll] Job ${jobId} phase changed to '${phase}' during polling — aborting wait`);
+            logger.log(`[orch-poll] Job ${jobId} phase changed to '${phase}' during polling — aborting wait`);
             return {
               attemptId: attemptId as AttemptId,
               success: false,
@@ -137,7 +132,7 @@ async function pollForCompletion(
           }
         }
       } catch (err) {
-        console.warn(`[orch-poll] Job status check error: ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`[orch-poll] Job status check error: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -145,7 +140,7 @@ async function pollForCompletion(
   }
 
   // Timeout
-  console.error(`[orch-poll] TIMEOUT after ${pollCount} polls (${timeoutMs}ms) for attemptId=${attemptId} jobId=${jobId}`);
+  logger.error(`[orch-poll] TIMEOUT after ${pollCount} polls (${timeoutMs}ms) for attemptId=${attemptId} jobId=${jobId}`);
   const timeoutMessage = `Runner timed out after ${timeoutMs}ms`;
   return {
     attemptId: attemptId as AttemptId,
@@ -172,9 +167,9 @@ export async function invokeWorker(
   workerImage?: string,
   timeoutMs?: number,
 ): Promise<HarnessResult> {
-  const workerUrl = resolveWorkerUrl(workerImage);
-  const effectiveTimeout =
-    timeoutMs ?? parseInt(process.env.WORKER_TIMEOUT_MS || '1800000', 10);
+  const config = loadConfig();
+  const workerUrl = resolveWorkerUrl(config, workerImage);
+  const effectiveTimeout = timeoutMs ?? config.WORKER_TIMEOUT_MS;
   const existing = getCorrelationContext();
   const correlationId = ensureCorrelationId(existing?.correlationId);
 
@@ -211,7 +206,7 @@ export async function invokeWorker(
       }
 
       // Step 2: Poll for completion event
-      const pollInterval = resolvePollIntervalMs(process.env.EVE_WORKER_POLL_INTERVAL_MS, 5000);
+      const pollInterval = config.EVE_WORKER_POLL_INTERVAL_MS;
       return await pollForCompletion(
         invocation.projectId,
         invocation.attemptId,
@@ -236,7 +231,8 @@ export async function invokeAgentRuntime(
   invocation: HarnessInvocation,
   timeoutMs?: number,
 ): Promise<HarnessResult> {
-  const runtimeUrl = resolveAgentRuntimeUrl();
+  const config = loadConfig();
+  const runtimeUrl = resolveAgentRuntimeUrl(config);
   if (!runtimeUrl) {
     return {
       attemptId: invocation.attemptId,
@@ -246,8 +242,7 @@ export async function invokeAgentRuntime(
     };
   }
 
-  const effectiveTimeout =
-    timeoutMs ?? parseInt(process.env.WORKER_TIMEOUT_MS || '1800000', 10);
+  const effectiveTimeout = timeoutMs ?? config.WORKER_TIMEOUT_MS;
   const existing = getCorrelationContext();
   const correlationId = ensureCorrelationId(existing?.correlationId);
 
@@ -275,7 +270,7 @@ export async function invokeAgentRuntime(
       const submitResult = await response.json();
       if (!submitResult.accepted) {
         if (submitResult.error === 'agent-runtime-wrong-shard' && submitResult.target_pod) {
-          const redirectedUrl = resolveAgentRuntimeUrl(submitResult.target_pod as string);
+          const redirectedUrl = resolveAgentRuntimeUrl(config, submitResult.target_pod as string);
           if (!redirectedUrl) {
             return {
               attemptId: invocation.attemptId,
@@ -323,7 +318,7 @@ export async function invokeAgentRuntime(
         }
       }
 
-      const pollInterval = resolvePollIntervalMs(process.env.EVE_AGENT_RUNTIME_POLL_INTERVAL_MS, 250);
+      const pollInterval = config.EVE_AGENT_RUNTIME_POLL_INTERVAL_MS;
       return await pollForCompletion(
         invocation.projectId,
         invocation.attemptId,
@@ -348,9 +343,9 @@ export async function invokePipelineRun(
   workerImage?: string,
   timeoutMs?: number,
 ): Promise<{ success: boolean; error?: string }> {
-  const workerUrl = resolveWorkerUrl(workerImage);
-  const effectiveTimeout =
-    timeoutMs ?? parseInt(process.env.WORKER_TIMEOUT_MS || '1800000', 10);
+  const config = loadConfig();
+  const workerUrl = resolveWorkerUrl(config, workerImage);
+  const effectiveTimeout = timeoutMs ?? config.WORKER_TIMEOUT_MS;
   const existing = getCorrelationContext();
   const correlationId = ensureCorrelationId(existing?.correlationId);
 
@@ -423,10 +418,10 @@ async function invokeSubmitAndPollWorkerJob(
   workerImage?: string,
   timeoutMs?: number,
 ): Promise<HarnessResult> {
-  const workerUrl = resolveWorkerUrl(workerImage);
-  const effectiveTimeout =
-    timeoutMs ?? parseInt(process.env.WORKER_TIMEOUT_MS || '1800000', 10);
-  const submitTimeoutMs = resolvePollIntervalMs(process.env.EVE_WORKER_SUBMIT_TIMEOUT_MS, 30000);
+  const config = loadConfig();
+  const workerUrl = resolveWorkerUrl(config, workerImage);
+  const effectiveTimeout = timeoutMs ?? config.WORKER_TIMEOUT_MS;
+  const submitTimeoutMs = config.EVE_WORKER_SUBMIT_TIMEOUT_MS;
   const existing = getCorrelationContext();
   const correlationId = ensureCorrelationId(existing?.correlationId);
 
@@ -472,7 +467,7 @@ async function invokeSubmitAndPollWorkerJob(
         };
       }
 
-      const pollInterval = resolvePollIntervalMs(process.env.EVE_WORKER_POLL_INTERVAL_MS, 5000);
+      const pollInterval = config.EVE_WORKER_POLL_INTERVAL_MS;
       return pollForCompletion(
         projectId,
         attemptId,
@@ -498,9 +493,9 @@ async function invokeSubmitAndPollWorkerJob(
   }
 }
 
-function resolveWorkerUrl(workerImage?: string): string {
-  const mapping = parseWorkerUrlMapping(process.env.EVE_WORKER_URLS ?? '');
-  const fallbackUrl = process.env.WORKER_URL || 'http://localhost:4749';
+function resolveWorkerUrl(config: Config, workerImage?: string): string {
+  const mapping = parseWorkerUrlMapping(config.EVE_WORKER_URLS);
+  const fallbackUrl = config.WORKER_URL;
 
   if (!workerImage) {
     return mapping.get('default-worker') ?? fallbackUrl;
@@ -516,10 +511,10 @@ function resolveWorkerUrl(workerImage?: string): string {
   return match;
 }
 
-function resolveAgentRuntimeUrl(targetPod?: string): string | null {
-  const mapping = parseWorkerUrlMapping(process.env.EVE_AGENT_RUNTIME_URLS ?? '');
+function resolveAgentRuntimeUrl(config: Config, targetPod?: string): string | null {
+  const mapping = parseWorkerUrlMapping(config.EVE_AGENT_RUNTIME_URLS);
   if (targetPod) {
     return mapping.get(targetPod) ?? null;
   }
-  return process.env.EVE_AGENT_RUNTIME_URL ?? null;
+  return config.EVE_AGENT_RUNTIME_URL ?? null;
 }

@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, Logger } from '@nestjs/common';
 import {
   appLinkEventDeliveryQueries,
   appLinkSubscriptionQueries,
@@ -20,6 +20,7 @@ import { TriggerMatcherService, type TriggerMatch } from './trigger-matcher.serv
  */
 @Injectable()
 export class EventRouterService implements OnModuleInit {
+  private readonly logger = new Logger(EventRouterService.name);
   private intervalId?: NodeJS.Timeout;
   private tickCount = 0;
   private eventsProcessed = 0;
@@ -42,7 +43,7 @@ export class EventRouterService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    console.log(
+    this.logger.log(
       `Starting event router polling loop (5s interval, claim_limit=${this.claimLimit}, stale_after=${this.staleAfterSeconds}s)`,
     );
     this.startLoop();
@@ -51,13 +52,13 @@ export class EventRouterService implements OnModuleInit {
   private startLoop() {
     // Run immediately on startup
     this.tick().catch((err) => {
-      console.error('Error in initial event router tick:', err);
+      this.logger.error('Error in initial event router tick:', err instanceof Error ? err.stack : String(err));
     });
 
     // Then poll every 5 seconds
     this.intervalId = setInterval(() => {
       this.tick().catch((err) => {
-        console.error('Error in event router tick:', err);
+        this.logger.error('Error in event router tick:', err instanceof Error ? err.stack : String(err));
       });
     }, 5000);
   }
@@ -82,7 +83,7 @@ export class EventRouterService implements OnModuleInit {
 
       // Log heartbeat every 12 ticks (1 minute at 5s intervals)
       if (this.tickCount % 12 === 0) {
-        console.log(
+        this.logger.log(
           `Event router heartbeat: ${this.tickCount} ticks, ${this.eventsProcessed} processed, ${this.eventsFailed} failed, ${this.eventsRecovered} recovered`,
         );
       }
@@ -94,7 +95,7 @@ export class EventRouterService implements OnModuleInit {
         return;
       }
 
-      console.log(`Claimed ${claimedEvents.length} event(s) for processing`);
+      this.logger.log(`Claimed ${claimedEvents.length} event(s) for processing`);
 
       // Process each claimed event
       for (const event of claimedEvents) {
@@ -112,12 +113,12 @@ export class EventRouterService implements OnModuleInit {
       const recovered = await events.recoverStaleEvents(this.staleAfterSeconds);
       if (recovered > 0) {
         this.eventsRecovered += recovered;
-        console.warn(
+        this.logger.warn(
           `Recovered ${recovered} stale event(s) stuck in 'processing' for >${this.staleAfterSeconds}s`,
         );
       }
     } catch (error) {
-      console.error('Failed to recover stale events:', error);
+      this.logger.error('Failed to recover stale events:', error instanceof Error ? error.stack : String(error));
     }
   }
 
@@ -126,7 +127,7 @@ export class EventRouterService implements OnModuleInit {
     events: ReturnType<typeof eventQueries>,
   ): Promise<void> {
     try {
-      console.log(
+      this.logger.log(
         `Processing event ${event.id} (type: ${event.type}, source: ${event.source}, project: ${event.project_id}, branch: ${event.ref_branch ?? 'n/a'})`,
       );
 
@@ -142,33 +143,27 @@ export class EventRouterService implements OnModuleInit {
           triggers_evaluated: allEvaluations,
         });
       } catch (metaError) {
-        console.warn(
-          `Event ${event.id} → failed to save trigger metadata:`,
-          metaError instanceof Error ? metaError.message : metaError,
-        );
+        this.logger.warn(`Event ${event.id} → failed to save trigger metadata: ${metaError instanceof Error ? metaError.message : metaError}`);
       }
 
       if (matches.length > 0) {
-        console.log(
+        this.logger.log(
           `Event ${event.id} matched ${matches.length} trigger(s): ${matches.map((m) => `${m.type}:${m.name}`).join(', ')}`,
         );
         for (const match of matches) {
           try {
             await this.triggerMatch(match, event);
-            console.log(
+            this.logger.log(
               `Event ${event.id} → ${match.type} "${match.name}" triggered successfully`,
             );
           } catch (triggerError) {
             // Log trigger-level failure but continue processing other matches
-            console.error(
-              `Event ${event.id} → ${match.type} "${match.name}" trigger FAILED:`,
-              triggerError instanceof Error ? triggerError.message : triggerError,
-            );
+            this.logger.error(`Event ${event.id} → ${match.type} "${match.name}" trigger FAILED: ${triggerError instanceof Error ? triggerError.message : triggerError}`);
             throw triggerError;
           }
         }
       } else {
-        console.log(
+        this.logger.log(
           `Event ${event.id} did not match any triggers (type: ${event.type}, branch: ${event.ref_branch ?? 'n/a'})`,
         );
       }
@@ -179,17 +174,14 @@ export class EventRouterService implements OnModuleInit {
     } catch (error) {
       this.eventsFailed++;
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(
+      this.logger.error(
         `Error processing event ${event.id} (type: ${event.type}, project: ${event.project_id}): ${errMsg}`,
       );
 
       try {
         await events.updateStatus(event.id, 'failed');
       } catch (updateError) {
-        console.error(
-          `Failed to mark event ${event.id} as failed:`,
-          updateError,
-        );
+        this.logger.error(`Failed to mark event ${event.id} as failed:`, updateError instanceof Error ? updateError.stack : String(updateError));
       }
     }
   }
@@ -366,7 +358,7 @@ export class EventRouterService implements OnModuleInit {
 
     if (match.type === 'pipeline') {
       if (!event.ref_sha) {
-        console.warn(
+        this.logger.warn(
           `Skipping pipeline trigger ${match.name}: missing ref_sha`,
         );
         return;
@@ -382,7 +374,7 @@ export class EventRouterService implements OnModuleInit {
       // Generate dedupe key for PR events to prevent duplicate pipeline runs
       const dedupeKey = this.generateDedupeKey(event, inputs);
 
-      console.log(
+      this.logger.log(
         `Creating pipeline run: pipeline=${match.name}, sha=${event.ref_sha.slice(0, 8)}, env=${envName ?? 'none'}, dedupe=${dedupeKey ?? 'none'}`,
       );
 
@@ -402,7 +394,7 @@ export class EventRouterService implements OnModuleInit {
     }
 
     if (match.type === 'workflow') {
-      console.log(`Invoking workflow: ${match.name}`);
+      this.logger.log(`Invoking workflow: ${match.name}`);
       const result = await this.callInternalApi(
         `/internal/projects/${match.projectId}/workflows/${match.name}/invoke`,
         {
@@ -431,12 +423,9 @@ export class EventRouterService implements OnModuleInit {
     try {
       const events = eventQueries(this.db);
       await events.linkJobToEvent(event.id, jobId);
-      console.log(`Event ${event.id} → linked job_id=${jobId}`);
+      this.logger.log(`Event ${event.id} → linked job_id=${jobId}`);
     } catch (error) {
-      console.warn(
-        `Event ${event.id} → failed to link job_id=${jobId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      this.logger.warn(`Event ${event.id} → failed to link job_id=${jobId}: ${error instanceof Error ? error.message : error}`);
     }
   }
 
@@ -565,7 +554,7 @@ export class EventRouterService implements OnModuleInit {
   onModuleDestroy() {
     if (this.intervalId) {
       clearInterval(this.intervalId);
-      console.log('Stopped event router polling loop');
+      this.logger.log('Stopped event router polling loop');
     }
   }
 }

@@ -3,13 +3,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { LoggerService } from '@nestjs/common';
-import {
-  CORRELATION_HEADER,
-  createJsonLogger,
-  ensureCorrelationId,
-  initOtel,
-  runWithCorrelationContext,
-} from '@eve/shared';
+import { initServiceTelemetry, registerCorrelationIdHook } from '@eve/shared';
 import { AppModule } from './app.module';
 
 function resolvePort(): number {
@@ -20,9 +14,7 @@ function resolvePort(): number {
 async function bootstrap() {
   const port = resolvePort();
 
-  await initOtel('eve-agent-runtime');
-
-  const logger = createJsonLogger('agent-runtime') as LoggerService;
+  const logger = (await initServiceTelemetry('agent-runtime')) as LoggerService;
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -30,14 +22,7 @@ async function bootstrap() {
     { logger },
   );
 
-  const fastify = app.getHttpAdapter().getInstance();
-  fastify.addHook('onRequest', (request: any, reply: any, done: () => void) => {
-    const incoming = request.headers?.[CORRELATION_HEADER];
-    const correlationId = ensureCorrelationId(incoming);
-    request.correlationId = correlationId;
-    reply.header(CORRELATION_HEADER, correlationId);
-    runWithCorrelationContext({ correlationId, traceId: correlationId }, done);
-  });
+  registerCorrelationIdHook(app.getHttpAdapter().getInstance());
 
   app.enableShutdownHooks();
   await app.listen(port, '0.0.0.0');

@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import * as k8s from '@kubernetes/client-node';
 import crypto from 'node:crypto';
@@ -81,6 +81,7 @@ function parseJsonField<T>(val: T | string | null | undefined): T | null {
  */
 @Injectable()
 export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(EnvHealthWatchdogService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
   private bootTimer: ReturnType<typeof setTimeout> | null = null;
   private dailySummaryJob: CronJob | null = null;
@@ -108,43 +109,43 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
       this.appsApi = kc.makeApiClient(k8s.AppsV1Api);
       this.k8sAvailable = true;
     } catch (err) {
-      console.warn('[sentinel] K8s API unavailable — health checks will be skipped');
+      this.logger.warn('[sentinel] K8s API unavailable — health checks will be skipped');
     }
   }
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_ENV_HEALTH_ENABLED !== 'true') {
-      console.log('[sentinel] Env health watchdog disabled (set EVE_ENV_HEALTH_ENABLED=true to enable)');
+      this.logger.log('[sentinel] Env health watchdog disabled (set EVE_ENV_HEALTH_ENABLED=true to enable)');
       return;
     }
 
     // Delay the first tick to let the system boot.
     this.bootTimer = setTimeout(() => {
       this.tick().catch((err) => {
-        console.error('[sentinel] Initial tick failed:', err instanceof Error ? err.message : String(err));
+        this.logger.error(`[sentinel] Initial tick failed: ${err instanceof Error ? err.message : String(err)}`);
       });
 
       this.timer = setInterval(() => {
         this.tick().catch((err) => {
-          console.error('[sentinel] Tick failed:', err instanceof Error ? err.message : String(err));
+          this.logger.error(`[sentinel] Tick failed: ${err instanceof Error ? err.message : String(err)}`);
         });
       }, INTERVAL_MS);
     }, BOOT_DELAY_MS);
 
-    console.log(`[sentinel] Env health watchdog enabled (interval=${INTERVAL_MS}ms, boot_delay=${BOOT_DELAY_MS}ms)`);
+    this.logger.log(`[sentinel] Env health watchdog enabled (interval=${INTERVAL_MS}ms, boot_delay=${BOOT_DELAY_MS}ms)`);
 
     // Daily summary at 08:00 UTC
     try {
       this.dailySummaryJob = new CronJob(
         '0 8 * * *',
-        () => { this.sendDailySummary().catch(err => console.error('[sentinel] Daily summary failed:', err instanceof Error ? err.message : String(err))); },
+        () => { this.sendDailySummary().catch(err => this.logger.error(`[sentinel] Daily summary failed: ${err instanceof Error ? err.message : String(err)}`)); },
         null,
         true,
         'UTC',
       );
-      console.log('[sentinel] Daily summary scheduled (08:00 UTC)');
+      this.logger.log('[sentinel] Daily summary scheduled (08:00 UTC)');
     } catch {
-      console.warn('[sentinel] Failed to schedule daily summary cron');
+      this.logger.warn('[sentinel] Failed to schedule daily summary cron');
     }
   }
 
@@ -187,7 +188,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
 
         for (const result of results) {
           if (result.status === 'rejected') {
-            console.error('[sentinel] Env check failed:', result.reason instanceof Error ? result.reason.message : String(result.reason));
+            this.logger.error(`[sentinel] Env check failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
           } else if (result.value === 'degraded') {
             degradedCount++;
           } else if (result.value === 'critical') {
@@ -197,7 +198,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
       }
 
       const elapsed = Date.now() - start;
-      console.log(
+      this.logger.log(
         `[sentinel] Health tick: ${envs.length} envs, ${degradedCount} degraded, ${criticalCount} critical (${elapsed}ms)`,
       );
     } finally {
@@ -294,10 +295,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
 
       return newStatus;
     } catch (err) {
-      console.error(
-        `[sentinel] Failed processing env ${env.org_slug}/${env.project_slug}/${env.name}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[sentinel] Failed processing env ${env.org_slug}/${env.project_slug}/${env.name}: ${err instanceof Error ? err.message : String(err)}`);
       return 'healthy'; // Don't count errors as degraded
     }
   }
@@ -319,7 +317,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
       pods = response.items ?? [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[sentinel] Failed to list pods in ${env.namespace}: ${msg}`);
+      this.logger.warn(`[sentinel] Failed to list pods in ${env.namespace}: ${msg}`);
       return { status: 'healthy', issues: [], podCount: 0, healthyPodCount: 0 };
     }
 
@@ -478,10 +476,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
         actions_taken: actionsTaken,
       }),
     }).catch((err) => {
-      console.error(
-        `[sentinel] Failed to send notification for ${env.org_slug}/${env.project_slug}/${env.name}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[sentinel] Failed to send notification for ${env.org_slug}/${env.project_slug}/${env.name}: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
@@ -576,12 +571,9 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
             at: new Date().toISOString(),
           });
 
-          console.log(`[sentinel] Circuit breaker: scaled ${deployName} to 0 in ${env.namespace}`);
+          this.logger.log(`[sentinel] Circuit breaker: scaled ${deployName} to 0 in ${env.namespace}`);
         } catch (err) {
-          console.error(
-            `[sentinel] Failed to scale ${deployName} in ${env.namespace}:`,
-            err instanceof Error ? err.message : String(err),
-          );
+          this.logger.error(`[sentinel] Failed to scale ${deployName} in ${env.namespace}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
@@ -590,10 +582,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
         await this.environments.update(env.id, { deploy_status: 'failed' });
       }
     } catch (err) {
-      console.error(
-        `[sentinel] Circuit breaker error for ${env.namespace}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[sentinel] Circuit breaker error for ${env.namespace}: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     return actions;
@@ -653,10 +642,10 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
           actions_taken: [],
           message: lines.join('\n'),
         }),
-      }).catch(err => console.error('[sentinel] Failed to send daily summary:', err instanceof Error ? err.message : String(err)));
+      }).catch(err => this.logger.error(`[sentinel] Failed to send daily summary: ${err instanceof Error ? err.message : String(err)}`));
     }
 
-    console.log(`[sentinel] Daily summary sent: ${summary.total} envs, ${summary.degraded} degraded, ${summary.critical} critical`);
+    this.logger.log(`[sentinel] Daily summary sent: ${summary.total} envs, ${summary.degraded} degraded, ${summary.critical} critical`);
   }
 
   private async appendCostSummary(lines: string[], now: Date): Promise<void> {
@@ -674,7 +663,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
         return;
       }
     } catch (err) {
-      console.warn('[sentinel] Cloud cost summary unavailable:', err instanceof Error ? err.message : String(err));
+      this.logger.warn(`[sentinel] Cloud cost summary unavailable: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     try {
@@ -714,7 +703,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
       lines.push(`  Source: ${source} · window=month-to-date · ${estimateLabel}${lastObserved}`);
       lines.push('  Full breakdown: eve system env-cost --all');
     } catch (err) {
-      console.warn('[sentinel] Cost summary unavailable:', err instanceof Error ? err.message : String(err));
+      this.logger.warn(`[sentinel] Cost summary unavailable: ${err instanceof Error ? err.message : String(err)}`);
       lines.push('', 'Monthly cost: unavailable (snapshot read failed)');
     }
   }
@@ -764,7 +753,7 @@ export class EnvHealthWatchdogService implements OnModuleInit, OnModuleDestroy {
     try {
       rows = await this.costSnapshots.latestForMonth(monthStart, 'opencost');
     } catch (err) {
-      console.warn('[sentinel] App cost summary unavailable:', err instanceof Error ? err.message : String(err));
+      this.logger.warn(`[sentinel] App cost summary unavailable: ${err instanceof Error ? err.message : String(err)}`);
       lines.push('Top apps: unavailable');
       lines.push('Full app list: eve system env-cost --all');
       return;

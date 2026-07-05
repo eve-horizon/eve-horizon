@@ -4,11 +4,9 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { LoggerService } from '@nestjs/common';
 import {
-  CORRELATION_HEADER,
-  createJsonLogger,
-  ensureCorrelationId,
-  initOtel,
-  runWithCorrelationContext,
+  initServiceTelemetry,
+  logStartupConfigWarnings,
+  registerCorrelationIdHook,
 } from '@eve/shared';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './all-exceptions.filter';
@@ -18,24 +16,10 @@ async function bootstrap() {
   // Default request timeout is 300s (5 min) - jobs can take 30+ minutes
   const requestTimeoutMs = parseInt(process.env.EVE_WORKER_REQUEST_TIMEOUT_MS || '3600000', 10);
 
-  await initOtel('eve-worker');
-
-  const logger = createJsonLogger('worker') as LoggerService;
+  const logger = (await initServiceTelemetry('worker')) as LoggerService;
 
   // Validate critical configuration at startup
-  {
-    const warnings: string[] = [];
-    if (!process.env.EVE_INTERNAL_API_KEY) {
-      warnings.push('EVE_INTERNAL_API_KEY is not set — secret resolution will be unavailable');
-    }
-    if (!process.env.EVE_API_URL) {
-      warnings.push('EVE_API_URL is not set — API callbacks will be unavailable');
-    }
-    if (warnings.length > 0) {
-      logger.warn('WORKER CONFIGURATION WARNINGS:');
-      warnings.forEach(w => logger.warn(`  - ${w}`));
-    }
-  }
+  logStartupConfigWarnings(logger, 'WORKER');
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -43,17 +27,12 @@ async function bootstrap() {
     { logger },
   );
 
-  // Register global exception filter to preserve error messages
+  // Register global exception filter to preserve error messages.
+  // Opt-in per service — only the worker registers it today (XAP-4); see
+  // all-exceptions.filter.ts for the adoption note.
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  const fastify = app.getHttpAdapter().getInstance();
-  fastify.addHook('onRequest', (request: any, reply: any, done: () => void) => {
-    const incoming = request.headers?.[CORRELATION_HEADER];
-    const correlationId = ensureCorrelationId(incoming);
-    request.correlationId = correlationId;
-    reply.header(CORRELATION_HEADER, correlationId);
-    runWithCorrelationContext({ correlationId, traceId: correlationId }, done);
-  });
+  registerCorrelationIdHook(app.getHttpAdapter().getInstance());
 
   // Set HTTP server timeout for long-running job requests (default 1 hour)
   const server = app.getHttpServer();

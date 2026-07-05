@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import {
   cloudCostSnapshotQueries,
@@ -22,6 +22,7 @@ const DEFAULT_AWS_ENVIRONMENT_TAG_VALUE = 'staging';
 
 @Injectable()
 export class CloudCostCollectorService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(CloudCostCollectorService.name);
   private cronJob: CronJob | null = null;
   private readonly snapshots: ReturnType<typeof cloudCostSnapshotQueries>;
 
@@ -31,7 +32,7 @@ export class CloudCostCollectorService implements OnModuleInit, OnModuleDestroy 
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_CLOUD_COST_ENABLED !== 'true') {
-      console.log('[cloud-cost] Collector disabled (set EVE_CLOUD_COST_ENABLED=true to enable)');
+      this.logger.log('[cloud-cost] Collector disabled (set EVE_CLOUD_COST_ENABLED=true to enable)');
       return;
     }
 
@@ -41,21 +42,21 @@ export class CloudCostCollectorService implements OnModuleInit, OnModuleDestroy 
         cron,
         () => {
           this.collect().catch((err) => {
-            console.error('[cloud-cost] Collection failed:', err instanceof Error ? err.message : String(err));
+            this.logger.error(`[cloud-cost] Collection failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[cloud-cost] Collector enabled (cron="${cron}")`);
+      this.logger.log(`[cloud-cost] Collector enabled (cron="${cron}")`);
     } catch (err) {
-      console.error('[cloud-cost] Failed to start cron:', err instanceof Error ? err.message : String(err));
+      this.logger.error(`[cloud-cost] Failed to start cron: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     if (process.env.EVE_CLOUD_COST_COLLECT_ON_START === 'true') {
       this.collect().catch((err) => {
-        console.error('[cloud-cost] Startup collection failed:', err instanceof Error ? err.message : String(err));
+        this.logger.error(`[cloud-cost] Startup collection failed: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
   }
@@ -73,7 +74,7 @@ export class CloudCostCollectorService implements OnModuleInit, OnModuleDestroy 
 
   async collect(provider?: CloudCostProvider, now = new Date(), scope?: CloudCostScopeConfig): Promise<void> {
     if (!provider && process.env.EVE_CLOUD_COST_ENABLED !== 'true') {
-      console.log('[cloud-cost] Collector disabled (set EVE_CLOUD_COST_ENABLED=true to enable)');
+      this.logger.log('[cloud-cost] Collector disabled (set EVE_CLOUD_COST_ENABLED=true to enable)');
       return;
     }
 
@@ -90,12 +91,12 @@ export class CloudCostCollectorService implements OnModuleInit, OnModuleDestroy 
     try {
       result = await costProvider.fetchMonthToDate(scopeConfig, now);
     } catch (err) {
-      console.warn('[cloud-cost] Provider fetch failed:', err instanceof Error ? err.message : String(err));
+      this.logger.warn(`[cloud-cost] Provider fetch failed: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
 
     if (!result) {
-      console.warn('[cloud-cost] Provider returned no finalized cost data; leaving last-good snapshot untouched');
+      this.logger.warn('[cloud-cost] Provider returned no finalized cost data; leaving last-good snapshot untouched');
       return;
     }
 
@@ -120,7 +121,7 @@ export class CloudCostCollectorService implements OnModuleInit, OnModuleDestroy 
       observed_at: now,
     });
 
-    console.log(
+    this.logger.log(
       `[cloud-cost] Collection complete: ${scopeConfig.provider}/${scopeConfig.source} ` +
       `${scopeConfig.scopeType}:${scopeConfig.scopeKey} amount=${formatCloudAmount(result.amount)} ${result.currency}`,
     );

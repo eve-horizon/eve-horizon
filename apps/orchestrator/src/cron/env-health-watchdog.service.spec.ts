@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -845,7 +846,7 @@ describe('EnvHealthWatchdogService', () => {
 
     it('catches and swallows errors from individual environment processing', async () => {
       mockListNamespacedPod.mockRejectedValue(new Error('network failure'));
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
 
       // diagnoseEnvironment catches K8s errors and returns healthy
       const result = await (service as any).processEnvironment(makeEnvRow());
@@ -1068,13 +1069,13 @@ describe('EnvHealthWatchdogService', () => {
       ]);
       mockCostFreshnessForMonth.mockResolvedValue({ observed_at: new Date('2026-06-02T09:00:00Z') });
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response());
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
 
       await (service as any).sendDailySummary();
 
       const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
       expect(body.message).toContain('Monthly cost (fresh estimate) — $184.21 total');
-      expect(warnSpy).toHaveBeenCalledWith('[sentinel] Cloud cost summary unavailable:', 'cloud table unavailable');
+      expect(warnSpy).toHaveBeenCalledWith('[sentinel] Cloud cost summary unavailable: cloud table unavailable');
 
       fetchSpy.mockRestore();
       warnSpy.mockRestore();
@@ -1303,7 +1304,7 @@ describe('EnvHealthWatchdogService', () => {
       mockListNamespacedPod.mockImplementation(
         () => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
       );
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
 
       const resultPromise = (service as any).diagnoseEnvironment(makeEnvRow());
 

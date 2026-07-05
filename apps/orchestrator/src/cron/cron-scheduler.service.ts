@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { eventQueries, projectManifestQueries, projectQueries, scheduleQueries, type Db, type Schedule } from '@eve/db';
 import { generateEventId } from '@eve/shared';
@@ -28,6 +28,7 @@ type CronTrigger = {
 @Injectable()
 
 export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(CronSchedulerService.name);
   private cronJobs: Array<{ key: string; job: CronJob }> = [];
   private events: ReturnType<typeof eventQueries>;
   private manifests: ReturnType<typeof projectManifestQueries>;
@@ -42,7 +43,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
-    console.log('Starting cron scheduler service');
+    this.logger.log('Starting cron scheduler service');
     await this.registerManifestCronJobs();
     await this.registerScheduleCronJobs();
   }
@@ -51,7 +52,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
     const schedules = await this.schedules.listAll();
     const enabled = schedules.filter((schedule) => schedule.enabled);
     if (enabled.length === 0) {
-      console.log('No enabled schedules found');
+      this.logger.log('No enabled schedules found');
       return;
     }
 
@@ -66,7 +67,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   private async registerManifestCronJobs(): Promise<void> {
     const triggers = await this.loadManifestCronTriggers();
     if (triggers.length === 0) {
-      console.log('No cron triggers found in manifests');
+      this.logger.log('No cron triggers found in manifests');
       return;
     }
 
@@ -133,7 +134,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       }
       return parsed as Record<string, unknown>;
     } catch (error) {
-      console.error('Failed to parse manifest YAML for cron triggers:', error);
+      this.logger.error('Failed to parse manifest YAML for cron triggers:', error instanceof Error ? error.stack : String(error));
       return null;
     }
   }
@@ -155,7 +156,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const project = await this.projects.findById(projectId);
     if (!project) {
-      console.warn(
+      this.logger.warn(
         `Cron trigger "${triggerName}" references missing/deleted project ${projectId}; unregistering`,
       );
       this.unregisterCronJobs((entry) =>
@@ -164,7 +165,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    console.log(`Cron tick: schedule="${schedule}" trigger="${triggerName}" project="${projectId}"`);
+    this.logger.log(`Cron tick: schedule="${schedule}" trigger="${triggerName}" project="${projectId}"`);
 
     const payload = {
       schedule,
@@ -186,13 +187,13 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       dedupe_key: dedupeKey,
     });
 
-    console.log(`  -> Created event ${eventId} for cron tick`);
+    this.logger.log(`  -> Created event ${eventId} for cron tick`);
   }
 
   private async handleScheduleTick(schedule: Schedule): Promise<void> {
     const project = await this.projects.findById(schedule.project_id);
     if (!project) {
-      console.warn(
+      this.logger.warn(
         `Schedule "${schedule.id}" references missing/deleted project ${schedule.project_id}; unregistering`,
       );
       this.unregisterCronJobs((entry) =>
@@ -201,7 +202,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    console.log(`Schedule tick: schedule="${schedule.cron}" id="${schedule.id}" project="${schedule.project_id}"`);
+    this.logger.log(`Schedule tick: schedule="${schedule.cron}" id="${schedule.id}" project="${schedule.project_id}"`);
 
     const payload = {
       schedule: schedule.cron,
@@ -223,7 +224,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       dedupe_key: dedupeKey,
     });
 
-    console.log(`  -> Created event ${eventId} for schedule ${schedule.id}`);
+    this.logger.log(`  -> Created event ${eventId} for schedule ${schedule.id}`);
   }
 
   private currentMinuteKey(): string {
@@ -256,17 +257,14 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    console.log(`Registering cron job: "${triggerName}" with schedule: ${schedule}`);
+    this.logger.log(`Registering cron job: "${triggerName}" with schedule: ${schedule}`);
 
     try {
       const job = new CronJob(
         schedule,
         () => {
           this.handleCronTick(schedule, triggerName, projectId).catch((error) => {
-            console.error(
-              `Error handling cron tick for ${triggerName}:`,
-              error instanceof Error ? error.message : String(error),
-            );
+            this.logger.error(`Error handling cron tick for ${triggerName}: ${error instanceof Error ? error.message : String(error)}`);
           });
         },
         null, // onComplete
@@ -275,12 +273,9 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
 
       this.cronJobs.push({ key, job });
-      console.log(`Successfully registered cron job: "${triggerName}"`);
+      this.logger.log(`Successfully registered cron job: "${triggerName}"`);
     } catch (error) {
-      console.error(
-        `Failed to register cron job "${triggerName}":`,
-        error instanceof Error ? error.message : String(error),
-      );
+      this.logger.error(`Failed to register cron job "${triggerName}": ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -290,17 +285,14 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    console.log(`Registering schedule: "${schedule.id}" with schedule: ${schedule.cron}`);
+    this.logger.log(`Registering schedule: "${schedule.id}" with schedule: ${schedule.cron}`);
 
     try {
       const job = new CronJob(
         schedule.cron,
         () => {
           this.handleScheduleTick(schedule).catch((error) => {
-            console.error(
-              `Error handling schedule tick for ${schedule.id}:`,
-              error instanceof Error ? error.message : String(error),
-            );
+            this.logger.error(`Error handling schedule tick for ${schedule.id}: ${error instanceof Error ? error.message : String(error)}`);
           });
         },
         null,
@@ -309,12 +301,9 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
 
       this.cronJobs.push({ key, job });
-      console.log(`Successfully registered schedule: "${schedule.id}"`);
+      this.logger.log(`Successfully registered schedule: "${schedule.id}"`);
     } catch (error) {
-      console.error(
-        `Failed to register schedule "${schedule.id}":`,
-        error instanceof Error ? error.message : String(error),
-      );
+      this.logger.error(`Failed to register schedule "${schedule.id}": ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -325,10 +314,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
         try {
           entry.job.stop();
         } catch (error) {
-          console.warn(
-            `Failed stopping cron job "${entry.key}":`,
-            error instanceof Error ? error.message : String(error),
-          );
+          this.logger.warn(`Failed stopping cron job "${entry.key}": ${error instanceof Error ? error.message : String(error)}`);
         }
       } else {
         keep.push(entry);
@@ -341,7 +327,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
    * Unregister all cron jobs (cleanup on module destroy).
    */
   onModuleDestroy() {
-    console.log(`Stopping ${this.cronJobs.length} cron job(s)`);
+    this.logger.log(`Stopping ${this.cronJobs.length} cron job(s)`);
     for (const entry of this.cronJobs) {
       entry.job.stop();
     }

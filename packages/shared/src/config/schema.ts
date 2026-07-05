@@ -23,6 +23,15 @@ const workspaceRootFromEnv = z.preprocess((value) => {
   return process.env.EVE_WORKSPACE_ROOT;
 }, z.string().default('/tmp/eve/workspaces'));
 
+// Millisecond interval parsed exactly like the orchestrator worker client's
+// historical resolvePollIntervalMs: missing/malformed values or anything below
+// 100ms fall back to the default.
+const boundedMsFromEnv = (fallbackMs: number) =>
+  z.preprocess((value) => {
+    const parsed = Number.parseInt(typeof value === 'string' ? value : '', 10);
+    return !Number.isFinite(parsed) || parsed < 100 ? fallbackMs : parsed;
+  }, z.number().int());
+
 export const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   DATABASE_URL: z.string().url(),
@@ -41,6 +50,42 @@ export const configSchema = z.object({
   ORCH_TUNER_CPU_THRESHOLD: z.coerce.number().min(0).max(1).default(0.8), // CPU usage fraction above which to decrease concurrency
   ORCH_TUNER_MEMORY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.85), // Memory usage fraction above which to decrease concurrency
   WORKER_IMAGE: z.string().default('default-worker'),
+
+  // ── Orchestrator hot-path routing/dispatch config (ORC-6) ──────────────────
+  // Agent-runtime routing target. When set, ALL agent jobs route to the agent
+  // runtime (see loop.service / worker.client); when unset they fall back to
+  // the worker's harness invoke path.
+  EVE_AGENT_RUNTIME_URL: z.string().optional(),
+  // Comma-separated name=url mapping of agent-runtime pods (sharded runtimes).
+  EVE_AGENT_RUNTIME_URLS: z.string().default(''),
+  // Comma-separated name=url mapping of worker deployments.
+  EVE_WORKER_URLS: z.string().default(''),
+  // Fallback worker URL. Empty string falls back to the default, preserving
+  // the original `process.env.WORKER_URL || '...'` semantics.
+  WORKER_URL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().default('http://localhost:4749'),
+  ),
+  // Worker/agent-runtime completion-poll timeout. Exact-preserving port of
+  // `parseInt(process.env.WORKER_TIMEOUT_MS || '1800000', 10)`: empty/unset
+  // falls back to 30 minutes; a malformed value still parses to NaN (which
+  // degrades to an immediate poll timeout) instead of failing config parse.
+  WORKER_TIMEOUT_MS: z.preprocess(
+    (value) => Number.parseInt(typeof value === 'string' && value !== '' ? value : '1800000', 10),
+    z.number().or(z.nan()),
+  ),
+  // Completion-event poll cadences and the worker submit timeout (all ms).
+  EVE_WORKER_POLL_INTERVAL_MS: boundedMsFromEnv(5000),
+  EVE_AGENT_RUNTIME_POLL_INTERVAL_MS: boundedMsFromEnv(250),
+  EVE_WORKER_SUBMIT_TIMEOUT_MS: boundedMsFromEnv(30_000),
+  // Orchestrator loop cadences, in ticks of ORCH_LOOP_INTERVAL_MS. Kept as raw
+  // strings because their defaults are computed from the loop interval (or
+  // parsed with `?? '1'`) at the single call site in loop.service.
+  EVE_ORCH_RECOVERY_INTERVAL_TICKS: z.string().optional(),
+  EVE_ORCH_STALE_RECOVERY_INTERVAL_TICKS: z.string().optional(),
+  EVE_ORCH_PIPELINE_RECONCILE_INTERVAL_TICKS: z.string().optional(),
+  EVE_ORCH_WAKE_ON_INTERVAL_TICKS: z.string().optional(),
+
   EVE_WORKSPACE_ROOT: z.string().default('/opt/eve/workspaces'),
   WORKSPACE_ROOT: workspaceRootFromEnv,
   EVE_API_URL: z.string().url().default('http://localhost:4701'),

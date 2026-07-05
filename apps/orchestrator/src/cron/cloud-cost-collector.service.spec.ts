@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { CloudCostCollectorService } from './cloud-cost-collector.service.js';
 import type { CloudCostProvider, CloudCostScopeConfig } from './cloud-cost-provider.js';
@@ -26,7 +27,7 @@ describe('CloudCostCollectorService.collect', () => {
     const original = process.env.EVE_CLOUD_COST_ENABLED;
     delete process.env.EVE_CLOUD_COST_ENABLED;
     const { service, upsert } = makeService();
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
 
     await service.collect(undefined, new Date('2026-06-04T12:00:00Z'));
 
@@ -41,7 +42,7 @@ describe('CloudCostCollectorService.collect', () => {
 
   it('does not write a snapshot when the provider throws', async () => {
     const { service, upsert } = makeService();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const provider: CloudCostProvider = {
       provider: 'aws',
       source: 'aws_cost_explorer',
@@ -51,13 +52,13 @@ describe('CloudCostCollectorService.collect', () => {
     await service.collect(provider, new Date('2026-06-04T12:00:00Z'), scope);
 
     expect(upsert).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith('[cloud-cost] Provider fetch failed:', 'CE denied');
+    expect(warnSpy).toHaveBeenCalledWith('[cloud-cost] Provider fetch failed: CE denied');
     warnSpy.mockRestore();
   });
 
   it('does not write a snapshot when the provider returns null', async () => {
     const { service, upsert } = makeService();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const provider: CloudCostProvider = {
       provider: 'aws',
       source: 'aws_cost_explorer',
@@ -72,7 +73,7 @@ describe('CloudCostCollectorService.collect', () => {
 
   it('writes one generic cloud snapshot on success', async () => {
     const { service, upsert } = makeService();
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
     const now = new Date('2026-06-04T12:00:00Z');
     const provider: CloudCostProvider = {
       provider: 'aws',

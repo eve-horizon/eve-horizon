@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   gateQueries,
   jobQueries,
@@ -121,6 +122,7 @@ export function evaluateAttemptStartupHealth(params: {
  * (`db`, `inFlightJobs`, `limiter`, ...) so the bodies moved verbatim.
  */
 export class RecoveryService {
+  private readonly logger = new Logger(RecoveryService.name);
   constructor(
     private readonly db: Db,
     private readonly inFlightJobs: Map<string, number>,
@@ -174,7 +176,7 @@ export class RecoveryService {
       return;
     }
 
-    console.log(`Found ${orphanedJobs.length} potentially orphaned job(s), recovering...`);
+    this.logger.log(`Found ${orphanedJobs.length} potentially orphaned job(s), recovering...`);
 
     for (const job of orphanedJobs) {
       try {
@@ -216,14 +218,14 @@ export class RecoveryService {
               : [];
 
             if (completionLogs.length === 0) {
-              console.log(
+              this.logger.log(
                 `Skipping recovery for job ${job.id}; ${runningCount - staleAttempts.length} running attempt(s) within ${staleMinutes}m`,
               );
               continue;
             }
 
             // Completion log exists but dispatch never finalized — treat as completed
-            console.log(
+            this.logger.log(
               `Job ${job.id} has ${completionLogs.length} completed-but-not-finalized attempt(s), recovering inline`,
             );
           }
@@ -236,7 +238,7 @@ export class RecoveryService {
               exitCode: 1,
               errorMessage: 'Orchestrator restarted while attempt was running',
             });
-            console.log(`Marked orphaned attempt ${attempt.id} as failed`);
+            this.logger.log(`Marked orphaned attempt ${attempt.id} as failed`);
           }
         }
 
@@ -248,20 +250,20 @@ export class RecoveryService {
             SET assignee = NULL, phase = 'ready', ready_at = NOW(), updated_at = NOW()
             WHERE id = ${job.id}
           `;
-          console.log(`Reset orphaned job ${job.id} for retry`);
+          this.logger.log(`Reset orphaned job ${job.id} for retry`);
         }
 
         const released = await gates.releaseGates(job.id);
         if (released > 0) {
-          console.log(`Released ${released} gate(s) for orphaned job ${job.id}`);
+          this.logger.log(`Released ${released} gate(s) for orphaned job ${job.id}`);
         }
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        console.error(`Failed to recover orphaned job ${job.id}: ${errMsg}`);
+        this.logger.error(`Failed to recover orphaned job ${job.id}: ${errMsg}`);
       }
     }
 
-    console.log('Orphaned job recovery complete');
+    this.logger.log('Orphaned job recovery complete');
   }
 
   private releaseInFlightDispatchForWatchdog(jobId: string, label: string): void {
@@ -273,10 +275,10 @@ export class RecoveryService {
       this.limiter.release();
     } catch (releaseError) {
       const message = releaseError instanceof Error ? releaseError.message : String(releaseError);
-      console.warn(`Failed to release limiter for ${label} job ${jobId}: ${message}`);
+      this.logger.warn(`Failed to release limiter for ${label} job ${jobId}: ${message}`);
     }
     const dispatchElapsed = Math.round((Date.now() - dispatchStart) / 1000);
-    console.warn(
+    this.logger.warn(
       `Force-recovered ${label} job ${jobId} while dispatch was in-flight (${dispatchElapsed}s elapsed)`,
     );
   }
@@ -301,7 +303,7 @@ export class RecoveryService {
     });
 
     if (!completedAttempt) {
-      console.log(`Attempt ${candidate.attempt_id} already finalized; skipping ${label} recovery`);
+      this.logger.log(`Attempt ${candidate.attempt_id} already finalized; skipping ${label} recovery`);
       return;
     }
 
@@ -328,10 +330,10 @@ export class RecoveryService {
 
     const released = await gates.releaseGates(candidate.job_id);
     if (released > 0) {
-      console.log(`Released ${released} gate(s) for ${label} job ${candidate.job_id}`);
+      this.logger.log(`Released ${released} gate(s) for ${label} job ${candidate.job_id}`);
     }
 
-    console.warn(`Recovered ${label} running attempt ${candidate.attempt_id} for job ${candidate.job_id}`);
+    this.logger.warn(`Recovered ${label} running attempt ${candidate.attempt_id} for job ${candidate.job_id}`);
 
     if (candidate.parent_id) {
       await this.tryCloseWorkflowRoot(candidate.parent_id);
@@ -376,7 +378,7 @@ export class RecoveryService {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`Failed init-timeout recovery for ${candidate.attempt_id}: ${message}`);
+        this.logger.error(`Failed init-timeout recovery for ${candidate.attempt_id}: ${message}`);
       }
     }
   }
@@ -427,7 +429,7 @@ export class RecoveryService {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`Failed startup-timeout recovery for ${candidate.attempt_id}: ${message}`);
+        this.logger.error(`Failed startup-timeout recovery for ${candidate.attempt_id}: ${message}`);
       }
     }
   }
@@ -512,7 +514,7 @@ export class RecoveryService {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`Failed stale-attempt recovery for ${candidate.attempt_id}: ${message}`);
+        this.logger.error(`Failed stale-attempt recovery for ${candidate.attempt_id}: ${message}`);
       }
     }
   }
@@ -574,7 +576,7 @@ export class RecoveryService {
 
     if (stuckJobs.length === 0) return;
 
-    console.warn(
+    this.logger.warn(
       `Found ${stuckJobs.length} active job(s) with no running attempts; recovering`,
     );
 
@@ -588,10 +590,10 @@ export class RecoveryService {
             this.limiter.release();
           } catch (releaseError) {
             const message = releaseError instanceof Error ? releaseError.message : String(releaseError);
-            console.warn(`Failed to release limiter for stuck job ${stuckJob.id}: ${message}`);
+            this.logger.warn(`Failed to release limiter for stuck job ${stuckJob.id}: ${message}`);
           }
           const elapsed = Math.round((Date.now() - dispatchStart) / 1000);
-          console.warn(
+          this.logger.warn(
             `Released in-flight dispatch for stuck job ${stuckJob.id} (dispatch running ${elapsed}s)`,
           );
         }
@@ -622,7 +624,7 @@ export class RecoveryService {
 
         const released = await gates.releaseGates(stuckJob.id);
         if (released > 0) {
-          console.log(`Released ${released} gate(s) for stuck job ${stuckJob.id}`);
+          this.logger.log(`Released ${released} gate(s) for stuck job ${stuckJob.id}`);
         }
 
         // Sync ingest record status so sources don't stay in parse_status=processing
@@ -637,10 +639,10 @@ export class RecoveryService {
           await this.tryCloseWorkflowRoot(stuckJob.parent_id);
         }
 
-        console.warn(`Recovered stuck active job ${stuckJob.id}: ${errorMessage}`);
+        this.logger.warn(`Recovered stuck active job ${stuckJob.id}: ${errorMessage}`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`Failed to recover stuck job ${stuckJob.id}: ${msg}`);
+        this.logger.error(`Failed to recover stuck job ${stuckJob.id}: ${msg}`);
       }
     }
   }

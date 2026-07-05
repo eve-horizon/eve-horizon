@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import {
   usageRecordQueries,
@@ -41,6 +41,7 @@ const MANAGED_DB_RATES: Record<string, number> = {
  */
 @Injectable()
 export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ManagedDbSweeperService.name);
   private cronJob: CronJob | null = null;
 
   private readonly usageRecords: ReturnType<typeof usageRecordQueries>;
@@ -53,7 +54,7 @@ export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_MANAGED_DB_SWEEPER_ENABLED !== 'true') {
-      console.log('[managed-db-sweeper] Disabled (set EVE_MANAGED_DB_SWEEPER_ENABLED=true to enable)');
+      this.logger.log('[managed-db-sweeper] Disabled (set EVE_MANAGED_DB_SWEEPER_ENABLED=true to enable)');
       return;
     }
 
@@ -64,22 +65,16 @@ export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
         cron,
         () => {
           this.sweep().catch((err) => {
-            console.error(
-              '[managed-db-sweeper] Sweep failed:',
-              err instanceof Error ? err.message : String(err),
-            );
+            this.logger.error(`[managed-db-sweeper] Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[managed-db-sweeper] Enabled (cron="${cron}")`);
+      this.logger.log(`[managed-db-sweeper] Enabled (cron="${cron}")`);
     } catch (err) {
-      console.error(
-        '[managed-db-sweeper] Failed to start cron:',
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[managed-db-sweeper] Failed to start cron: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -100,7 +95,7 @@ export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
   async sweep(): Promise<void> {
     const sweepId = generateSweepId();
     const now = new Date();
-    console.log(`[managed-db-sweeper] Starting sweep ${sweepId}`);
+    this.logger.log(`[managed-db-sweeper] Starting sweep ${sweepId}`);
 
     // Get all ready tenants (active, billable).
     const allTenants = await this.db<Array<{
@@ -125,14 +120,11 @@ export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
         recordsCreated += records;
         chargesCreated += charges;
       } catch (err) {
-        console.warn(
-          `[managed-db-sweeper] Failed to sweep tenant ${tenant.id}:`,
-          err instanceof Error ? err.message : String(err),
-        );
+        this.logger.warn(`[managed-db-sweeper] Failed to sweep tenant ${tenant.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
-    console.log(
+    this.logger.log(
       `[managed-db-sweeper] Sweep ${sweepId} complete: ${allTenants.length} tenants, ${recordsCreated} records, ${chargesCreated} charges`,
     );
   }
@@ -247,10 +239,7 @@ export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.ledger.ensureBalance(orgId, 'usd');
     } catch (err) {
-      console.warn(
-        `[managed-db-sweeper] Failed to ensure balance for ${orgId}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.warn(`[managed-db-sweeper] Failed to ensure balance for ${orgId}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
 
@@ -272,7 +261,7 @@ export class ManagedDbSweeperService implements OnModuleInit, OnModuleDestroy {
       if (msg.includes('unique') || msg.includes('duplicate')) {
         return false;
       }
-      console.warn(`[managed-db-sweeper] Failed to charge for record ${record.id}:`, msg);
+      this.logger.warn(`[managed-db-sweeper] Failed to charge for record ${record.id}: ${msg}`);
       return false;
     }
   }

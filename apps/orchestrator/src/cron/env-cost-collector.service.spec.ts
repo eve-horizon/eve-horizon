@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, it, expect, vi } from 'vitest';
 import {
   EnvCostCollectorService,
@@ -173,7 +174,7 @@ describe('EnvCostCollectorService.collect', () => {
 
   it('keeps last-good snapshots untouched when source fetch fails', async () => {
     const { service, upsert } = makeService();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const source: CostSource = {
       name: 'opencost',
       fetchMonthToDate: vi.fn().mockRejectedValue(new Error('opencost down')),
@@ -187,7 +188,7 @@ describe('EnvCostCollectorService.collect', () => {
 
   it('keeps last-good snapshots untouched when source returns no usable allocations', async () => {
     const { service, upsert } = makeService();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const source: CostSource = {
       name: 'opencost',
       fetchMonthToDate: vi.fn().mockResolvedValue([]),

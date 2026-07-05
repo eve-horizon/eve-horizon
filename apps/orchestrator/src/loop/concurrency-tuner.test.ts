@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { ConcurrencyTuner, TunerConfig } from './concurrency-tuner';
 import { ConcurrencyLimiter } from './concurrency-limiter';
@@ -33,7 +34,7 @@ describe('ConcurrencyTuner', () => {
     };
 
     // Mock console.log to avoid test output pollution
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -573,7 +574,7 @@ describe('ConcurrencyTuner', () => {
     });
 
     it('logs adjustment events', async () => {
-      const logSpy = vi.spyOn(console, 'log');
+      const logSpy = vi.spyOn(Logger.prototype, 'log');
 
       mockReader.read.mockResolvedValue({
         cpuUsage: 0.9,

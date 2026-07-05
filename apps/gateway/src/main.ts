@@ -4,11 +4,9 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { LoggerService } from '@nestjs/common';
 import {
-  CORRELATION_HEADER,
-  createJsonLogger,
-  ensureCorrelationId,
-  initOtel,
-  runWithCorrelationContext,
+  initServiceTelemetry,
+  registerCorrelationIdHook,
+  registerRawBodyJsonParser,
 } from '@eve/shared';
 import { AppModule } from './app.module.js';
 import { GatewayProviderRegistry } from './providers/provider-registry.js';
@@ -17,9 +15,8 @@ import { getJson } from './api-client.js';
 async function bootstrap() {
   const port = process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 4820;
 
-  await initOtel('eve-gateway');
+  const logger = (await initServiceTelemetry('gateway')) as LoggerService;
 
-  const logger = createJsonLogger('gateway') as LoggerService;
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter(),
@@ -52,34 +49,8 @@ async function bootstrap() {
   registry.startSync(fetchIntegrations);
 
   const fastify = app.getHttpAdapter().getInstance();
-  try {
-    fastify.removeContentTypeParser('application/json');
-    fastify.removeContentTypeParser('application/*+json');
-  } catch {
-    // Ignore if parser wasn't registered yet.
-  }
-  const rawBodyParser = (req: any, body: string, done: (err: Error | null, value?: any) => void) => {
-    req.rawBody = body;
-    if (!body) {
-      done(null, {});
-      return;
-    }
-    try {
-      done(null, JSON.parse(body));
-    } catch (err) {
-      done(err as Error);
-    }
-  };
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, rawBodyParser);
-  fastify.addContentTypeParser('application/*+json', { parseAs: 'string' }, rawBodyParser);
-
-  fastify.addHook('onRequest', (request: any, reply: any, done: () => void) => {
-    const incoming = request.headers?.[CORRELATION_HEADER];
-    const correlationId = ensureCorrelationId(incoming);
-    request.correlationId = correlationId;
-    reply.header(CORRELATION_HEADER, correlationId);
-    runWithCorrelationContext({ correlationId, traceId: correlationId }, done);
-  });
+  registerRawBodyJsonParser(fastify);
+  registerCorrelationIdHook(fastify);
 
   await app.listen(port, '0.0.0.0');
   logger.log(`Gateway listening on port ${port}`);

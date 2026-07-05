@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import {
   environmentQueries,
@@ -70,6 +70,7 @@ interface K8sPvc {
  */
 @Injectable()
 export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(UsageSweeperService.name);
   private cronJob: CronJob | null = null;
 
   private readonly environments: ReturnType<typeof environmentQueries>;
@@ -86,7 +87,7 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_USAGE_SWEEPER_ENABLED !== 'true') {
-      console.log('[usage-sweeper] Disabled (set EVE_USAGE_SWEEPER_ENABLED=true to enable)');
+      this.logger.log('[usage-sweeper] Disabled (set EVE_USAGE_SWEEPER_ENABLED=true to enable)');
       return;
     }
 
@@ -97,22 +98,16 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
         cron,
         () => {
           this.sweep().catch((err) => {
-            console.error(
-              '[usage-sweeper] Sweep failed:',
-              err instanceof Error ? err.message : String(err),
-            );
+            this.logger.error(`[usage-sweeper] Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[usage-sweeper] Enabled (cron="${cron}")`);
+      this.logger.log(`[usage-sweeper] Enabled (cron="${cron}")`);
     } catch (err) {
-      console.error(
-        '[usage-sweeper] Failed to start cron:',
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.error(`[usage-sweeper] Failed to start cron: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -133,7 +128,7 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
   async sweep(): Promise<void> {
     const sweepId = generateSweepId();
     const now = new Date();
-    console.log(`[usage-sweeper] Starting sweep ${sweepId}`);
+    this.logger.log(`[usage-sweeper] Starting sweep ${sweepId}`);
 
     const activeEnvs = await this.environments.listActive();
     let recordsCreated = 0;
@@ -147,15 +142,12 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
       try {
         const project = await this.projects.findById(env.project_id);
         if (!project) {
-          console.warn(`[usage-sweeper] Project ${env.project_id} not found for env ${env.id}, skipping`);
+          this.logger.warn(`[usage-sweeper] Project ${env.project_id} not found for env ${env.id}, skipping`);
           continue;
         }
         orgId = project.org_id;
       } catch (err) {
-        console.warn(
-          `[usage-sweeper] Failed to resolve project for env ${env.id}:`,
-          err instanceof Error ? err.message : String(err),
-        );
+        this.logger.warn(`[usage-sweeper] Failed to resolve project for env ${env.id}: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
 
@@ -172,14 +164,11 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
         chargesCreated += charges;
       } catch (err) {
         // Graceful degradation: log and continue with next env.
-        console.warn(
-          `[usage-sweeper] Failed to sweep namespace ${env.namespace}:`,
-          err instanceof Error ? err.message : String(err),
-        );
+        this.logger.warn(`[usage-sweeper] Failed to sweep namespace ${env.namespace}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
-    console.log(
+    this.logger.log(
       `[usage-sweeper] Sweep ${sweepId} complete: ${activeEnvs.length} envs, ${recordsCreated} records, ${chargesCreated} charges`,
     );
   }
@@ -356,10 +345,7 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.ledger.ensureBalance(orgId, 'usd');
     } catch (err) {
-      console.warn(
-        `[usage-sweeper] Failed to ensure balance for ${orgId}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.warn(`[usage-sweeper] Failed to ensure balance for ${orgId}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
 
@@ -381,7 +367,7 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
       if (msg.includes('unique') || msg.includes('duplicate')) {
         return false;
       }
-      console.warn(`[usage-sweeper] Failed to charge for record ${record.id}:`, msg);
+      this.logger.warn(`[usage-sweeper] Failed to charge for record ${record.id}: ${msg}`);
       return false;
     }
   }
@@ -432,10 +418,7 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
       );
       return data.items ?? [];
     } catch (err) {
-      console.warn(
-        `[usage-sweeper] Failed to list pods in ${namespace}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.warn(`[usage-sweeper] Failed to list pods in ${namespace}: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   }
@@ -447,10 +430,7 @@ export class UsageSweeperService implements OnModuleInit, OnModuleDestroy {
       );
       return data.items ?? [];
     } catch (err) {
-      console.warn(
-        `[usage-sweeper] Failed to list PVCs in ${namespace}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.logger.warn(`[usage-sweeper] Failed to list PVCs in ${namespace}: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   }

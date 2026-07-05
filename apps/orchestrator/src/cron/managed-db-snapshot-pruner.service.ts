@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { managedDbSnapshotQueries, type Db } from '@eve/db';
 import { createSnapshotStorageClient } from '@eve/shared';
@@ -13,6 +13,7 @@ import { createSnapshotStorageClient } from '@eve/shared';
  */
 @Injectable()
 export class ManagedDbSnapshotPrunerService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ManagedDbSnapshotPrunerService.name);
   private cronJob: CronJob | null = null;
   private running = false;
 
@@ -24,7 +25,7 @@ export class ManagedDbSnapshotPrunerService implements OnModuleInit, OnModuleDes
 
   async onModuleInit(): Promise<void> {
     if (process.env.EVE_MANAGED_DB_SNAPSHOT_PRUNER_ENABLED !== 'true') {
-      console.log('[snapshot-pruner] Disabled (set EVE_MANAGED_DB_SNAPSHOT_PRUNER_ENABLED=true to enable)');
+      this.logger.log('[snapshot-pruner] Disabled (set EVE_MANAGED_DB_SNAPSHOT_PRUNER_ENABLED=true to enable)');
       return;
     }
 
@@ -35,16 +36,16 @@ export class ManagedDbSnapshotPrunerService implements OnModuleInit, OnModuleDes
         cron,
         () => {
           this.tick().catch((err) => {
-            console.error('[snapshot-pruner] Tick failed:', err instanceof Error ? err.message : String(err));
+            this.logger.error(`[snapshot-pruner] Tick failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
         null,
         true,
         'UTC',
       );
-      console.log(`[snapshot-pruner] Started (cron: ${cron})`);
+      this.logger.log(`[snapshot-pruner] Started (cron: ${cron})`);
     } catch (err) {
-      console.error('[snapshot-pruner] Failed to start:', err instanceof Error ? err.message : String(err));
+      this.logger.error(`[snapshot-pruner] Failed to start: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -87,7 +88,7 @@ export class ManagedDbSnapshotPrunerService implements OnModuleInit, OnModuleDes
       }
 
       if (expiredCount > 0 || staleCount > 0) {
-        console.log(`[snapshot-pruner] Pruned ${expiredCount} expired, ${staleCount} stale`);
+        this.logger.log(`[snapshot-pruner] Pruned ${expiredCount} expired, ${staleCount} stale`);
       }
     } finally {
       this.running = false;
