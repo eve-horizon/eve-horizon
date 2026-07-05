@@ -3,6 +3,7 @@ import { getStringFlag, toBoolean } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { renderTable } from '../lib/format';
 import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve as resolvePath, join, dirname } from 'node:path';
 import { applyMigrations, listMigrations, resetSchema } from '@eve/migrate';
@@ -1094,16 +1095,28 @@ async function handleSnapshots(
       console.log('No snapshots found.');
       return;
     }
-    console.log('ID                  Trigger     Status      Size       DB Size    Created');
+    const [header, ...rows] = renderTable(
+      [
+        { header: 'ID', width: 20 },
+        { header: 'Trigger', width: 12 },
+        { header: 'Status', width: 12 },
+        { header: 'Size', width: 11 },
+        { header: 'DB Size', width: 11 },
+        { header: 'Created' },
+      ],
+      snapshots.map((snap) => [
+        String(snap.id),
+        String(snap.trigger),
+        String(snap.status),
+        snap.size_bytes ? formatBytes(snap.size_bytes as number) : '-',
+        snap.db_size_bytes ? formatBytes(snap.db_size_bytes as number) : '-',
+        snap.created_at ? new Date(snap.created_at as string).toLocaleString() : '-',
+      ]),
+    );
+    console.log(header);
     console.log('-'.repeat(85));
-    for (const snap of snapshots) {
-      const size = snap.size_bytes ? formatBytes(snap.size_bytes as number) : '-';
-      const dbSize = snap.db_size_bytes ? formatBytes(snap.db_size_bytes as number) : '-';
-      const id = String(snap.id).padEnd(20);
-      const trigger = String(snap.trigger).padEnd(12);
-      const st = String(snap.status).padEnd(12);
-      const created = snap.created_at ? new Date(snap.created_at as string).toLocaleString() : '-';
-      console.log(`${id}${trigger}${st}${size.padEnd(11)}${dbSize.padEnd(11)}${created}`);
+    for (const row of rows) {
+      console.log(row);
     }
   }
 }

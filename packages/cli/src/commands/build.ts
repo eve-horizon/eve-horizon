@@ -3,6 +3,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery, renderTable } from '../lib/format';
 import { resolveGitRef } from '../lib/git.js';
 
 // ---------------------------------------------------------------------------
@@ -548,15 +549,24 @@ async function handleDiagnose(
 // ---------------------------------------------------------------------------
 
 function formatBuildList(builds: BuildSpecResponse[]): void {
-  console.log('Build ID'.padEnd(30) + 'SHA'.padEnd(12) + 'Created By'.padEnd(20) + 'Created');
+  const [header, ...rows] = renderTable(
+    [
+      { header: 'Build ID', width: 30 },
+      { header: 'SHA', width: 12 },
+      { header: 'Created By', width: 20 },
+      { header: 'Created' },
+    ],
+    builds.map((build) => [
+      build.id,
+      build.git_sha.substring(0, 8),
+      build.created_by ?? '-',
+      new Date(build.created_at).toLocaleString(),
+    ]),
+  );
+  console.log(header);
   console.log('-'.repeat(90));
-
-  for (const build of builds) {
-    const id = build.id.padEnd(30);
-    const sha = build.git_sha.substring(0, 8).padEnd(12);
-    const creator = (build.created_by ?? '-').padEnd(20);
-    const created = new Date(build.created_at).toLocaleString();
-    console.log(`${id}${sha}${creator}${created}`);
+  for (const row of rows) {
+    console.log(row);
   }
 
   console.log('');
@@ -644,16 +654,3 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-function buildQuery(params: Record<string, string | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, value);
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
-}

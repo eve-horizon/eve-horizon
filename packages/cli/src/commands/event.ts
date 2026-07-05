@@ -3,6 +3,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery, formatDate } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -268,19 +269,6 @@ async function handleEmit(
 // ============================================================================
 
 /**
- * Build query string from parameters
- */
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
-}
-
-/**
  * Format events as a human-readable table
  */
 function formatEventsTable(events: Event[]): void {
@@ -412,18 +400,6 @@ function formatTriggersCompact(event: Event): string {
   if (event.trigger_match_count == null) return '-';
   const evalCount = event.triggers_evaluated?.length ?? 0;
   return `${event.trigger_match_count}/${evalCount}`;
-}
-
-/**
- * Format a date string for display
- */
-function formatDate(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleString();
-  } catch {
-    return dateStr;
-  }
 }
 
 /**

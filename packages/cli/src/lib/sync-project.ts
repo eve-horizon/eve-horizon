@@ -458,7 +458,7 @@ export async function runUnifiedSync(
   options: RunUnifiedSyncOptions = {},
 ): Promise<UnifiedSyncResult> {
   const json = Boolean(flags.json);
-  const dir = typeof flags.dir === 'string' ? flags.dir : process.cwd();
+  const dir = getStringFlag(flags, ['dir']) ?? process.cwd();
   const repoRoot = resolve(dir);
   const manifestPath = join(repoRoot, '.eve', 'manifest.yaml');
 
@@ -483,7 +483,7 @@ export async function runUnifiedSync(
   // -----------------------------------------------------------------------
   // Resolve project ID
   // -----------------------------------------------------------------------
-  const projectIdFromFlag = typeof flags.project === 'string' ? flags.project : context.projectId;
+  const projectIdFromFlag = getStringFlag(flags, ['project']) ?? context.projectId;
   const projectIdFromManifest = typeof manifest.project === 'string' ? manifest.project : undefined;
   const projectId = projectIdFromFlag ?? projectIdFromManifest;
 

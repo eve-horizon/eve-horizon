@@ -3,6 +3,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery, renderTable } from '../lib/format';
 import { resolveGitRef } from '../lib/git.js';
 
 interface PipelineDefinition {
@@ -219,7 +220,7 @@ function formatPipelines(pipelines: PipelineResponse[]): void {
 function formatPipeline(pipeline: PipelineResponse): void {
   console.log(`Pipeline: ${pipeline.name}`);
   console.log('Definition:');
-  console.log(JSON.stringify(pipeline.definition, null, 2));
+  outputJson(pipeline.definition, false);
 }
 
 function formatPipelineRunList(runs: PipelineRunResponse[]): void {
@@ -227,15 +228,24 @@ function formatPipelineRunList(runs: PipelineRunResponse[]): void {
   console.log('');
 
   // Table header
-  console.log('Run ID'.padEnd(30) + 'Pipeline'.padEnd(20) + 'Status'.padEnd(20) + 'Created');
+  const [header, ...rows] = renderTable(
+    [
+      { header: 'Run ID', width: 30 },
+      { header: 'Pipeline', width: 20 },
+      { header: 'Status', width: 20 },
+      { header: 'Created' },
+    ],
+    runs.map((run) => [
+      run.id,
+      run.pipeline_name,
+      run.status,
+      new Date(run.created_at).toLocaleString(),
+    ]),
+  );
+  console.log(header);
   console.log('-'.repeat(100));
-
-  for (const run of runs) {
-    const runId = run.id.padEnd(30);
-    const pipeline = run.pipeline_name.padEnd(20);
-    const status = run.status.padEnd(20);
-    const created = new Date(run.created_at).toLocaleString();
-    console.log(`${runId}${pipeline}${status}${created}`);
+  for (const row of rows) {
+    console.log(row);
   }
 
   console.log('');
@@ -669,7 +679,7 @@ async function handleLogs(
     if (step.result_json) {
       console.log('');
       console.log('Result JSON:');
-      console.log(JSON.stringify(step.result_json, null, 2));
+      outputJson(step.result_json, false);
     }
 
     console.log('');
@@ -920,16 +930,6 @@ const ERROR_CODES: Record<string, ErrorCodeInfo> = {
 
 function getErrorCodeInfo(code: string): ErrorCodeInfo {
   return ERROR_CODES[code] ?? ERROR_CODES.unknown_error;
-}
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
 }
 
 /**

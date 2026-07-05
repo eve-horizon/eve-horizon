@@ -5,6 +5,7 @@ import { loadRepoProfiles, resolveContextForProfile } from '../lib/context';
 import { loadCredentials } from '../lib/config';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery, parseSinceValue } from '../lib/format';
 import { runUnifiedSync } from '../lib/sync-project';
 import { buildCliImage } from '../lib/cli-image-builder';
 import { existsSync, readFileSync } from 'node:fs';
@@ -21,12 +22,12 @@ export async function handleProject(
 
   switch (subcommand) {
     case 'ensure': {
-      const name = typeof flags.name === 'string' ? flags.name : '';
+      const name = getStringFlag(flags, ['name']) ?? '';
       const repoUrl = typeof flags['repo-url'] === 'string' ? flags['repo-url']
-        : typeof flags.repo === 'string' ? flags.repo : undefined;
-      const branch = typeof flags.branch === 'string' ? flags.branch : 'main';
-      const slug = typeof flags.slug === 'string' ? flags.slug : undefined;
-      const orgIdRaw = typeof flags.org === 'string' ? flags.org : context.orgId;
+        : getStringFlag(flags, ['repo']);
+      const branch = getStringFlag(flags, ['branch']) ?? 'main';
+      const slug = getStringFlag(flags, ['slug']);
+      const orgIdRaw = getStringFlag(flags, ['org']) ?? context.orgId;
       const force = toBoolean(flags.force) ?? false;
 
       if (!name) {
@@ -52,15 +53,15 @@ export async function handleProject(
 
       // When --all is set, don't require org context
       const orgId = all
-        ? (typeof flags.org === 'string' ? flags.org : undefined)
-        : (typeof flags.org === 'string' ? flags.org : context.orgId);
+        ? (getStringFlag(flags, ['org']))
+        : (getStringFlag(flags, ['org']) ?? context.orgId);
 
       const query = buildQuery({
-        limit: typeof flags.limit === 'string' ? flags.limit : (all ? '50' : undefined),
-        offset: typeof flags.offset === 'string' ? flags.offset : undefined,
+        limit: getStringFlag(flags, ['limit']) ?? (all ? '50' : undefined),
+        offset: getStringFlag(flags, ['offset']),
         include_deleted: toBoolean(includeDeletedFlag) ? 'true' : undefined,
         org_id: orgId,
-        name: typeof flags.name === 'string' ? flags.name : undefined,
+        name: getStringFlag(flags, ['name']),
       });
       const response = await requestJson(context, `/projects${query}`);
 
@@ -87,15 +88,15 @@ export async function handleProject(
       return;
     }
     case 'spend': {
-      const projectId = positionals[0] ?? (typeof flags.project === 'string' ? flags.project : context.projectId);
+      const projectId = positionals[0] ?? (getStringFlag(flags, ['project']) ?? context.projectId);
       if (!projectId) {
         throw new Error('Usage: eve project spend <project_id> [--since 7d] [--until <iso>] [--currency usd] [--limit 10] [--json]');
       }
 
-      const sinceRaw = typeof flags.since === 'string' ? flags.since : '7d';
-      const untilRaw = typeof flags.until === 'string' ? flags.until : undefined;
-      const currency = typeof flags.currency === 'string' ? flags.currency : undefined;
-      const limitRaw = typeof flags.limit === 'string' ? flags.limit : undefined;
+      const sinceRaw = getStringFlag(flags, ['since']) ?? '7d';
+      const untilRaw = getStringFlag(flags, ['until']);
+      const currency = getStringFlag(flags, ['currency']);
+      const limitRaw = getStringFlag(flags, ['limit']);
       const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
 
       const query = buildQuery({
@@ -153,7 +154,7 @@ export async function handleProject(
     }
     case 'members': {
       const action = positionals[0]; // list | add | remove
-      const projectId = typeof flags.project === 'string' ? flags.project : context.projectId;
+      const projectId = getStringFlag(flags, ['project']) ?? context.projectId;
       if (!projectId) {
         throw new Error('Missing project id. Provide --project or set a profile default.');
       }
@@ -190,15 +191,15 @@ export async function handleProject(
       }
     }
     case 'bootstrap': {
-      const name = typeof flags.name === 'string' ? flags.name : '';
+      const name = getStringFlag(flags, ['name']) ?? '';
       const repoUrl = typeof flags['repo-url'] === 'string' ? flags['repo-url'] : '';
-      const branch = typeof flags.branch === 'string' ? flags.branch : 'main';
-      const slug = typeof flags.slug === 'string' ? flags.slug : undefined;
-      const orgIdRaw = typeof flags.org === 'string' ? flags.org : context.orgId;
-      const description = typeof flags.description === 'string' ? flags.description : undefined;
-      const template = typeof flags.template === 'string' ? flags.template : undefined;
-      const packsRaw = typeof flags.packs === 'string' ? flags.packs : undefined;
-      const envsRaw = typeof flags.environments === 'string' ? flags.environments : undefined;
+      const branch = getStringFlag(flags, ['branch']) ?? 'main';
+      const slug = getStringFlag(flags, ['slug']);
+      const orgIdRaw = getStringFlag(flags, ['org']) ?? context.orgId;
+      const description = getStringFlag(flags, ['description']);
+      const template = getStringFlag(flags, ['template']);
+      const packsRaw = getStringFlag(flags, ['packs']);
+      const envsRaw = getStringFlag(flags, ['environments']);
 
       if (!name || !repoUrl) {
         throw new Error(
@@ -242,7 +243,7 @@ export async function handleProject(
       return;
     }
     case 'delete': {
-      const projectId = positionals[0] ?? (typeof flags.project === 'string' ? flags.project : context.projectId);
+      const projectId = positionals[0] ?? (getStringFlag(flags, ['project']) ?? context.projectId);
       if (!projectId) {
         throw new Error('Usage: eve project delete <project_id> [--hard] [--force]');
       }
@@ -260,7 +261,7 @@ export async function handleProject(
 
     case 'auth-context': {
       const projectId = positionals[0]
-        ?? (typeof flags.project === 'string' ? flags.project : context.projectId);
+        ?? (getStringFlag(flags, ['project']) ?? context.projectId);
       if (!projectId) {
         throw new Error('Usage: eve project auth-context <project_id>');
       }
@@ -823,39 +824,6 @@ function formatStatusOutput(results: StatusProfileResult[]): void {
   }
 }
 
-function parseSinceValue(since: string): string {
-  // If it looks like an ISO date, return as-is
-  if (since.includes('T') || since.includes('-')) {
-    return since;
-  }
-
-  const match = since.match(/^(\d+)([smhd])$/);
-  if (!match) {
-    throw new Error(`Invalid time format: "${since}". Use formats like "10m", "2h", "7d", or ISO timestamp.`);
-  }
-
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-
-  const now = new Date();
-  switch (unit) {
-    case 's':
-      now.setSeconds(now.getSeconds() - value);
-      break;
-    case 'm':
-      now.setMinutes(now.getMinutes() - value);
-      break;
-    case 'h':
-      now.setHours(now.getHours() - value);
-      break;
-    case 'd':
-      now.setDate(now.getDate() - value);
-      break;
-  }
-
-  return now.toISOString();
-}
-
 function formatAge(isoDate: string): string {
   const ms = Date.now() - new Date(isoDate).getTime();
   if (ms < 0) return 'just now';
@@ -871,14 +839,4 @@ function formatAge(isoDate: string): string {
 
 function padRight(str: string, width: number): string {
   return str.length >= width ? str : str + ' '.repeat(width - str.length);
-}
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
 }

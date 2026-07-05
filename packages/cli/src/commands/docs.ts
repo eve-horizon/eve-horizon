@@ -5,6 +5,7 @@ import { getStringFlag, getBooleanFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { parseFutureIsoOrDuration } from '../lib/format';
 
 function encodeDocPathParam(path: string): string {
   const trimmed = path.startsWith('/') ? path.slice(1) : path;
@@ -55,29 +56,6 @@ function parseWhereClause(raw: string): Record<string, Record<string, unknown>> 
   }
 
   return result;
-}
-
-function parseFutureIsoOrDuration(raw: string, flagName: string): string {
-  const trimmed = raw.trim();
-  const durationMatch = trimmed.match(/^(\d+)([smhd])$/i);
-  if (durationMatch) {
-    const value = Number.parseInt(durationMatch[1], 10);
-    const unit = durationMatch[2].toLowerCase();
-    const ms = unit === 's'
-      ? 1000
-      : unit === 'm'
-        ? 60_000
-        : unit === 'h'
-          ? 3_600_000
-          : 86_400_000;
-    return new Date(Date.now() + (value * ms)).toISOString();
-  }
-
-  const date = new Date(trimmed);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error(`Invalid ${flagName}: ${raw}. Use ISO timestamp or duration like 30d.`);
-  }
-  return date.toISOString();
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +447,7 @@ export async function handleDocs(
       if (tree) {
         const nodes = buildTreeNodes(result.documents);
         if (json) {
-          console.log(JSON.stringify({ tree: nodes }));
+          outputJson({ tree: nodes }, true);
         } else {
           console.log(renderTreeText(nodes));
         }
@@ -763,7 +741,7 @@ export async function handleDocs(
       ]);
 
       if (json) {
-        console.log(JSON.stringify({
+        outputJson({
           path: docPath,
           from_version: fromVersion,
           to_version: toVersion,
@@ -771,7 +749,7 @@ export async function handleDocs(
             oldVer.content, newVer.content,
             `${docPath} (v${fromVersion})`, `${docPath} (v${toVersion})`,
           ),
-        }));
+        }, true);
         return;
       }
 
@@ -827,7 +805,7 @@ export async function handleDocs(
       }
 
       if (json) {
-        console.log(JSON.stringify({ created, updated, total: files.length }));
+        outputJson({ created, updated, total: files.length }, true);
       } else {
         console.log(`write-dir: ${created} created, ${updated} updated (${files.length} files)`);
       }
@@ -873,7 +851,7 @@ export async function handleDocs(
       }
 
       if (json) {
-        console.log(JSON.stringify({ created, updated, errors, total: lines.length }));
+        outputJson({ created, updated, errors, total: lines.length }, true);
       } else {
         console.log(`bulk-write: ${created} created, ${updated} updated, ${errors} errors (${lines.length} lines)`);
       }
@@ -921,7 +899,7 @@ export async function handleDocs(
       if (dryRun) {
         const summary = { create: toCreate.length, update: toUpdate.length, delete: toDeletePaths.length };
         if (json) {
-          console.log(JSON.stringify({ ...summary, dry_run: true, paths: { create: toCreate, update: toUpdate, delete: toDeletePaths } }));
+          outputJson({ ...summary, dry_run: true, paths: { create: toCreate, update: toUpdate, delete: toDeletePaths } }, true);
         } else {
           console.log(`sync (dry-run): ${summary.create} to create, ${summary.update} to update, ${summary.delete} to delete`);
           if (toDeletePaths.length > 0) {
@@ -963,7 +941,7 @@ export async function handleDocs(
       }
 
       if (json) {
-        console.log(JSON.stringify({ created, updated, deleted }));
+        outputJson({ created, updated, deleted }, true);
       } else {
         console.log(`sync: ${created} created, ${updated} updated, ${deleted} deleted`);
       }

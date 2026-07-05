@@ -3,6 +3,7 @@ import { toBoolean, getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery, parseSinceValue } from '../lib/format';
 
 const DEFAULT_ORG_NAME = process.env.EVE_ORG_NAME || 'default-test-org';
 const DEFAULT_ORG_ID = process.env.EVE_ORG_ID || 'org_defaulttestorg';
@@ -17,9 +18,9 @@ export async function handleOrg(
 
   switch (subcommand) {
     case 'ensure': {
-      let orgId = typeof flags.id === 'string' ? flags.id : '';
-      let orgName = typeof flags.name === 'string' ? flags.name : '';
-      let orgSlug = typeof flags.slug === 'string' ? flags.slug : '';
+      let orgId = getStringFlag(flags, ['id']) ?? '';
+      let orgName = getStringFlag(flags, ['name']) ?? '';
+      let orgSlug = getStringFlag(flags, ['slug']) ?? '';
       const nameOrId = positionals[0];
 
       if (!orgId && nameOrId) {
@@ -46,10 +47,10 @@ export async function handleOrg(
     case 'list': {
       const includeDeletedFlag = flags.include_deleted ?? flags['include-deleted'];
       const query = buildQuery({
-        limit: typeof flags.limit === 'string' ? flags.limit : undefined,
-        offset: typeof flags.offset === 'string' ? flags.offset : undefined,
+        limit: getStringFlag(flags, ['limit']),
+        offset: getStringFlag(flags, ['offset']),
         include_deleted: toBoolean(includeDeletedFlag) ? 'true' : undefined,
-        name: typeof flags.name === 'string' ? flags.name : undefined,
+        name: getStringFlag(flags, ['name']),
       });
       const response = await requestJson(context, `/orgs${query}`);
       outputJson(response, json);
@@ -67,14 +68,14 @@ export async function handleOrg(
       return;
     }
     case 'spend': {
-      const orgId = positionals[0] ?? (typeof flags.org === 'string' ? flags.org : context.orgId);
+      const orgId = positionals[0] ?? (getStringFlag(flags, ['org']) ?? context.orgId);
       if (!orgId) {
         throw new Error('Usage: eve org spend <org_id> [--since 7d] [--until <iso>] [--currency usd] [--json]');
       }
 
-      const sinceRaw = typeof flags.since === 'string' ? flags.since : '7d';
-      const untilRaw = typeof flags.until === 'string' ? flags.until : undefined;
-      const currency = typeof flags.currency === 'string' ? flags.currency : undefined;
+      const sinceRaw = getStringFlag(flags, ['since']) ?? '7d';
+      const untilRaw = getStringFlag(flags, ['until']);
+      const currency = getStringFlag(flags, ['currency']);
 
       const query = buildQuery({
         since: sinceRaw ? parseSinceValue(sinceRaw) : undefined,
@@ -111,7 +112,7 @@ export async function handleOrg(
       }
       const billingConfigRaw = typeof flags['billing-config'] === 'string'
         ? flags['billing-config']
-        : (typeof flags.billing_config === 'string' ? flags.billing_config : undefined);
+        : (getStringFlag(flags, ['billing_config']));
       if (billingConfigRaw !== undefined) {
         try {
           body.billing_config = billingConfigRaw.trim() ? JSON.parse(billingConfigRaw) : null;
@@ -136,7 +137,7 @@ export async function handleOrg(
     }
     case 'members': {
       const action = positionals[0]; // list | add | remove
-      const orgId = typeof flags.org === 'string' ? flags.org : context.orgId;
+      const orgId = getStringFlag(flags, ['org']) ?? context.orgId;
       if (!orgId) {
         throw new Error('Missing org id. Provide --org or set a profile default.');
       }
@@ -174,7 +175,7 @@ export async function handleOrg(
     }
     case 'invite': {
       const email = getStringFlag(flags, ['email']) ?? positionals[0];
-      const orgId = typeof flags.org === 'string' ? flags.org : context.orgId;
+      const orgId = getStringFlag(flags, ['org']) ?? context.orgId;
       const role = getStringFlag(flags, ['role']) ?? 'member';
       const projectId = getStringFlag(flags, ['project', 'project-id', 'project_id']);
       const redirectTo = getStringFlag(flags, ['redirect-to', 'redirect_to']);
@@ -215,7 +216,7 @@ export async function handleOrg(
     }
     case 'membership-requests': {
       const action = positionals[0]; // list | approve | deny
-      const orgId = typeof flags.org === 'string' ? flags.org : context.orgId;
+      const orgId = getStringFlag(flags, ['org']) ?? context.orgId;
       if (!orgId) {
         throw new Error('Missing org id. Provide --org or set a profile default.');
       }
@@ -263,38 +264,6 @@ export async function handleOrg(
   }
 }
 
-function parseSinceValue(since: string): string {
-  if (since.includes('T') || since.includes('-')) {
-    return since;
-  }
-
-  const match = since.match(/^(\d+)([smhd])$/);
-  if (!match) {
-    throw new Error(`Invalid time format: "${since}". Use formats like "10m", "2h", "7d", or ISO timestamp.`);
-  }
-
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-
-  const now = new Date();
-  switch (unit) {
-    case 's':
-      now.setSeconds(now.getSeconds() - value);
-      break;
-    case 'm':
-      now.setMinutes(now.getMinutes() - value);
-      break;
-    case 'h':
-      now.setHours(now.getHours() - value);
-      break;
-    case 'd':
-      now.setDate(now.getDate() - value);
-      break;
-  }
-
-  return now.toISOString();
-}
-
 function normalizeOrgId(raw: string): string {
   if (/^org_[a-zA-Z0-9]+$/.test(raw)) {
     return raw;
@@ -304,14 +273,4 @@ function normalizeOrgId(raw: string): string {
     throw new Error('Organization id must contain alphanumeric characters');
   }
   return `org_${stripped}`;
-}
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
 }

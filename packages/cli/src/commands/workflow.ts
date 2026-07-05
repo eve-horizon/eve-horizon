@@ -3,6 +3,7 @@ import { getBooleanFlag, getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { capitalize } from '../lib/format';
 import { parseEnvOverrideFlags } from '../lib/env-overrides';
 
 interface WorkflowDefinition {
@@ -161,7 +162,7 @@ function formatWorkflows(workflows: WorkflowResponse[]): void {
 function formatWorkflow(workflow: WorkflowResponse): void {
   console.log(`Workflow: ${workflow.name}`);
   console.log('Definition:');
-  console.log(JSON.stringify(workflow.definition, null, 2));
+  outputJson(workflow.definition, false);
 }
 
 /**
@@ -312,7 +313,7 @@ async function handleInvoke(
     if (typeof response.result === 'string') {
       console.log(response.result);
     } else {
-      console.log(JSON.stringify(response.result, null, 2));
+      outputJson(response.result, false);
     }
   } else if (!wait) {
     console.log('');
@@ -527,13 +528,6 @@ function getLifecycleIcon(phase: string): string {
     case 'runner': return '☸️';
     default: return '⚙️';
   }
-}
-
-/**
- * Capitalize first letter of string
- */
-function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
 /**

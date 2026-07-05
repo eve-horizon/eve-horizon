@@ -8,6 +8,7 @@ import { expandManifestReferences } from '@eve/shared';
 import type { FlagValue } from '../lib/args';
 import { getBooleanFlag, getStringFlag, getStringFlags, toBoolean } from '../lib/args';
 import { requestJson, requestRaw } from '../lib/client';
+import { buildQuery } from '../lib/format';
 import { loadCredentials } from '../lib/config';
 import type { ResolvedContext } from '../lib/context';
 import { loadRepoProfiles, resolveContextForProfile } from '../lib/context';
@@ -1045,16 +1046,6 @@ function normalizeOrgSlug(value: string): string {
 
 function appLinkEnvPrefix(alias: string): string {
   return `EVE_APP_LINK_${alias.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-}
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === '') continue;
-    search.set(key, String(value));
-  }
-  const query = search.toString();
-  return query ? `?${query}` : '';
 }
 
 function formatResponseError(response: { status: number; data: unknown; text: string }): string {

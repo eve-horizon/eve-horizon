@@ -3,6 +3,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { renderTable } from '../lib/format';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { resolve as resolvePath, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -346,7 +347,7 @@ async function handleCall(
   }
 
   if (data !== undefined) {
-    console.log(JSON.stringify(data, null, 2));
+    outputJson(data, false);
     return;
   }
 
@@ -415,13 +416,20 @@ function formatApiSourcesTable(apis: ApiSource[]): void {
   const nameWidth = Math.max(4, ...apis.map((api) => api.name.length));
   const typeWidth = Math.max(4, ...apis.map((api) => api.type.length));
 
-  console.log(`${'NAME'.padEnd(nameWidth)}  ${'TYPE'.padEnd(typeWidth)}  BASE URL`);
-  console.log(`${'-'.repeat(nameWidth)}  ${'-'.repeat(typeWidth)}  --------`);
-  apis.forEach((api) => {
-    console.log(
-      `${api.name.padEnd(nameWidth)}  ${api.type.padEnd(typeWidth)}  ${api.base_url}`,
-    );
-  });
+  const lines = renderTable(
+    [
+      { header: 'NAME', width: nameWidth + 2 },
+      { header: 'TYPE', width: typeWidth + 2 },
+      { header: 'BASE URL' },
+    ],
+    [
+      ['-'.repeat(nameWidth), '-'.repeat(typeWidth), '--------'],
+      ...apis.map((api) => [api.name, api.type, api.base_url]),
+    ],
+  );
+  for (const line of lines) {
+    console.log(line);
+  }
 }
 
 export async function fetchApiSpec(

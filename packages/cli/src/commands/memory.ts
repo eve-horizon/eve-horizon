@@ -5,6 +5,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { parseFutureIsoOrDuration } from '../lib/format';
 
 function parseCsv(raw?: string): string[] {
   if (!raw) return [];
@@ -18,29 +19,6 @@ function parseConfidence(raw?: string): number | undefined {
     throw new Error(`Invalid --confidence value: ${raw}`);
   }
   return value;
-}
-
-function parseFutureIsoOrDuration(raw: string, flagName: string): string {
-  const trimmed = raw.trim();
-  const durationMatch = trimmed.match(/^(\d+)([smhd])$/i);
-  if (durationMatch) {
-    const value = Number.parseInt(durationMatch[1], 10);
-    const unit = durationMatch[2].toLowerCase();
-    const ms = unit === 's'
-      ? 1000
-      : unit === 'm'
-        ? 60_000
-        : unit === 'h'
-          ? 3_600_000
-          : 86_400_000;
-    return new Date(Date.now() + (value * ms)).toISOString();
-  }
-
-  const date = new Date(trimmed);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error(`Invalid ${flagName}: ${raw}. Use ISO timestamp or duration like 30d.`);
-  }
-  return date.toISOString();
 }
 
 function resolveAgentSlug(flags: Record<string, FlagValue>): string {

@@ -6,6 +6,7 @@ import { getBooleanFlag, getStringFlag, getStringFlags } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery, capitalize, formatDate } from '../lib/format';
 import { DEFAULT_RATE_CARD_V1, calculateBilledCost } from '@eve/shared';
 import { normalizeLogLine } from '../lib/logs';
 import { parseEnvOverrideFlags } from '../lib/env-overrides';
@@ -1484,16 +1485,6 @@ async function requestJobContext(
   return { job };
 }
 
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
-}
-
 /**
  * Get project ID from an existing job (used when creating child jobs)
  */
@@ -2331,18 +2322,6 @@ function getPhaseIcon(phase: string): string {
   }
 }
 
-/**
- * Format a date string for display
- */
-function formatDate(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleString();
-  } catch {
-    return dateStr;
-  }
-}
-
 function redactUrlForDisplay(value: string): string {
   try {
     const url = new URL(value);
@@ -2774,13 +2753,6 @@ function getLifecycleIcon(phase: string): string {
     case 'runner': return '☸️';
     default: return '⚙️';
   }
-}
-
-/**
- * Capitalize first letter of string
- */
-function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
 /**
@@ -3492,7 +3464,7 @@ async function handleWait(
         if (result.resultText) {
           console.log(result.resultText);
         } else if (result.resultJson) {
-          console.log(JSON.stringify(result.resultJson, null, 2));
+          outputJson(result.resultJson, false);
         }
       }
 

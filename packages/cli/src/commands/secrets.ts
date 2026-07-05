@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import type { FlagValue } from '../lib/args';
+import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery } from '../lib/format';
 
 type Scope = { scopeType: 'project' | 'org' | 'user' | 'system'; scopeId: string };
 
@@ -17,9 +19,9 @@ export async function handleSecrets(
   switch (subcommand) {
     case 'set': {
       const scope = resolveScope(flags, context);
-      const key = positionals[0] ?? (typeof flags.key === 'string' ? flags.key : undefined);
-      const value = positionals[1] ?? (typeof flags.value === 'string' ? flags.value : undefined);
-      const type = typeof flags.type === 'string' ? flags.type : undefined;
+      const key = positionals[0] ?? (getStringFlag(flags, ['key']));
+      const value = positionals[1] ?? (getStringFlag(flags, ['value']));
+      const type = getStringFlag(flags, ['type']);
       if (!key || !value) {
         throw new Error('Usage: eve secrets set <key> <value> [--project <id>|--org <id>|--user <id>|--system] [--type <type>]');
       }
@@ -35,8 +37,8 @@ export async function handleSecrets(
     case 'list': {
       const scope = resolveScope(flags, context);
       const query = buildQuery({
-        limit: typeof flags.limit === 'string' ? flags.limit : undefined,
-        offset: typeof flags.offset === 'string' ? flags.offset : undefined,
+        limit: getStringFlag(flags, ['limit']),
+        offset: getStringFlag(flags, ['offset']),
       });
       const response = await requestJson(context, `${scopeBasePath(scope)}${query}`);
       outputJson(response, json);
@@ -44,7 +46,7 @@ export async function handleSecrets(
     }
     case 'show': {
       const scope = resolveScope(flags, context);
-      const key = positionals[0] ?? (typeof flags.key === 'string' ? flags.key : undefined);
+      const key = positionals[0] ?? (getStringFlag(flags, ['key']));
       if (!key) {
         throw new Error('Usage: eve secrets show <key> [--project <id>|--org <id>|--user <id>|--system]');
       }
@@ -54,7 +56,7 @@ export async function handleSecrets(
     }
     case 'delete': {
       const scope = resolveScope(flags, context);
-      const key = positionals[0] ?? (typeof flags.key === 'string' ? flags.key : undefined);
+      const key = positionals[0] ?? (getStringFlag(flags, ['key']));
       if (!key) {
         throw new Error('Usage: eve secrets delete <key> [--project <id>|--org <id>|--user <id>|--system]');
       }
@@ -64,7 +66,7 @@ export async function handleSecrets(
     }
     case 'import': {
       const scope = resolveScope(flags, context);
-      const filePath = typeof flags.file === 'string' ? flags.file : '.env';
+      const filePath = getStringFlag(flags, ['file']) ?? '.env';
       const fileContents = readFileSync(filePath, 'utf8');
       const entries = parseEnvFile(fileContents);
       if (entries.length === 0) {
@@ -154,9 +156,9 @@ export async function handleSecrets(
 function resolveScope(flags: Record<string, FlagValue>, context: ResolvedContext): Scope {
   // Explicit flags take priority in the order: system > project > org > user
   const explicitSystem = Boolean(flags.system);
-  const explicitProject = typeof flags.project === 'string' ? flags.project : undefined;
-  const explicitOrg = typeof flags.org === 'string' ? flags.org : undefined;
-  const explicitUser = typeof flags.user === 'string' ? flags.user : undefined;
+  const explicitProject = getStringFlag(flags, ['project']);
+  const explicitOrg = getStringFlag(flags, ['org']);
+  const explicitUser = getStringFlag(flags, ['user']);
 
   // Check for mutual exclusivity
   const explicitFlags = [explicitSystem, explicitProject, explicitOrg, explicitUser].filter(Boolean);
@@ -196,16 +198,6 @@ function resolveProjectScope(flags: Record<string, FlagValue>, context: Resolved
     throw new Error('This command requires --project (or a project default profile).');
   }
   return scope.scopeId;
-}
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
 }
 
 function parseEnvFile(contents: string): Array<[string, string]> {

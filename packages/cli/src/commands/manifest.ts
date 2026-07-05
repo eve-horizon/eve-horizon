@@ -33,7 +33,7 @@ export async function handleManifest(
       const strict = toBoolean(flags.strict) ?? false;
       const validateSecretsFlag = flags['validate-secrets'] ?? flags.validate_secrets;
       const validateSecrets = toBoolean(validateSecretsFlag) ?? false;
-      const dir = typeof flags.dir === 'string' ? flags.dir : process.cwd();
+      const dir = getStringFlag(flags, ['dir']) ?? process.cwd();
       const manifestPath = getStringFlag(flags, ['path']) ?? join(dir, '.eve', 'manifest.yaml');
 
       let manifestYaml: string | undefined;

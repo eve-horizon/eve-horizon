@@ -35,11 +35,11 @@ export async function handleRelease(
       }
 
       // Determine project ID
-      let projectId = typeof flags.project === 'string' ? flags.project : context.projectId;
+      let projectId = getStringFlag(flags, ['project']) ?? context.projectId;
 
       // If no project ID provided, try to detect from local .eve/manifest.yaml
       if (!projectId) {
-        const dir = typeof flags.dir === 'string' ? flags.dir : process.cwd();
+        const dir = getStringFlag(flags, ['dir']) ?? process.cwd();
         const manifestPath = join(dir, '.eve', 'manifest.yaml');
 
         try {
@@ -99,7 +99,7 @@ export async function handleRelease(
       if (!tag) {
         throw new Error('Usage: eve release delete <tag> [--project <id>]');
       }
-      const projectId = typeof flags.project === 'string' ? flags.project : context.projectId;
+      const projectId = getStringFlag(flags, ['project']) ?? context.projectId;
       if (!projectId) {
         throw new Error('Missing project id. Provide --project or set a profile default.');
       }
@@ -112,7 +112,7 @@ export async function handleRelease(
       return;
     }
     case 'prune': {
-      const projectId = typeof flags.project === 'string' ? flags.project : context.projectId;
+      const projectId = getStringFlag(flags, ['project']) ?? context.projectId;
       if (!projectId) {
         throw new Error('Usage: eve release prune [--project <id>] [--keep <n>]');
       }

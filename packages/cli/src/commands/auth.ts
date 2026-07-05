@@ -5,6 +5,7 @@ import type { CredentialsFile } from '../lib/config';
 import { saveCredentials } from '../lib/config';
 import { requestRaw, requestJson, unwrapListResponse } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { renderTable } from '../lib/format';
 import { resolveCodexAuthForSync } from '../lib/codex-auth';
 import type { CodexAuthValidation } from '../lib/codex-auth';
 import { readClaudeApiKeySource } from '@eve/shared';
@@ -233,14 +234,24 @@ export async function handleAuth(
       }
       console.log('Permission Matrix:');
       console.log('');
-      const header = 'Permission'.padEnd(24) + 'Member'.padEnd(10) + 'Admin'.padEnd(10) + 'Owner';
+      const [header, ...rows] = renderTable(
+        [
+          { header: 'Permission', width: 24 },
+          { header: 'Member', width: 10 },
+          { header: 'Admin', width: 10 },
+          { header: 'Owner' },
+        ],
+        response.matrix.map((row) => [
+          row.permission,
+          row.member ? '✓' : '-',
+          row.admin ? '✓' : '-',
+          row.owner ? '✓' : '-',
+        ]),
+      );
       console.log(header);
       console.log('-'.repeat(header.length));
-      for (const row of response.matrix) {
-        const m = row.member ? '✓' : '-';
-        const a = row.admin ? '✓' : '-';
-        const o = row.owner ? '✓' : '-';
-        console.log(`${row.permission.padEnd(24)}${m.padEnd(10)}${a.padEnd(10)}${o}`);
+      for (const row of rows) {
+        console.log(row);
       }
       return;
     }
@@ -1163,11 +1174,18 @@ export async function handleAuth(
 
       console.log('Service Accounts:');
       console.log('');
-      const header = 'ID'.padEnd(30) + 'Name'.padEnd(25) + 'Created';
+      const [header, ...rows] = renderTable(
+        [
+          { header: 'ID', width: 30 },
+          { header: 'Name', width: 25 },
+          { header: 'Created' },
+        ],
+        principals.map((sp) => [sp.id, sp.name, sp.created_at]),
+      );
       console.log(header);
       console.log('-'.repeat(header.length));
-      for (const sp of principals) {
-        console.log(`${sp.id.padEnd(30)}${sp.name.padEnd(25)}${sp.created_at}`);
+      for (const row of rows) {
+        console.log(row);
       }
       return;
     }

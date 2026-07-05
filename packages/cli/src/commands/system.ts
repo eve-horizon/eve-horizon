@@ -3,6 +3,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -773,16 +774,6 @@ async function handleSettings(
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
-}
 
 /**
  * Format jobs as a human-readable table

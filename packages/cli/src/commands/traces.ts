@@ -3,6 +3,7 @@ import { getStringFlag, toBoolean } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { buildQuery } from '../lib/format';
 
 type TraceSpan = {
   trace_id: string;
@@ -100,16 +101,6 @@ async function handleQuery(
   }
 
   formatTraceQuery(response);
-}
-
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    search.set(key, String(value));
-  });
-  const query = search.toString();
-  return query ? `?${query}` : '';
 }
 
 function formatTraceQuery(response: TraceQueryResponse): void {

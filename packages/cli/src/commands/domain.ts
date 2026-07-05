@@ -3,6 +3,7 @@ import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson, requestRaw } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { renderTable } from '../lib/format';
 
 interface CustomDomain {
   id: string;
@@ -131,15 +132,24 @@ async function handleList(
   }
 
   // Table output with owning env
-  const header = 'HOSTNAME                         SERVICE    ENV         STATUS             VERIFIED';
-  console.log(header);
-  for (const d of data) {
-    const hostname = d.hostname.padEnd(33);
-    const service = d.service_name.padEnd(11);
-    const env = (d.environment_name ?? (d.environment_id ? d.environment_id.slice(0, 10) : 'unbound')).padEnd(12);
-    const status = d.status.padEnd(19);
-    const verified = d.verified_at ? d.verified_at.split('T')[0] : '-';
-    console.log(`${hostname}${service}${env}${status}${verified}`);
+  const lines = renderTable(
+    [
+      { header: 'HOSTNAME', width: 33 },
+      { header: 'SERVICE', width: 11 },
+      { header: 'ENV', width: 12 },
+      { header: 'STATUS', width: 19 },
+      { header: 'VERIFIED' },
+    ],
+    data.map((d) => [
+      d.hostname,
+      d.service_name,
+      d.environment_name ?? (d.environment_id ? d.environment_id.slice(0, 10) : 'unbound'),
+      d.status,
+      d.verified_at ? d.verified_at.split('T')[0] : '-',
+    ]),
+  );
+  for (const line of lines) {
+    console.log(line);
   }
 }
 

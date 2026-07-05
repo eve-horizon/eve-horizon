@@ -3,6 +3,7 @@ import { getStringFlag, getStringFlags, toBoolean } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
 import { requestJson } from '../lib/client';
 import { outputJson } from '../lib/output';
+import { formatDate } from '../lib/format';
 import { resolveGitRef, getGitBranch } from '../lib/git.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -1942,18 +1943,6 @@ async function watchDeploymentStatus(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
   console.log(`  Timeout after ${timeoutSeconds}s. Run "eve env diagnose ${projectId} ${envName}" for details.`);
-}
-
-/**
- * Format a date string for display
- */
-function formatDate(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleString();
-  } catch {
-    return dateStr;
-  }
 }
 
 /**
