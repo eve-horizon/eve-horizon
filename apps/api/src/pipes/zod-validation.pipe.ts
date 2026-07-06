@@ -1,4 +1,9 @@
-import { PipeTransform, Injectable, BadRequestException } from '@nestjs/common';
+import {
+  PipeTransform,
+  Injectable,
+  BadRequestException,
+  type ArgumentMetadata,
+} from '@nestjs/common';
 import { ZodSchema, type ZodIssue } from 'zod';
 
 /**
@@ -21,7 +26,17 @@ function isZodError(error: unknown): error is { name: string; errors: ZodIssue[]
 export class ZodValidationPipe implements PipeTransform {
   constructor(private schema: ZodSchema) {}
 
-  transform(value: unknown) {
+  transform(value: unknown, metadata?: ArgumentMetadata) {
+    // Only validate the request body. When applied at the method level via
+    // @UsePipes, NestJS runs this pipe against every argument — including
+    // custom param decorators like @CurrentUser()/@CorrelationId() (type
+    // 'custom'), whose values must not be parsed against a body schema.
+    // (@Req()-style native params are already excluded by NestJS.) This pipe
+    // is only ever attached to bodies — never @Query/@Param — so restricting
+    // to 'body' is safe and fixes method-level pipe + custom-param handlers.
+    if (metadata && metadata.type !== 'body') {
+      return value;
+    }
     try {
       return this.schema.parse(value);
     } catch (error) {
