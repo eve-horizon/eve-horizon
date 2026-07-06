@@ -4,7 +4,7 @@ import { basename } from 'path';
 import type { FlagValue } from '../lib/args';
 import { getBooleanFlag, getStringFlag, getStringFlags } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
-import { requestJson, requestRaw } from '../lib/client';
+import { requestJson, requestRaw, requestStream } from '../lib/client';
 import { outputJson } from '../lib/output';
 import { buildQuery, capitalize, formatDate } from '../lib/format';
 import { DEFAULT_RATE_CARD_V1, calculateBilledCost } from '@eve/shared';
@@ -3562,16 +3562,6 @@ async function handleWatch(
   let lastPhase: string | undefined;
   let lastStatus: string | undefined;
 
-  // Set up SSE log streaming
-  const url = `${context.apiUrl}/jobs/${jobId}/stream`;
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-  };
-
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
-
   let exitCode = 0;
   let streamEnded = false;
   let jobCompleted = false;
@@ -3629,82 +3619,19 @@ async function handleWatch(
 
   // Start SSE log streaming
   try {
-    const response = await fetch(url, { headers });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
-    }
-
-    if (!response.body) {
-      throw new Error('No response body received');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // Process complete SSE events from buffer
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
-
-      let eventType = '';
-      let eventData = '';
-
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          eventData = line.slice(5).trim();
-        } else if (line === '' && eventData) {
-          // Empty line marks end of event
-          exitCode = processWatchSSEEvent(eventType, eventData);
-          if (exitCode !== -1) {
-            // Event signals we should exit
-            streamEnded = true;
-            jobCompleted = true;
-            await statusPollingPromise; // Wait for polling to finish
-            process.exit(exitCode);
-          }
-          eventType = '';
-          eventData = '';
-        }
-      }
-    }
-
-    // Process any remaining data
-    if (buffer.trim()) {
-      const remainingLines = buffer.split('\n');
-      let eventType = '';
-      let eventData = '';
-
-      for (const line of remainingLines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          eventData = line.slice(5).trim();
-        }
-      }
-
-      if (eventData) {
-        exitCode = processWatchSSEEvent(eventType, eventData);
+    await requestStream(context, `/jobs/${jobId}/stream`, {
+      flushPartialFrameOnEnd: true,
+      onFrame: async ({ event, data }) => {
+        exitCode = processWatchSSEEvent(event ?? '', data);
         if (exitCode !== -1) {
+          // Event signals we should exit
           streamEnded = true;
           jobCompleted = true;
-          await statusPollingPromise;
+          await statusPollingPromise; // Wait for polling to finish
           process.exit(exitCode);
         }
-      }
-    }
+      },
+    });
 
     // Stream ended
     streamEnded = true;
@@ -3907,96 +3834,24 @@ async function handleFollow(
     silenceTimer = setTimeout(() => onSilence(60), 60_000);
   }
 
-  const url = `${context.apiUrl}/jobs/${jobId}/stream`;
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-  };
-
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
-
   let exitCode = 0;
 
   try {
-    const response = await fetch(url, { headers });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
-    }
-
-    if (!response.body) {
-      throw new Error('No response body received');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    // Start the silence timer once the SSE connection is established.
-    resetSilenceTimer();
-
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      resetSilenceTimer();
-
-      // Process complete SSE events from buffer
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
-
-      let eventType = '';
-      let eventData = '';
-
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          eventData = line.slice(5).trim();
-        } else if (line === '' && eventData) {
-          // Empty line marks end of event
-          exitCode = processSSEEvent(eventType, eventData, raw, showResult, summary);
-          if (exitCode !== -1) {
-            // Event signals we should exit
-            clearSilenceTimer();
-            if (summary) printSummaryFooter();
-            process.exit(exitCode);
-          }
-          eventType = '';
-          eventData = '';
-        }
-      }
-    }
-
-    // Process any remaining data
-    if (buffer.trim()) {
-      const remainingLines = buffer.split('\n');
-      let eventType = '';
-      let eventData = '';
-
-      for (const line of remainingLines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          eventData = line.slice(5).trim();
-        }
-      }
-
-      if (eventData) {
-        exitCode = processSSEEvent(eventType, eventData, raw, showResult, summary);
+    await requestStream(context, `/jobs/${jobId}/stream`, {
+      flushPartialFrameOnEnd: true,
+      // Start the silence timer once the SSE connection is established.
+      onOpen: resetSilenceTimer,
+      onChunk: resetSilenceTimer,
+      onFrame: ({ event, data }) => {
+        exitCode = processSSEEvent(event ?? '', data, raw, showResult, summary);
         if (exitCode !== -1) {
+          // Event signals we should exit
           clearSilenceTimer();
           if (summary) printSummaryFooter();
           process.exit(exitCode);
         }
-      }
-    }
+      },
+    });
 
     // Stream ended without explicit complete/error event
     clearSilenceTimer();

@@ -1,7 +1,7 @@
 import type { FlagValue } from '../lib/args';
 import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
-import { requestJson, requestRaw } from '../lib/client';
+import { requestJson, requestRaw, requestStream } from '../lib/client';
 import { outputJson } from '../lib/output';
 
 // ── Response shapes ────────────────────────────────────────────────
@@ -239,66 +239,15 @@ async function followThreadBySse(
   context: ResolvedContext,
   threadId: string,
 ): Promise<string | null> {
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-  };
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
-
-  const response = await fetch(`${context.apiUrl}${streamPath(threadId)}`, { headers });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
-  }
-  if (!response.body) {
-    throw new Error('No response body received');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let lastSeen: string | null = null;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
+  await requestStream(context, streamPath(threadId), {
+    onFrame: ({ event, data }) => {
+      const eventType = event ?? 'message';
 
-    buffer += decoder.decode(value, { stream: true });
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const match = buffer.match(/\r?\n\r?\n/);
-      if (!match || match.index === undefined) {
-        break;
-      }
-
-      const rawEvent = buffer.slice(0, match.index).trim();
-      buffer = buffer.slice(match.index + match[0].length);
-      if (!rawEvent) {
-        continue;
-      }
-
-      let eventType = 'message';
-      const dataLines: string[] = [];
-      for (const line of rawEvent.split(/\r?\n/)) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice('event:'.length).trim();
-        } else if (line.startsWith('data:')) {
-          dataLines.push(line.slice('data:'.length).trimStart());
-        }
-      }
-
-      if (dataLines.length === 0) {
-        continue;
-      }
-
-      const payloadText = dataLines.join('\n');
-      let payload: unknown = payloadText;
+      let payload: unknown = data;
       try {
-        payload = JSON.parse(payloadText);
+        payload = JSON.parse(data);
       } catch {
         // Ignore parse failures and treat the payload as a raw string.
       }
@@ -308,14 +257,14 @@ async function followThreadBySse(
         for (const msg of snapshot.messages ?? []) {
           lastSeen = printThreadMessage(msg);
         }
-        continue;
+        return;
       }
 
       if (eventType === 'message') {
         lastSeen = printThreadMessage(payload as ThreadMessageResponse);
       }
-    }
-  }
+    },
+  });
 
   return lastSeen;
 }
@@ -326,80 +275,36 @@ async function followConversationEventsBySse(
   flags: Record<string, FlagValue>,
   jsonl: boolean,
 ): Promise<string | null> {
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-  };
+  const headers: Record<string, string> = {};
   const after = getStringFlag(flags, ['after']);
   if (after) {
     headers['Last-Event-ID'] = after;
   }
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
 
-  const response = await fetch(`${context.apiUrl}${eventStreamPath(threadId)}${buildEventQuery(flags)}`, { headers });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
-  }
-  if (!response.body) {
-    throw new Error('No response body received');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let lastSeen: string | null = null;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const match = buffer.match(/\r?\n\r?\n/);
-      if (!match || match.index === undefined) {
-        break;
+  await requestStream(context, `${eventStreamPath(threadId)}${buildEventQuery(flags)}`, {
+    headers,
+    onFrame: ({ event, data }) => {
+      const eventType = event ?? 'message';
+      if (eventType === 'heartbeat') {
+        return;
       }
 
-      const rawEvent = buffer.slice(0, match.index).trim();
-      buffer = buffer.slice(match.index + match[0].length);
-      if (!rawEvent) {
-        continue;
-      }
-
-      let eventType = 'message';
-      const dataLines: string[] = [];
-      for (const line of rawEvent.split(/\r?\n/)) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice('event:'.length).trim();
-        } else if (line.startsWith('data:')) {
-          dataLines.push(line.slice('data:'.length).trimStart());
-        }
-      }
-
-      if (dataLines.length === 0 || eventType === 'heartbeat') {
-        continue;
-      }
-
-      const payload = JSON.parse(dataLines.join('\n')) as unknown;
+      const payload = JSON.parse(data) as unknown;
       if (eventType === 'snapshot') {
         const snapshot = payload as ConversationEventStreamSnapshot;
-        for (const event of snapshot.events ?? []) {
-          lastSeen = jsonl ? printConversationEventJsonl(event) : printConversationEvent(event);
+        for (const evt of snapshot.events ?? []) {
+          lastSeen = jsonl ? printConversationEventJsonl(evt) : printConversationEvent(evt);
         }
-        continue;
+        return;
       }
 
       lastSeen = jsonl
         ? printConversationEventJsonl(payload as ConversationEventResponse)
         : printConversationEvent(payload as ConversationEventResponse);
-    }
-  }
+    },
+  });
 
   return lastSeen;
 }

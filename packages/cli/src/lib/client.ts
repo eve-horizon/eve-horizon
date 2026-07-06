@@ -10,6 +10,32 @@ type RequestOptions = {
   tokenOverride?: string;
 };
 
+/** A parsed Server-Sent Events frame. */
+export type SseFrame = {
+  /** Value of the frame's `event:` field, or undefined when absent. */
+  event?: string;
+  /** All `data:` lines (each trimmed) joined with '\n'. */
+  data: string;
+};
+
+type StreamOptions = {
+  /** Extra request headers (e.g. Last-Event-ID). */
+  headers?: Record<string, string>;
+  /**
+   * Emit any trailing partial frame (data received without a closing blank
+   * line) when the stream ends. Matches the legacy pipeline/job behavior of
+   * processing the remaining buffer at stream end.
+   */
+  flushPartialFrameOnEnd?: boolean;
+  /** Called once after the response is validated, before reading begins. */
+  onOpen?: () => void;
+  /** Called after each raw chunk is received (before its frames are emitted). */
+  onChunk?: () => void;
+  /** Called for each complete SSE frame that contains at least one data line. */
+  onFrame: (frame: SseFrame) => void | Promise<void>;
+  tokenOverride?: string;
+};
+
 type ListResponseEnvelope<T> = {
   data: T[];
 };
@@ -99,13 +125,37 @@ export async function requestRaw(
   const url = `${context.apiUrl}${path}`;
   const method = options.method ?? 'GET';
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
+  const response = await fetchWithConnectionGuidance(context, url, method, {
     method: options.method ?? 'GET',
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+  });
+
+  const text = await response.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+
+  return { status: response.status, ok: response.ok, data, text };
+}
+
+/**
+ * Perform a fetch with the shared connection-error guidance used by all
+ * API requests. Throws a friendly error on connection failures.
+ */
+async function fetchWithConnectionGuidance(
+  context: ResolvedContext,
+  url: string,
+  method: string,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
   } catch (error) {
     const cause = error instanceof Error ? (error as NodeJS.ErrnoException).cause as { code?: string } | undefined : undefined;
     const code = cause?.code;
@@ -130,18 +180,146 @@ export async function requestRaw(
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Request failed for ${method} ${url}: ${message}`);
   }
+}
 
-  const text = await response.text();
-  let data: unknown = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
+/**
+ * Incremental SSE frame parser.
+ *
+ * Frames are separated by a blank line; both LF (`\n\n`) and CRLF
+ * (`\r\n\r\n`) framing are accepted via the `\r?\n\r?\n` superset. Within a
+ * frame, `event:` sets the event name and each `data:` line contributes one
+ * (trimmed) data line; other fields (`id:`, `retry:`, comments) are ignored.
+ * Frames without any `data:` line are dropped, matching all legacy CLI
+ * SSE loops.
+ */
+export function createSseFrameParser(): {
+  push(chunk: string): SseFrame[];
+  flush(): SseFrame | null;
+} {
+  let buffer = '';
+
+  function parseFrame(raw: string): SseFrame | null {
+    let event: string | undefined;
+    const dataLines: string[] = [];
+    for (const line of raw.split(/\r?\n/)) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+    if (dataLines.length === 0) {
+      return null;
+    }
+    return { event, data: dataLines.join('\n') };
+  }
+
+  return {
+    push(chunk: string): SseFrame[] {
+      buffer += chunk;
+      const frames: SseFrame[] = [];
+      while (true) {
+        const match = buffer.match(/\r?\n\r?\n/);
+        if (!match || match.index === undefined) {
+          break;
+        }
+        const raw = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        const frame = parseFrame(raw);
+        if (frame) {
+          frames.push(frame);
+        }
+      }
+      return frames;
+    },
+    flush(): SseFrame | null {
+      const raw = buffer;
+      buffer = '';
+      if (!raw.trim()) {
+        return null;
+      }
+      return parseFrame(raw);
+    },
+  };
+}
+
+/**
+ * Open an SSE stream against the API and emit parsed frames.
+ *
+ * Shares auth-header construction, 401 refresh, and connection-error
+ * guidance with requestJson/requestRaw. Non-OK responses throw
+ * `HTTP <status>: <body>` (the format used by the legacy hand-rolled
+ * SSE loops); a missing body throws 'No response body received'.
+ */
+export async function requestStream(
+  context: ResolvedContext,
+  path: string,
+  options: StreamOptions,
+): Promise<void> {
+  let response = await fetchStream(context, path, options);
+
+  if (response.status === 401 && options.tokenOverride === undefined) {
+    const refreshed = await attemptRefresh(context);
+    if (refreshed?.access_token) {
+      context.token = refreshed.access_token;
+      context.refreshToken = refreshed.refresh_token;
+      context.expiresAt = refreshed.expires_at;
+      response = await fetchStream(context, path, options, refreshed.access_token);
     }
   }
 
-  return { status: response.status, ok: response.ok, data, text };
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+  if (!response.body) {
+    throw new Error('No response body received');
+  }
+
+  options.onOpen?.();
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const parser = createSseFrameParser();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    options.onChunk?.();
+
+    for (const frame of parser.push(chunk)) {
+      await options.onFrame(frame);
+    }
+  }
+
+  if (options.flushPartialFrameOnEnd) {
+    const frame = parser.flush();
+    if (frame) {
+      await options.onFrame(frame);
+    }
+  }
+}
+
+async function fetchStream(
+  context: ResolvedContext,
+  path: string,
+  options: StreamOptions,
+  tokenOverride?: string,
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    Accept: 'text/event-stream',
+    ...options.headers,
+  };
+
+  const token = tokenOverride ?? options.tokenOverride ?? context.token;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const url = `${context.apiUrl}${path}`;
+  return fetchWithConnectionGuidance(context, url, 'GET', { method: 'GET', headers });
 }
 
 function formatErrorMessage(response: { data: unknown; text: string }): string {

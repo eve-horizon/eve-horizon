@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import type { FlagValue } from '../lib/args';
 import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
-import { requestJson } from '../lib/client';
+import { requestJson, requestStream } from '../lib/client';
 import { outputJson } from '../lib/output';
 import type {
   OrgFsCreateLinkResponse,
@@ -77,70 +77,27 @@ async function streamFsEvents(
   orgId: string,
   afterSeq: number,
 ): Promise<void> {
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-  };
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
-
-  const response = await fetch(`${context.apiUrl}/orgs/${orgId}/fs/events/stream?after_seq=${afterSeq}`, {
-    method: 'GET',
-    headers,
+  await requestStream(context, `/orgs/${orgId}/fs/events/stream?after_seq=${afterSeq}`, {
+    onFrame: ({ event, data }) => {
+      const payload = data.trim();
+      if (event === 'fs_event') {
+        try {
+          const parsed = JSON.parse(payload) as {
+            seq: number;
+            event_type: string;
+            path: string;
+            source_side: string;
+            created_at: string;
+          };
+          console.log(`[${parsed.seq}] ${parsed.event_type} ${parsed.path} (${parsed.source_side}) ${parsed.created_at}`);
+        } catch {
+          console.log(payload);
+        }
+      } else if (event === 'error') {
+        console.error(payload);
+      }
+    },
   });
-  if (!response.ok || !response.body) {
-    const body = await response.text();
-    throw new Error(`HTTP ${response.status}: ${body}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let currentEvent = '';
-  let currentData = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split('\n\n');
-    buffer = events.pop() ?? '';
-
-    for (const eventBlock of events) {
-      const lines = eventBlock.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          currentData += `${line.slice(5).trim()}\n`;
-        }
-      }
-
-      if (currentData) {
-        const payload = currentData.trim();
-        if (currentEvent === 'fs_event') {
-          try {
-            const parsed = JSON.parse(payload) as {
-              seq: number;
-              event_type: string;
-              path: string;
-              source_side: string;
-              created_at: string;
-            };
-            console.log(`[${parsed.seq}] ${parsed.event_type} ${parsed.path} (${parsed.source_side}) ${parsed.created_at}`);
-          } catch {
-            console.log(payload);
-          }
-        } else if (currentEvent === 'error') {
-          console.error(payload);
-        }
-      }
-
-      currentEvent = '';
-      currentData = '';
-    }
-  }
 }
 
 async function handleSync(

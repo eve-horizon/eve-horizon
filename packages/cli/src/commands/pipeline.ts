@@ -1,7 +1,7 @@
 import type { FlagValue } from '../lib/args';
 import { getStringFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
-import { requestJson, requestRaw } from '../lib/client';
+import { requestJson, requestRaw, requestStream } from '../lib/client';
 import { outputJson } from '../lib/output';
 import { buildQuery, renderTable } from '../lib/format';
 import { resolveGitRef } from '../lib/git.js';
@@ -785,79 +785,19 @@ async function handlePipelineFollow(
   runId: string,
   stepFilter: string | null,
 ): Promise<void> {
-  const endpoint = stepFilter
-    ? `${context.apiUrl}/pipeline-runs/${runId}/steps/${encodeURIComponent(stepFilter)}/stream`
-    : `${context.apiUrl}/pipeline-runs/${runId}/stream`;
+  const path = stepFilter
+    ? `/pipeline-runs/${runId}/steps/${encodeURIComponent(stepFilter)}/stream`
+    : `/pipeline-runs/${runId}/stream`;
 
   console.log(`Following pipeline run ${runId}...`);
 
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-  };
-
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
-
   try {
-    const response = await fetch(endpoint, { headers });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
-    }
-
-    if (!response.body) {
-      throw new Error('No response body received');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      let currentEvent = '';
-      let currentData = '';
-
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          currentData = line.slice(5).trim();
-        } else if (line === '' && currentData) {
-          processPipelineSSEEvent(currentEvent, currentData);
-          currentEvent = '';
-          currentData = '';
-        }
-      }
-    }
-
-    // Process any remaining data in buffer
-    if (buffer.trim()) {
-      const remainingLines = buffer.split('\n');
-      let currentEvent = '';
-      let currentData = '';
-
-      for (const line of remainingLines) {
-        if (line.startsWith('event:')) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          currentData = line.slice(5).trim();
-        }
-      }
-
-      if (currentData) {
-        processPipelineSSEEvent(currentEvent, currentData);
-      }
-    }
+    await requestStream(context, path, {
+      flushPartialFrameOnEnd: true,
+      onFrame: ({ event, data }) => {
+        processPipelineSSEEvent(event ?? '', data);
+      },
+    });
 
     console.log('');
     console.log('Stream ended.');

@@ -7,7 +7,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import { expandManifestReferences } from '@eve/shared';
 import type { FlagValue } from '../lib/args';
 import { getBooleanFlag, getStringFlag, getStringFlags, toBoolean } from '../lib/args';
-import { requestJson, requestRaw } from '../lib/client';
+import { requestJson, requestRaw, requestStream } from '../lib/client';
 import { buildQuery } from '../lib/format';
 import { loadCredentials } from '../lib/config';
 import type { ResolvedContext } from '../lib/context';
@@ -519,47 +519,15 @@ async function streamMeshLogs(
   service: string,
   query: string,
 ): Promise<void> {
-  const headers: Record<string, string> = { Accept: 'text/event-stream' };
-  if (context.token) {
-    headers.Authorization = `Bearer ${context.token}`;
-  }
-
-  const response = await fetch(
-    `${context.apiUrl}/projects/${projectId}/envs/${envName}/services/${service}/logs/stream${query}`,
-    { headers },
+  await requestStream(
+    context,
+    `/projects/${projectId}/envs/${envName}/services/${service}/logs/stream${query}`,
+    {
+      onFrame: ({ event, data }) => {
+        printMeshLogEvent(event ?? '', data);
+      },
+    },
   );
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-  }
-  if (!response.body) {
-    throw new Error('No response body received');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let eventType = '';
-  let eventData = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        eventType = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        eventData = line.slice(5).trim();
-      } else if (line === '' && eventData) {
-        printMeshLogEvent(eventType, eventData);
-        eventType = '';
-        eventData = '';
-      }
-    }
-  }
 }
 
 function printMeshLogEvent(eventType: string, dataStr: string): void {
