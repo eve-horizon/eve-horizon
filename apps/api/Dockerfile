@@ -27,6 +27,14 @@ ENV EVE_BUILD_VERSION=${EVE_BUILD_VERSION}
 ENV EVE_BUILD_SHA=${EVE_BUILD_SHA}
 ENV EVE_BUILD_TIME=${EVE_BUILD_TIME}
 
+# Install postgresql-client for managed DB snapshot operations (pg_dump, pg_restore, psql)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gnupg lsb-release curl ca-certificates \
+  && echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg \
+  && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /app/apps/api/dist ./apps/api/dist

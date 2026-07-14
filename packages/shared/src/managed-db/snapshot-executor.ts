@@ -61,6 +61,23 @@ export async function executeSnapshot(
     stderr += chunk.toString();
   });
 
+  // Listen for exit/error from spawn time: a spawn failure (e.g. pg_dump not
+  // installed) emits 'error' with no 'exit', and an unhandled 'error' event
+  // would crash the whole process. The spawn failure also tears down stdout,
+  // which makes the upload reject with an unrelated stream error — so the
+  // process error is recorded and preferred over whatever surfaces first.
+  let processError: Error | null = null;
+  const exitPromise = new Promise<number>((resolve) => {
+    child.on('exit', (code) => resolve(code ?? 0));
+    child.on('error', (err) => {
+      processError =
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+          ? new Error('pg_dump is not installed in this container')
+          : err;
+      resolve(-1);
+    });
+  });
+
   // Set up timeout
   const timer = setTimeout(() => {
     child.kill('SIGTERM');
@@ -78,11 +95,9 @@ export async function executeSnapshot(
     clearTimeout(timer);
 
     // Wait for child process to exit
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.on('exit', (code) => resolve(code ?? 0));
-      child.on('error', reject);
-    });
+    const exitCode = await exitPromise;
 
+    if (processError) throw processError;
     if (exitCode !== 0) {
       throw new Error(`pg_dump exited with code ${exitCode}: ${stderr.trim()}`);
     }
@@ -91,7 +106,7 @@ export async function executeSnapshot(
   } catch (error) {
     clearTimeout(timer);
     child.kill('SIGTERM');
-    throw error;
+    throw processError ?? error;
   }
 }
 
@@ -130,6 +145,19 @@ export async function executeRestore(
     stderr += chunk.toString();
   });
 
+  // Listen for exit/error from spawn time (see executeSnapshot).
+  let processError: Error | null = null;
+  const exitPromise = new Promise<number>((resolve) => {
+    child.on('exit', (code) => resolve(code ?? 0));
+    child.on('error', (err) => {
+      processError =
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+          ? new Error('pg_restore is not installed in this container')
+          : err;
+      resolve(-1);
+    });
+  });
+
   const timer = setTimeout(() => {
     child.kill('SIGTERM');
   }, timeoutMs);
@@ -138,13 +166,11 @@ export async function executeRestore(
     // Pipe storage stream to pg_restore stdin
     await pipeline(stream, child.stdin);
 
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.on('exit', (code) => resolve(code ?? 0));
-      child.on('error', reject);
-    });
+    const exitCode = await exitPromise;
 
     clearTimeout(timer);
 
+    if (processError) throw processError;
     // pg_restore exit code 1 means "warnings" (e.g., "relation does not exist" during --clean)
     // Only fail on exit code 2+ which indicates actual errors
     if (exitCode > 1) {
@@ -153,7 +179,7 @@ export async function executeRestore(
   } catch (error) {
     clearTimeout(timer);
     child.kill('SIGTERM');
-    throw error;
+    throw processError ?? error;
   }
 }
 
