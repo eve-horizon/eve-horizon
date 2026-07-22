@@ -118,14 +118,67 @@ Archiving is reversible and preserves every commit, tag, issue, and PR.
 
 ---
 
-## Pre-flight
+## Archive readiness audit
 
-Do not start until all of these are true:
+Audited 2026-07-22. **Verdict: NOT READY — two blockers, one of them a live
+risk that exists today.**
+
+### Blocker 1 — the retired repo can still publish to production
+
+| Check | State |
+| --- | --- |
+| `publish-images.yml`, `publish-cli.yml`, `toolchain-images.yml` present | ✅ yes |
+| AWS + NPM secrets live | ✅ 3 secrets |
+| Workflow state | `active` |
+
+A `release-v*` tag pushed here **right now** would build and push images to the
+same production ECR namespace the clusters pull from — from the retired repo.
+
+**Do not fix this by disabling the workflows yet.** Until the public repo can
+publish, this repo is the *only* thing that can ship a release, including a
+hotfix. Removing that ability before the cutover would leave you unable to ship
+at all. The correct sequence is:
+
+1. OSS publishes a release successfully →
+2. *then* delete the secrets here and remove the publish workflows →
+3. *then* archive.
+
+Archiving also disables Actions on its own, so step 3 closes this permanently.
+
+### Blocker 2 — four open PRs would be frozen unmergeable
+
+| PR | Branch | On OSS? |
+| --- | --- | --- |
+| [#31](https://github.com/Incept5/eve-horizon/pull/31) | `feat/app-stable-egress` | ❌ no |
+| [#25](https://github.com/Incept5/eve-horizon/pull/25) | `feat/chat-file-materialization` | ❌ no |
+| [#14](https://github.com/Incept5/eve-horizon/pull/14) | `feat/eve-horizon-78-cli-deploy-diagnostics` | ❌ no |
+| [#2](https://github.com/Incept5/eve-horizon/pull/2) | `plan/dogfood-registry` | ❌ no |
+
+Archiving makes a repo read-only — these can never be merged afterwards. None of
+the four branches exists on the OSS repo. Each needs a decision: **port to OSS**
+or **close as abandoned**. The commits survive archiving either way; only the
+ability to merge them here is lost.
+
+### Cleared
+
+| Check | Result |
+| --- | --- |
+| Open issues needing migration | ✅ none (only the retirement notice #37) |
+| Work lost by archiving | ✅ none — archiving preserves all 62 branches, all tags, all history |
+| Release tag provenance preserved | ✅ yes, provided you archive rather than delete |
+
+> **Not a finding**: all 62 remote branches are "unreachable from OSS `main`".
+> That is expected — the open-source migration rewrote history, so the two repos
+> share **no common ancestor** at all. It does not indicate lost work.
+
+### Remaining pre-flight
 
 - [ ] `eve-horizon/eve-horizon` has its own green `release-v*` publish run
 - [ ] Images for that release are pullable from public ECR
 - [ ] A deployment instance has rolled that release successfully
+- [ ] Secrets deleted here; publish workflows removed (**after** the above)
+- [ ] The 4 open PRs ported to OSS or closed
 - [ ] No local checkout still has `origin` pointed at `Incept5/eve-horizon`
 
-Until then the private repo is still the only thing that can ship a release —
-see [`oss-release-cutover.md`](./oss-release-cutover.md).
+Until these hold, the private repo is still the only thing that can ship a
+release — see [`oss-release-cutover.md`](./oss-release-cutover.md).
