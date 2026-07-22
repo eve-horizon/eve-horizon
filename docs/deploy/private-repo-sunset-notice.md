@@ -1,10 +1,26 @@
 # Private Repo Sunset Notice
 
 Prepared text for retiring `Incept5/eve-horizon`. It lives here because pushing
-to `private-origin` is forbidden — a maintainer applies it manually.
+to `private-origin` is forbidden — a maintainer applies the in-repo parts
+manually.
 
-**Apply in this order.** The banner must land *before* the archive flip, because
-archiving makes the repo read-only.
+## Already applied (2026-07-22)
+
+Two notices are live on the private repo. Neither is a git push and neither
+touches history, so both were safe to apply ahead of the cutover:
+
+| What | Value | Undo |
+| --- | --- | --- |
+| Repo description | `⛔ RETIRED — development moved to github.com/eve-horizon/eve-horizon` | `gh api -X PATCH repos/Incept5/eve-horizon -f description="…"` |
+| Pinned issue [#37](https://github.com/Incept5/eve-horizon/issues/37) | Full retirement notice | `gh issue unpin 37 -R Incept5/eve-horizon && gh issue close 37 -R Incept5/eve-horizon` |
+
+Leave issue #37 open and pinned until the repo is archived.
+
+## Still to apply — needs a maintainer
+
+The steps below modify files, which requires a push. **Apply in this order** —
+the banner must land *before* the archive flip, because archiving makes the repo
+read-only.
 
 ---
 

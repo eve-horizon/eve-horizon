@@ -206,12 +206,22 @@ bin/eve-infra health
 
 ### 6. Sunset the private repo — *user action*
 
-Once a release cut from OSS has deployed green:
+The private repo already carries two notices, applied 2026-07-22 without a push:
+its **description** reads `⛔ RETIRED — development moved to …`, and **pinned
+issue [#37](https://github.com/Incept5/eve-horizon/issues/37)** holds the full
+retirement notice.
 
-1. Apply the notice in [`private-repo-sunset-notice.md`](./private-repo-sunset-notice.md)
-   to `Incept5/eve-horizon`.
-2. Archive the repo on GitHub (read-only; preserves history and tags).
-3. Re-point or delete stale local checkouts (see below).
+Once a release cut from OSS has deployed green, finish the job:
+
+1. Apply the in-repo file changes from
+   [`private-repo-sunset-notice.md`](./private-repo-sunset-notice.md) (README
+   banner, `AGENTS.md`/`CLAUDE.md` replacement, delete publish workflows) —
+   these need a push, so a maintainer does them.
+2. Delete the Actions secrets there once OSS publishes successfully.
+3. Archive the repo on GitHub (read-only; preserves history and tags).
+   **Archive, never delete** — see the two reasons above.
+4. Re-point or delete stale local checkouts (see below), after running the
+   unpushed-work check.
 
 ---
 
