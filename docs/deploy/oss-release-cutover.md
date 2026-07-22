@@ -1,9 +1,13 @@
 # OSS Release Cutover
 
-> **Status**: In progress · **Created**: 2026-07-22 · **Owner**: Project maintainers
+> **Status**: Images cut over · npm still blocked · **Created**: 2026-07-22 · **Owner**: Project maintainers
 >
 > Moving the release-publishing pipeline from the private `Incept5/eve-horizon`
 > repo to the canonical open-source `eve-horizon/eve-horizon` repo.
+>
+> **Done (2026-07-22)**: `release-v0.1.314` cut from this repo — all 7 service
+> images green and live in `public.ecr.aws/w7c4v0w3/eve-horizon`.
+> **Outstanding**: `NPM_TOKEN`, so `cli-v*`/`sdk-v*`/`chat-v*` tags still fail.
 
 ## Canonical repository
 
@@ -75,18 +79,43 @@ Set these on `eve-horizon/eve-horizon` → Settings → Secrets and variables �
 
 ### Secrets (all three required)
 
-| Secret | Used by | Purpose |
-| --- | --- | --- |
-| `AWS_ACCESS_KEY_ID` | `publish-images`, `publish-migrate`, `worker-images`, `toolchain-images` | Public ECR push |
-| `AWS_SECRET_ACCESS_KEY` | same | Public ECR push |
-| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` | npm publish under `@eve-horizon` |
+| Secret | Used by | Purpose | State |
+| --- | --- | --- | --- |
+| `AWS_ACCESS_KEY_ID` | `publish-images`, `publish-migrate`, `worker-images`, `toolchain-images` | Public ECR push | ✅ set, proven by `0.1.314` |
+| `AWS_SECRET_ACCESS_KEY` | same | Public ECR push | ✅ set, proven by `0.1.314` |
+| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` | npm publish under `@eve-horizon` | ❌ **missing** |
+
+**Where the AWS credential came from.** IAM user
+`eve-horizon-gha-ecr-public-publisher` in account `767828750268`, policy
+`AmazonElasticContainerRegistryPublicFullAccess` — the same least-privilege
+identity the private repo used to ship `0.1.313`. Its secret value is
+unrecoverable, so a **second access key** was minted on that user for this repo.
+The private repo's original key is still active; rotate it out when that repo is
+stripped of publish capability. Do not use a personal admin key here — this is a
+public repo.
+
+**Minting the npm token.** All `@eve-horizon` packages are maintained solely by
+npm user `tigz <ajchesney@gmail.com>`, so the token must come from that account.
+Verify any candidate before setting it:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $TOKEN" https://registry.npmjs.org/-/whoami
+```
+
+`401` means the registry does not recognise the string at all — that is not an
+npm-CLI or `.npmrc` problem, so don't go looking for one. The token previously
+stored in repo-root `secrets.env` as `CLI_NPM_PUBLISH_TOKEN` fails this check and
+is dead. Prefer `npm login` followed by `npm token create`, which lets you verify
+at the moment of creation rather than pasting a value that may be masked,
+truncated, or IP-restricted.
 
 ### Variables (optional — defaults work)
 
-| Variable | Default in workflow | Private repo value |
-| --- | --- | --- |
-| `ECR_NAMESPACE` | `eve-horizon` | `eve-horizon` |
-| `AWS_ECR_REGION` | `eu-west-1` | `us-east-1` |
+| Variable | Default in workflow | Private repo value | Set here |
+| --- | --- | --- | --- |
+| `ECR_NAMESPACE` | `eve-horizon` | `eve-horizon` | ✅ `eve-horizon` |
+| `AWS_ECR_REGION` | `eu-west-1` | `us-east-1` | ✅ `us-east-1` |
 
 `ECR_REGISTRY` is a hardcoded `env:` in each workflow (`public.ecr.aws/w7c4v0w3`),
 **not** a variable — setting it as a variable has no effect.
@@ -170,26 +199,33 @@ something avoidable.
 > which builds all seven without pushing on every PR and `main` push.
 
 Together these mean **missing secrets are the only thing blocking a release** —
-not workflow drift and not image breakage.
+not workflow drift and not image breakage. That was borne out: once the AWS
+credential was set, `0.1.314` went green first time.
 
-### 1. Configure secrets — *user action*
+### 1. Configure secrets — ✅ *AWS done · npm outstanding*
 
 Add the three secrets above to `eve-horizon/eve-horizon`. Confirm:
 
 ```bash
-gh secret list -R eve-horizon/eve-horizon      # expect 3
+gh secret list -R eve-horizon/eve-horizon      # expect 3; currently 2
 gh variable list -R eve-horizon/eve-horizon
 ```
 
-### 2. Cut the first OSS release — *user action*
+### 2. Cut the first OSS release — ✅ *done: `release-v0.1.314`, 2026-07-22*
 
 ```bash
 git checkout main && git pull
-git tag release-v0.1.314 && git push origin release-v0.1.314
+git tag -a release-v0.1.314 -m "..."
+git push origin refs/tags/release-v0.1.314    # single refspec — see warning
 gh run watch -R eve-horizon/eve-horizon
 ```
 
-All 7 matrix jobs must be green.
+All 7 matrix jobs must be green. They were, in ~4 min.
+
+> ⚠️ **Never `git push --tags` from a long-lived checkout.** Local clones carry
+> the 313 historical `release-v*` tags inherited from the private repo, and the
+> OSS remote has none of them. Pushing them all would trigger `publish-images.yml`
+> 313 times. Always push one explicit refspec.
 
 ### 3. Verify images reached the registry
 
@@ -202,6 +238,15 @@ for r in api sso gateway agent-runtime orchestrator worker dashboard; do
   | jq -r '.tags | map(select(. == "0.1.314")) | if length > 0 then "ok" else "MISSING" end'
 done
 ```
+
+Verified 2026-07-22: all 7 present, tagged `0.1.314` / `sha-7dbfb3e` / `staging`.
+
+> ⚠️ Prefer the registry API above over
+> `aws ecr-public describe-images --query "imageDetails[?contains(imageTags,'…')]"`.
+> Untagged cache layers have a **null** `imageTags`, and `contains()` on null
+> makes the whole JMESPath filter fail — it returns empty rather than erroring, so
+> a successful publish reads as a total miss. Filter client-side if you use the
+> AWS CLI.
 
 ### 4. Bump the deployment instance
 
