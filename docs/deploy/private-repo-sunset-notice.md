@@ -120,8 +120,19 @@ Archiving is reversible and preserves every commit, tag, issue, and PR.
 
 ## Archive readiness audit
 
-Audited 2026-07-22. **Verdict: NOT READY — two blockers, one of them a live
-risk that exists today.**
+Audited 2026-07-22, re-audited after remediation. **Verdict: ONE BLOCKER LEFT —
+the retired repo can still publish to production. Everything else is clear.**
+
+| Precondition | State |
+| --- | --- |
+| Sunset notices carried | ✅ description + pinned issue [#37](https://github.com/Incept5/eve-horizon/issues/37) |
+| Open PRs frozen by archiving | ✅ none — all 4 closed 2026-07-22 |
+| Open issues needing migration | ✅ none |
+| Work destroyed by archiving | ✅ none — archive preserves all branches, tags, history |
+| **Can still publish to production** | ❌ **blocker — see below** |
+
+That last one cannot be cleared until the public repo can publish, because until
+then this repo is the only thing that can ship a release.
 
 ### Blocker 1 — the retired repo can still publish to production
 
@@ -145,7 +156,7 @@ at all. The correct sequence is:
 
 Archiving also disables Actions on its own, so step 3 closes this permanently.
 
-### Blocker 2 — four open PRs would be frozen unmergeable (mostly cleared)
+### ~~Blocker 2~~ — CLEARED 2026-07-22: all four PRs closed
 
 Archiving makes a repo read-only, so open PRs can never be merged afterwards.
 None of the four branches exists on the OSS repo. **Triaged 2026-07-22 against
@@ -158,9 +169,14 @@ OSS `main` — three are superseded and can simply be closed:**
 | [#31](https://github.com/Incept5/eve-horizon/pull/31) | `feat/app-stable-egress` | ✅ **pivoted away from — close** | `app-stable-egress-v2-plan.md` explicitly supersedes the v1 Tailscale sidecar design this PR implements; the replacement `networking.egress: nat\|stable` knob is live in `schemas/manifest.ts` |
 | [#2](https://github.com/Incept5/eve-horizon/pull/2) | `plan/dogfood-registry` | ⚠️ **needs a human** | Registry manifests exist in `k8s/base/` and `container-registry.md` is written, but `eve-native-container-registry-plan.md` is still **Draft**. Partially landed at best; +1708/−77 across 34 files, last touched 2026-01-20 |
 
-So the real remaining work here is: **close #25, #14, #31 as superseded**, and
-have someone with context decide on **#2**. No porting required for the first
-three. Commits survive archiving regardless; only mergeability is lost.
+**All four were closed on 2026-07-22**, each with a comment citing the evidence
+above. The repo now has **0 open PRs**, so archiving freezes nothing.
+
+> ⚠️ **#2 was closed as a judgement call, against the weaker evidence.** Its
+> work only partially landed and its plan is still Draft. If the Eve-native
+> registry is still wanted, port it onto OSS `main` as fresh work — the
+> histories are disjoint, so reviving the branch is not the route. The closing
+> comment on #2 records this. Commits survive on the branch either way.
 
 ### Cleared
 
