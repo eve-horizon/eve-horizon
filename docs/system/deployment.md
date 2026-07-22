@@ -1,11 +1,37 @@
 # Deployment
 
 > Status: Current
-> Last Updated: 2026-02-13
+> Last Updated: 2026-07-22
 
 ## Purpose
 
 Define the supported deployment configurations and the primary runtime targets for Eve Horizon.
+
+## The three-repo model
+
+Hosted deployments span three repositories. Artifacts flow one way; **the source
+repo never deploys.**
+
+| Repo | Role | Owns |
+| --- | --- | --- |
+| [`eve-horizon/eve-horizon`](https://github.com/eve-horizon/eve-horizon) (this one) | Source | Code; publishes images on `release-v*` |
+| [`eve-horizon/eve-horizon-infra`](https://github.com/eve-horizon/eve-horizon-infra) | Public template | Kustomize overlays, Terraform, `bin/eve-infra`, deploy workflow |
+| `<org>/<name>-eve-infra` | Private instance | Real hosts, secrets, pinned version, cluster credentials |
+
+```
+this repo  ──release-v*──>  public ECR  ──pinned version──>  instance repo  ──deploy-v*──>  cluster
+```
+
+A `release-v*` tag here publishes images and stops. Rollouts are triggered only
+from a deployment instance repo, by its owner. No workflow in this repo may hold
+cluster credentials or dispatch to an instance repo.
+
+**What a cluster actually consumes**: the 7 service images at the pinned
+`platform.version`, plus the 5 `toolchain-*` images (independently versioned,
+pulled at `latest`). Migrations run from the `api` image. See
+[ci-cd.md](./ci-cd.md) for the full artifact inventory and
+[oss-release-cutover.md](../deploy/oss-release-cutover.md) for the release
+procedure.
 
 ## Runtime Modes
 

@@ -276,6 +276,11 @@ you deploy from `eve-horizon-infra`). `eve.example.com` is a placeholder.
 
 ## Sister Repos (Supporting This Platform)
 
+> **This repository — [`eve-horizon/eve-horizon`](https://github.com/eve-horizon/eve-horizon) — is the canonical source.**
+> All development and all releases happen here. The private `Incept5/eve-horizon`
+> repo is the retired pre-open-source ancestor, kept read-only for its history.
+> If a clone's `origin` points there, re-point it at this repo.
+
 - [**eve-horizon-infra**](https://github.com/eve-horizon/eve-horizon-infra) — Public infrastructure template (Kubernetes manifests, Terraform, deploy workflows). Create your own deployment instance from it.
 - [**eve-horizon-starter**](https://github.com/eve-horizon/eve-horizon-starter) — Starter template for new Eve projects. Clone this to get started quickly.
 - [**eve-skillpacks**](https://github.com/eve-horizon/eve-skillpacks) — Public skillpacks distributed via `skills.txt` for users and internal teams.

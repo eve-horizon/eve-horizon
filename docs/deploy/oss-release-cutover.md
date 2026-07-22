@@ -215,8 +215,14 @@ wrong codebase.
 | Path | Origin | State | Action |
 | --- | --- | --- | --- |
 | `eve-horizon`, `eve-horizon-2` | `eve-horizon/eve-horizon` | current | ✅ correct |
-| `eve-horizon-3`, `-4`, `-5` | `Incept5/eve-horizon` | stale (Feb 2026) | re-point to OSS or delete |
-| `eve-source` | `Incept5/eve-source` | predecessor product | **not this codebase** — see below |
+| `eve-horizon-3`, `-4`, `-5` | `Incept5/eve-horizon` | stale (Feb 2026) | ⚠️ banner applied — re-point to OSS or delete |
+| `eve-source` | `Incept5/eve-source` | predecessor product | ⚠️ banner applied — **not this codebase**, see below |
+
+A "⛔ STOP" banner has been prepended to `AGENTS.md` and `CLAUDE.md` in each
+stale checkout, so an agent starting there is told immediately. These are
+**uncommitted local edits** — deliberately, since pushing to `private-origin` is
+forbidden. They disappear if the checkout is reset, which is fine: resetting to
+the OSS remote is the fix.
 
 Re-point a stale checkout:
 

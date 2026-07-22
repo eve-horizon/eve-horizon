@@ -42,10 +42,13 @@ All publishing is tag-driven. Push the tag, the workflow does the rest.
 git tag <prefix>-v0.1.0 && git push origin <prefix>-v0.1.0
 ```
 
-> **Legacy paths**: `worker-images` has never completed successfully and
-> `publish-migrate` last failed in Feb 2026. Neither is consumed by a deployment
-> — migrations run from the `api` image, and worker toolchains ship as init
-> containers. Repair or retire rather than assuming they work.
+> **Legacy paths**: `worker-images` has never completed successfully (2 runs,
+> both failed 2026-02-16) and `publish-migrate` last failed 2026-02-18. Neither
+> is consumed by a deployment — migrations run from the `api` image, and worker
+> toolchains ship as init containers. Repair or retire rather than assuming they
+> work. Run logs have expired, so the cause is unconfirmed; one difference worth
+> checking first is that these two build `linux/amd64,linux/arm64` while the
+> service images build `linux/amd64` only.
 
 ## Service images (`release-v*`)
 

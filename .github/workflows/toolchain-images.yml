@@ -1,9 +1,15 @@
 name: Build Toolchain Images
 
+# Publishes toolchain images only. Like every publish workflow in this repo it
+# must not trigger a hosted rollout — deployment instance repos roll out
+# explicitly. Toolchain images are versioned independently of the platform.
 on:
   push:
+    # No `paths` filter here on purpose. Combining `paths` with a tag trigger
+    # lets a publish silently no-op when the tagged commit happens not to touch
+    # docker/toolchains/** — no images, no failure, no signal. The tag itself is
+    # the intent to publish.
     tags: ['toolchain-images/v*']
-    paths: ['docker/toolchains/**']
   workflow_dispatch:
 
 permissions:
