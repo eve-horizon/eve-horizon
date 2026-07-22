@@ -212,6 +212,22 @@ bin/eve-infra upgrade 0.1.314   # updates config/platform.yaml + overlay image t
 git diff                        # version strings only
 ```
 
+**Dry-run validated 2026-07-22** against `incept5-eve-infra` (changes reverted).
+`upgrade 0.1.314` touched exactly 9 files — `config/platform.yaml` plus the 7
+service patches and `db-migrate-job-patch.yaml` — rewriting only version strings.
+That the migrate job moves with the `api` tag confirms migrations run from the
+`api` image, not the `migrate` image.
+
+> **Which overlay is live matters.** The instance sets `overlay: aws-eks`, whose
+> patches **pin** versions (`api:0.1.312`). The repo also carries an unused `aws`
+> overlay that tracks the floating `:staging` tag.
+>
+> This is load-bearing: every `release-v*` build also pushes a `staging` tag. If
+> the live overlay were `aws`, a publish would silently roll the cluster,
+> breaking the "instance repos roll out explicitly" guarantee. Because it pins,
+> publishing is inert until someone bumps the version. **Keep it that way** — do
+> not point a hosted environment at the `staging` tag.
+
 ### 5. Roll the cluster — *user action*
 
 ```bash
