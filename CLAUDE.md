@@ -84,8 +84,14 @@ For multi-project app-link work on the same local stack, use `eve local mesh`:
 
 ## Releases
 
-CLI version: `0.2.36`. All releases are tag-driven via GitHub Actions, cut from
-`eve-horizon/eve-horizon` only.
+Published CLI: `0.2.70` (npm). All releases are tag-driven via GitHub Actions,
+cut from `eve-horizon/eve-horizon` only.
+
+> npm versions come from the **tag**, not `package.json` — the in-repo values
+> are stale and misleading (cli says 0.2.44, SDKs say 0.0.1). Run
+> `npm view @eve-horizon/<pkg> version` before choosing a tag. Next tags must be
+> ≥ `cli-v0.2.71`, `sdk-v0.1.6`, `chat-v0.0.3`. See
+> [ci-cd.md](./docs/system/ci-cd.md).
 
 > ⚠️ **Cutover in progress (2026-07-22)**: this repo has no `release-v*` tags and
 > no Actions secrets yet — every image through `0.1.313` was published by the

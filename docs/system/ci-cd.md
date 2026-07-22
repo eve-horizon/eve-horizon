@@ -120,6 +120,32 @@ explicitly, and missing ECR repositories are created on first push.
 `DEPLOY_DISPATCH_TOKEN`, `STAGING_KUBECONFIG`, `STAGING_API_URL` — any of these
 in this repo would break the "publish, never deploy" rule.
 
+## npm packages — the version comes from the tag
+
+`publish-cli`, `publish-sdk` and `publish-chat` all derive the version from the
+tag and run `npm version <tag-version>` before publishing. **The `version` field
+in `package.json` is ignored**, so the in-repo values drift and are not a
+reliable guide to what is published.
+
+Always check npm before tagging. As of 2026-07-22:
+
+| Package | Published | In repo | Next tag must be ≥ |
+| --- | --- | --- | --- |
+| `@eve-horizon/cli` | `0.2.70` | 0.2.44 | `cli-v0.2.71` |
+| `@eve-horizon/auth` + `auth-react` | `0.1.5` | 0.0.1 | `sdk-v0.1.6` |
+| `@eve-horizon/chat` + `chat-react` | `0.0.2` | 0.0.1 | `chat-v0.0.3` |
+
+```bash
+npm view @eve-horizon/cli version    # before choosing a tag
+```
+
+Tagging a version that already exists fails the publish. Tagging a *lower*
+unused version succeeds but moves the npm `latest` dist-tag backwards for every
+consumer — worse than a failure, because it's silent.
+
+Publish config was verified on all five packages: none is `private`, each has
+`files` and `license: MIT`, and each publishes with `--access public`.
+
 ## Installing a published CLI
 
 ```bash
