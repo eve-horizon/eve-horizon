@@ -22,7 +22,16 @@ cluster credentials or use `repository_dispatch` to reach an instance repo — s
 | Workflow | Trigger | Does |
 | --- | --- | --- |
 | `ci.yml` | push + PR to `main` | pnpm install, build all packages, run unit tests |
+| `image-build-check.yml` | push + PR to `main` (code/Dockerfile paths) | Builds all 7 service images **without pushing** |
 | `kubectl-context-safety.yml` | PR to `main` | Blocks changes that could target the wrong cluster context |
+
+`ci.yml` never exercises a Dockerfile, so image breakage used to reach `main`
+undetected and only surface when someone cut a `release-v*` tag.
+`image-build-check.yml` closes that: same dockerfiles, same targets, same
+platform as `publish-images.yml`, but `push: false` and no credentials (it uses
+the GitHub Actions cache, so it works on fork PRs). **If you change the
+`publish-images.yml` matrix, change this one too** — the check is only
+meaningful while the two agree.
 
 ### Publishing
 

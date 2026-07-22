@@ -148,13 +148,29 @@ when `docker/toolchains/**` does.
 
 Steps 1, 2 and 5 need a human with repo-admin or cluster authority.
 
-> **Workflow drift check (done 2026-07-22)**: every publish workflow here was
-> diffed against the version in the private repo that actually shipped
-> `release-v0.1.313`. `publish-cli`, `publish-sdk`, `publish-chat`,
-> `publish-migrate`, `worker-images` and `ci` are byte-identical;
-> `publish-images` differs only by a guardrail comment. So the OSS workflows are
-> functionally the proven ones — **missing secrets are the only thing blocking a
-> release**, not code drift.
+Two pre-checks were run on 2026-07-22 so the first release doesn't fail on
+something avoidable.
+
+> **Workflow drift check**: every publish workflow here was diffed against the
+> version in the private repo that actually shipped `release-v0.1.313`.
+> `publish-cli`, `publish-sdk`, `publish-chat`, `publish-migrate`,
+> `worker-images` and `ci` are byte-identical; `publish-images` differs only by a
+> guardrail comment. The OSS workflows are functionally the proven ones.
+
+> **Image build check**: `ci.yml` runs `pnpm build` and unit tests but never
+> exercises a Dockerfile, so no image had ever been built from OSS `main`. All
+> seven were built locally at the same targets and platform the release uses —
+> **all seven succeeded**, and the `api` image was confirmed to contain
+> `pg_dump 16.14` (the 2026-07-14 snapshot fix). Sizes: api 940 MB, sso 75 MB,
+> gateway 85 MB, agent-runtime 1.53 GB, orchestrator 164 MB, worker 1.68 GB,
+> dashboard 63 MB.
+>
+> That gap is now closed permanently by
+> [`image-build-check.yml`](../../.github/workflows/image-build-check.yml),
+> which builds all seven without pushing on every PR and `main` push.
+
+Together these mean **missing secrets are the only thing blocking a release** —
+not workflow drift and not image breakage.
 
 ### 1. Configure secrets — *user action*
 
