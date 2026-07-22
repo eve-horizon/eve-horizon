@@ -91,9 +91,14 @@ rollouts.
 
 GitHub → Settings → Danger Zone → **Archive this repository**.
 
-Archiving is reversible and preserves every commit, tag, issue, and PR. Do not
-delete the repo: the `release-v*` tags are the provenance record for images
-currently running.
+Archiving is reversible and preserves every commit, tag, issue, and PR.
+
+**Do not delete the repo.** Two independent reasons:
+
+1. The `release-v*` tags are the provenance record for images currently running.
+2. Unpushed work rescued from the `eve-horizon-3` checkout is stored as an
+   *incremental* bundle that needs base commits which exist only here — see
+   [`oss-release-cutover.md`](./oss-release-cutover.md#️-do-not-delete-eve-horizon-3-before-reading-this).
 
 ---
 
