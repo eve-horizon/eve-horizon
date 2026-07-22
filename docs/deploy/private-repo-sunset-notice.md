@@ -145,19 +145,22 @@ at all. The correct sequence is:
 
 Archiving also disables Actions on its own, so step 3 closes this permanently.
 
-### Blocker 2 — four open PRs would be frozen unmergeable
+### Blocker 2 — four open PRs would be frozen unmergeable (mostly cleared)
 
-| PR | Branch | On OSS? |
-| --- | --- | --- |
-| [#31](https://github.com/Incept5/eve-horizon/pull/31) | `feat/app-stable-egress` | ❌ no |
-| [#25](https://github.com/Incept5/eve-horizon/pull/25) | `feat/chat-file-materialization` | ❌ no |
-| [#14](https://github.com/Incept5/eve-horizon/pull/14) | `feat/eve-horizon-78-cli-deploy-diagnostics` | ❌ no |
-| [#2](https://github.com/Incept5/eve-horizon/pull/2) | `plan/dogfood-registry` | ❌ no |
+Archiving makes a repo read-only, so open PRs can never be merged afterwards.
+None of the four branches exists on the OSS repo. **Triaged 2026-07-22 against
+OSS `main` — three are superseded and can simply be closed:**
 
-Archiving makes a repo read-only — these can never be merged afterwards. None of
-the four branches exists on the OSS repo. Each needs a decision: **port to OSS**
-or **close as abandoned**. The commits survive archiving either way; only the
-ability to merge them here is lost.
+| PR | Branch | Verdict | Evidence in OSS |
+| --- | --- | --- | --- |
+| [#25](https://github.com/Incept5/eve-horizon/pull/25) | `feat/chat-file-materialization` | ✅ **landed — close** | `docs/plans/chat-file-materialization-plan.md` reads *"Status: Implemented (2026-03-09)"*; all 14 of the PR's files present, including both files it created (`schemas/chat-file.ts`, `lib/sanitize-filename.ts`) |
+| [#14](https://github.com/Incept5/eve-horizon/pull/14) | `feat/eve-horizon-78-cli-deploy-diagnostics` | ✅ **landed — close** | `eve env diagnose` implemented (`packages/cli/src/commands/env.ts:297`) with the `--events/--request/--window` flags |
+| [#31](https://github.com/Incept5/eve-horizon/pull/31) | `feat/app-stable-egress` | ✅ **pivoted away from — close** | `app-stable-egress-v2-plan.md` explicitly supersedes the v1 Tailscale sidecar design this PR implements; the replacement `networking.egress: nat\|stable` knob is live in `schemas/manifest.ts` |
+| [#2](https://github.com/Incept5/eve-horizon/pull/2) | `plan/dogfood-registry` | ⚠️ **needs a human** | Registry manifests exist in `k8s/base/` and `container-registry.md` is written, but `eve-native-container-registry-plan.md` is still **Draft**. Partially landed at best; +1708/−77 across 34 files, last touched 2026-01-20 |
+
+So the real remaining work here is: **close #25, #14, #31 as superseded**, and
+have someone with context decide on **#2**. No porting required for the first
+three. Commits survive archiving regardless; only mergeability is lost.
 
 ### Cleared
 
@@ -177,7 +180,8 @@ ability to merge them here is lost.
 - [ ] Images for that release are pullable from public ECR
 - [ ] A deployment instance has rolled that release successfully
 - [ ] Secrets deleted here; publish workflows removed (**after** the above)
-- [ ] The 4 open PRs ported to OSS or closed
+- [ ] PRs #25, #14, #31 closed as superseded (no porting needed — see triage above)
+- [ ] PR #2 (`plan/dogfood-registry`) reviewed and closed or ported
 - [ ] No local checkout still has `origin` pointed at `Incept5/eve-horizon`
 
 Until these hold, the private repo is still the only thing that can ship a
