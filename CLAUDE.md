@@ -9,6 +9,7 @@ For user docs (deploying apps, running jobs), see [README.md](./README.md).
 
 ## CRITICAL Rules
 
+0. **Canonical repo**: `github.com/eve-horizon/eve-horizon` is the only repo to work in. `Incept5/eve-horizon` is the retired pre-open-source ancestor — never push to it (`private-origin` push URL must be `DISABLED`). Verify with `git remote get-url origin` before starting. See [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md).
 1. **Load Eve docs first**: run `/eve-read-eve-docs`, then check `references/cli.md`, `references/manifest.md`, `references/jobs.md` for your task.
 2. **No direct AWS changes**: ALL infra changes go through Terraform in the deployment instance repo that owns the target environment. Read-only AWS CLI is fine for diagnosis; mutations are silently reverted by Terraform.
 3. **Check environment first**: run `./bin/eh status` before any build/test/dev activity. Do NOT assume URLs or ports.
@@ -83,7 +84,14 @@ For multi-project app-link work on the same local stack, use `eve local mesh`:
 
 ## Releases
 
-CLI version: `0.2.36`. All releases are tag-driven via GitHub Actions.
+CLI version: `0.2.36`. All releases are tag-driven via GitHub Actions, cut from
+`eve-horizon/eve-horizon` only.
+
+> ⚠️ **Cutover in progress (2026-07-22)**: this repo has no `release-v*` tags and
+> no Actions secrets yet — every image through `0.1.313` was published by the
+> retired private repo. Until the secrets are configured and a release is cut
+> here, the OSS repo cannot ship. See
+> [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md).
 
 | Package | Tag prefix | Workflow |
 | --- | --- | --- |
@@ -96,13 +104,14 @@ CLI version: `0.2.36`. All releases are tag-driven via GitHub Actions.
 git tag <prefix>-v0.1.0 && git push origin <prefix>-v0.1.0
 ```
 
-Hosted deployments use a two-repo model. The source repo builds service images;
-deployment instance repos pull those images and apply their own manifests,
-Terraform, secrets, and release policies. Release tags in this source repo must
-not trigger hosted/staging rollouts directly. Only the deployment owner should
-trigger instance rollouts from the deployment instance repo. Keep
-instance-specific operational details in the private instance repo, not in this
-public source repo.
+Hosted deployments use a three-repo model: this source repo publishes service
+images; the public `eve-horizon/eve-horizon-infra` template provides the cloud
+scaffold; and a private deployment instance repo created from that template
+pulls the images and applies its own manifests, Terraform, secrets, and release
+policies. Release tags in this source repo must not trigger hosted/staging
+rollouts directly. Only the deployment owner should trigger instance rollouts
+from the deployment instance repo. Keep instance-specific operational details in
+the private instance repo, not in this public source repo.
 
 ```bash
 git tag --list 'release-v*' --sort=-version:refname | head -1  # latest tag
@@ -159,7 +168,7 @@ CLI is a thin REST wrapper; only `EVE_API_URL` needed. Visual: [system-overview.
 | CLI as thin REST wrapper | Single source of truth | [api-philosophy.md](./docs/system/api-philosophy.md) |
 | K8s runtime via k3d | Production-like local testing | [deployment.md](./docs/system/deployment.md) |
 | Agent runtime runs ALL agent jobs | Worker is builds/pipelines only | [agent-runtime.md](./docs/system/agent-runtime.md) |
-| Two-repo deploy model | Source builds images, infra applies manifests | [deployment.md](./docs/system/deployment.md) |
+| Three-repo deploy model | Source publishes images → public infra template → private deployment instance applies manifests | [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md) |
 | BuildKit-first builds | Replaced kaniko | [builds.md](./docs/system/builds.md) |
 | GoTrue + SSO broker | Supabase-compatible web auth, dual-mode API auth | [auth.md](./docs/system/auth.md) |
 | Default-deny data plane | Members/agents need explicit group-scoped grants | [auth.md](./docs/system/auth.md) |
@@ -307,6 +316,7 @@ Outdated docs → agents make wrong assumptions, write broken manifests. See `ev
 Most-used:
 - [ARCHITECTURE.md](./ARCHITECTURE.md) · [docs/system/README.md](./docs/system/README.md) (index)
 - [deployment.md](./docs/system/deployment.md) · [staging.md](./docs/deploy/staging.md) · [secrets.md](./docs/system/secrets.md)
+- [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md) · [ci-cd.md](./docs/system/ci-cd.md) — canonical repo, release tags, artifact inventory
 - [job-cli.md](./docs/system/job-cli.md) · [agent-runtime.md](./docs/system/agent-runtime.md) · [agents.md](./docs/system/agents.md)
 - [chat-gateway.md](./docs/system/chat-gateway.md) · [integrations.md](./docs/system/integrations.md) · [auth.md](./docs/system/auth.md)
 - [eve-sdk.md](./docs/system/eve-sdk.md) · [eve-auth-sdk.md](./docs/system/eve-auth-sdk.md) · [app-sso-integration.md](./docs/system/app-sso-integration.md)
@@ -367,6 +377,7 @@ Never stop before pushing. Never say "ready to push when you are" — push it.
 
 ## Update Log
 
+- **2026-07-22**: OSS release cutover started. Audit found `eve-horizon/eve-horizon` has **0 git tags and 0 Actions secrets** — every image through `0.1.313` was published by the retired `Incept5/eve-horizon`, so hosted envs are still fed by the private repo. New [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md) (canonical repo, required secrets, verified artifact inventory, cutover steps) + [private-repo-sunset-notice.md](./docs/deploy/private-repo-sunset-notice.md). `docs/system/ci-cd.md` rewritten to cover all 9 workflows. Corrected the deploy model from "two-repo" to three-repo (source → public infra template → private instance). Verified: OSS workflows are clean of rollout coupling; only 7 service images + 5 toolchain images are consumed by a deployment; `worker-images` has never succeeded and `publish-migrate` last failed 2026-02-18, but neither is a cutover blocker. Blocked on user: add `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`NPM_TOKEN` to the OSS repo, then cut `release-v0.1.314`.
 - **2026-07-14**: Fixed manual DB snapshots crashing the API pod (`release-v0.1.313`): `apps/api/Dockerfile` now installs postgresql-client-16 (pg_dump ran in-pod but was never installed; the unhandled spawn `error` event killed the whole API and orphaned the snapshot row as `in_progress`, blocking retries). `executeSnapshot`/`executeRestore` in `packages/shared/src/managed-db/snapshot-executor.ts` now listen for spawn errors from spawn time and surface the process error over secondary stream errors. Staging infra now sets `EVE_DB_SNAPSHOT_BUCKET` (was defaulting to nonexistent `eve-local-db-snapshots`) and enables the snapshot pruner. New deployment instances need the same env wiring — see template backport issue.
 - **2026-06-12**: Dashboard rebuilt as read-only "Horizon" UI (`apps/dashboard`): new IA (Home/Apps/Jobs/Costs/System-admin) with legacy-route redirects, responsive shell (desktop sidebar, tablet rail, mobile bottom tabs), dark-first design system. New per-app cloud cost attribution: `GET /orgs/:org_id/cost/apps` (`orgs:read`, cluster figures redacted) + `GET /admin/cost/apps` (`system:admin`), allocating `cloud_cost_snapshots` (AWS CE) across apps by OpenCost weights with explicit platform-overhead remainder — see `apps/api/src/billing/app-cost.service.ts`. Fixed `@eve-horizon/auth-react` StrictMode race that cleared valid tokens on cancelled bootstrap. Demo cost seed: `tests/manual/seed-demo-costs.sql`. Screenshot harness: `apps/dashboard/scripts/shoot.mjs`.
 - **2026-06-03**: Agent-runtime inline execution now honors declared `toolchains` using shared on-demand provisioning before harness start, fails fast with `toolchain_unavailable`, records `runtime_meta.toolchains`, and orchestrator watchdogs now classify pre-acceptance/pre-harness wedges as `attempt_init_timeout` / `attempt_startup_timeout`.

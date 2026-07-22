@@ -2,6 +2,30 @@
 
 **CRITICAL: Read [CLAUDE.md](./CLAUDE.md)** — it is the single source of truth for this project.
 
+## CRITICAL: This Is the Canonical Repository
+
+**`github.com/eve-horizon/eve-horizon` is the only Eve Horizon repo to work in.**
+
+`Incept5/eve-horizon` is the retired pre-open-source ancestor. Work done there
+reaches nothing. Before starting, confirm you are in the right place:
+
+```bash
+git remote get-url origin   # must be .../eve-horizon/eve-horizon
+```
+
+If `origin` points at `Incept5/eve-horizon`, stop and re-point it:
+
+```bash
+git remote set-url origin git@github.com:eve-horizon/eve-horizon.git
+git fetch origin && git reset --hard origin/main
+```
+
+Never push to a `private-origin` remote. Note also that `Incept5/eve-source` is a
+**different, proprietary predecessor product** despite its README calling itself
+"Eve Horizon" — it is not a copy of this codebase.
+
+See [OSS Release Cutover](./docs/deploy/oss-release-cutover.md).
+
 ## CRITICAL: No Direct AWS Infrastructure Changes
 
 **ALL AWS infrastructure changes MUST go through Terraform in the deployment

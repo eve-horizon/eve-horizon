@@ -1,74 +1,119 @@
 # CI/CD
 
-This document covers the GitHub Actions workflows for continuous integration and CLI publishing.
+GitHub Actions workflows for this repo: continuous integration, and the
+tag-driven publishing of every release artifact.
+
+> **Canonical repo**: `github.com/eve-horizon/eve-horizon`. Releases are cut here
+> and nowhere else. See [OSS Release Cutover](../deploy/oss-release-cutover.md).
+
+## The one rule
+
+**A release tag publishes artifacts. It never deploys.**
+
+This repo builds images and npm packages. Rolling those into a cluster is done
+from a *deployment instance repo* by its owner. No workflow here may hold
+cluster credentials or use `repository_dispatch` to reach an instance repo — see
+[deployment.md](./deployment.md) for the three-repo model.
 
 ## Workflows
 
-### CI (`ci.yml`)
+### Continuous integration
 
-Runs on every push and pull request to `main`.
+| Workflow | Trigger | Does |
+| --- | --- | --- |
+| `ci.yml` | push + PR to `main` | pnpm install, build all packages, run unit tests |
+| `kubectl-context-safety.yml` | PR to `main` | Blocks changes that could target the wrong cluster context |
 
-**Steps:**
-1. Checkout code
-2. Setup pnpm and Node.js 22
-3. Install dependencies
-4. Build all packages
-5. Run unit tests
+### Publishing
 
-### Publish CLI (`publish-cli.yml`)
+All publishing is tag-driven. Push the tag, the workflow does the rest.
 
-Runs when a tag matching `cli-v*` is pushed.
-
-**Steps:**
-1. Checkout code
-2. Setup pnpm and Node.js 22
-3. Install and build
-4. Extract version from tag
-5. Publish `@eve-horizon/cli` to npm
-
-## Setup
-
-### 1. npm Access Token
-
-1. Go to https://www.npmjs.com → **Access Tokens** → **Generate New Token**
-2. Select **Granular Access Token**
-3. Set permissions: **Read and write** for packages
-4. Copy the token
-
-### 2. GitHub Secret
-
-1. Go to repo → **Settings** → **Secrets and variables** → **Actions**
-2. Click **New repository secret**
-3. Name: `NPM_TOKEN`
-4. Value: paste your npm token
-
-### 3. npm Organization
-
-The CLI publishes as `@eve-horizon/cli`. Ensure the `eve-horizon` organization exists on npm, or update the package name in `packages/cli/package.json`.
-
-## Publishing a Release
+| Tag prefix | Workflow | Publishes |
+| --- | --- | --- |
+| `release-v*` | `publish-images.yml` | 7 service images → public ECR |
+| `toolchain-images/v*` | `toolchain-images.yml` | 5 toolchain images → public ECR |
+| `cli-v*` | `publish-cli.yml` | `@eve-horizon/cli` → npm |
+| `sdk-v*` | `publish-sdk.yml` | `@eve-horizon/auth` + `auth-react` → npm (lockstep) |
+| `chat-v*` | `publish-chat.yml` | `@eve-horizon/chat` + `chat-react` → npm (lockstep) |
+| `eve-migrate/v*` | `publish-migrate.yml` | `migrate` image → public ECR |
+| `worker-images/v*` | `worker-images.yml` | `worker-*` variant images → public ECR |
 
 ```bash
-# Create and push a version tag
-git tag cli-v0.1.0
-git push origin cli-v0.1.0
+git tag <prefix>-v0.1.0 && git push origin <prefix>-v0.1.0
 ```
 
-The workflow will:
-- Build the CLI
-- Set the version from the tag
-- Publish to npm with provenance
+> **Legacy paths**: `worker-images` has never completed successfully and
+> `publish-migrate` last failed in Feb 2026. Neither is consumed by a deployment
+> — migrations run from the `api` image, and worker toolchains ship as init
+> containers. Repair or retire rather than assuming they work.
 
-## Installing the CLI
+## Service images (`release-v*`)
 
-Once published:
+Builds seven images in a parallel matrix: `api`, `sso`, `gateway`,
+`agent-runtime`, `orchestrator`, `worker`, `dashboard`.
+
+Registry: `public.ecr.aws/w7c4v0w3/eve-horizon`
+
+Each image gets **three tags**:
+
+| Tag | Example | Use |
+| --- | --- | --- |
+| version | `0.1.313` | What deployment instances pin |
+| short SHA | `sha-a1b2c3d` | Traceability |
+| `staging` | `staging` | Floating; tracked by non-pinned overlays |
+
+Build metadata (`EVE_BUILD_VERSION`, `EVE_BUILD_SHA`, `EVE_BUILD_TIME`) is passed
+as build args and surfaces in `eve system health`. Registry-backed layer caching
+uses a per-image `-cache` repository. Platform: `linux/amd64`.
+
+## Toolchain images (`toolchain-images/v*`)
+
+Builds `toolchain-{python,media,rust,java,kotlin}`, tagged with the version and
+`latest`, for `linux/amd64` and `linux/arm64`.
+
+These are on an **independent version line** from the platform. A `release-v*`
+does not rebuild them; they change only when `docker/toolchains/**` does.
+Deployments pull them via `EVE_TOOLCHAIN_IMAGE_PREFIX` +
+`EVE_TOOLCHAIN_IMAGE_TAG` (typically `latest`) on the worker and agent-runtime
+pods, which inject them as init containers.
+
+## Required configuration
+
+Repo → Settings → Secrets and variables → Actions.
+
+### Secrets
+
+| Secret | Needed by |
+| --- | --- |
+| `AWS_ACCESS_KEY_ID` | every image workflow |
+| `AWS_SECRET_ACCESS_KEY` | every image workflow |
+| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` |
+
+The npm token should be a Granular Access Token with read+write on packages, and
+the `@eve-horizon` npm org must exist.
+
+### Variables
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ECR_NAMESPACE` | `eve-horizon` | Repository prefix within the registry |
+| `AWS_ECR_REGION` | `eu-west-1` | Only feeds credential config; set `us-east-1` to match the proven setup |
+
+`ECR_REGISTRY` is a hardcoded `env:` (`public.ecr.aws/w7c4v0w3`) in each
+workflow, not a variable. All `ecr-public` API calls pass `--region us-east-1`
+explicitly, and missing ECR repositories are created on first push.
+
+### Never add
+
+`DEPLOY_DISPATCH_TOKEN`, `STAGING_KUBECONFIG`, `STAGING_API_URL` — any of these
+in this repo would break the "publish, never deploy" rule.
+
+## Installing a published CLI
 
 ```bash
-npm install -g @eve-horizon/cli
+npm install -g @eve-horizon/cli            # latest
+npm install -g @eve-horizon/cli@0.2.36     # pinned
 ```
 
-Or with a specific version:
-
-```bash
-npm install -g @eve-horizon/cli@0.1.0
-```
+There is also a `/cli-publish-and-install` skill for manual publishing when CI
+is unavailable.
