@@ -1,13 +1,15 @@
 # OSS Release Cutover
 
-> **Status**: Images cut over · npm still blocked · **Created**: 2026-07-22 · **Owner**: Project maintainers
+> **Status**: All secrets set · images proven · npm awaiting first publish · **Created**: 2026-07-22 · **Owner**: Project maintainers
 >
 > Moving the release-publishing pipeline from the private `Incept5/eve-horizon`
 > repo to the canonical open-source `eve-horizon/eve-horizon` repo.
 >
-> **Done (2026-07-22)**: `release-v0.1.314` cut from this repo — all 7 service
-> images green and live in `public.ecr.aws/w7c4v0w3/eve-horizon`.
-> **Outstanding**: `NPM_TOKEN`, so `cli-v*`/`sdk-v*`/`chat-v*` tags still fail.
+> **Images (2026-07-22)**: `release-v0.1.314` cut from this repo — all 7 service
+> images green and live in `public.ecr.aws/w7c4v0w3/eve-horizon`. AWS path proven.
+> **npm (2026-08-04)**: `NPM_TOKEN` set and validated (read+write on all 5
+> `@eve-horizon` packages), but not yet exercised — the first `cli-v*`/`sdk-v*`/
+> `chat-v*` tag confirms the npm path.
 
 ## Canonical repository
 
@@ -83,7 +85,7 @@ Set these on `eve-horizon/eve-horizon` → Settings → Secrets and variables �
 | --- | --- | --- | --- |
 | `AWS_ACCESS_KEY_ID` | `publish-images`, `publish-migrate`, `worker-images`, `toolchain-images` | Public ECR push | ✅ set, proven by `0.1.314` |
 | `AWS_SECRET_ACCESS_KEY` | same | Public ECR push | ✅ set, proven by `0.1.314` |
-| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` | npm publish under `@eve-horizon` | ❌ **missing** |
+| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` | npm publish under `@eve-horizon` | ✅ set 2026-08-04, awaiting first publish |
 
 **Where the AWS credential came from.** IAM user
 `eve-horizon-gha-ecr-public-publisher` in account `767828750268`, policy
@@ -96,19 +98,36 @@ public repo.
 
 **Minting the npm token.** All `@eve-horizon` packages are maintained solely by
 npm user `tigz <ajchesney@gmail.com>`, so the token must come from that account.
-Verify any candidate before setting it:
+The token in use is a **Granular Access Token** scoped to the `@eve-horizon`
+packages with read+write. Two earlier candidates (a June `CLI_NPM_PUBLISH_TOKEN`
+and a same-session replacement) were dead. Verify any candidate before setting it:
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' \
+# 1. Identity — 401 means the registry does not recognise the string AT ALL.
+#    That is not an npm-CLI or .npmrc problem, so don't go looking for one.
+curl -sS -w ' HTTP %{http_code}\n' \
   -H "Authorization: Bearer $TOKEN" https://registry.npmjs.org/-/whoami
+#    Expect: {"username":"tigz"} HTTP 200
+
+# 2. Per-package access — a granular token 403s on any package outside its scope.
+printf '//registry.npmjs.org/:_authToken=%s\n' "$TOKEN" > /tmp/npmrc-check
+for p in cli auth auth-react chat chat-react; do
+  NPM_CONFIG_USERCONFIG=/tmp/npmrc-check \
+    npm access get status "@eve-horizon/$p"   # each must return "public", not 403
+done
+rm -f /tmp/npmrc-check
 ```
 
-`401` means the registry does not recognise the string at all — that is not an
-npm-CLI or `.npmrc` problem, so don't go looking for one. The token previously
-stored in repo-root `secrets.env` as `CLI_NPM_PUBLISH_TOKEN` fails this check and
-is dead. Prefer `npm login` followed by `npm token create`, which lets you verify
-at the moment of creation rather than pasting a value that may be masked,
-truncated, or IP-restricted.
+> ⚠️ **Do NOT use `npm access list packages @eve-horizon` to validate a granular
+> token.** That hits `/-/org/eve-horizon/package`, which enumerates the whole org
+> and needs org-level read a package-scoped token deliberately lacks — it 403s
+> even when the token can publish every package fine. Check packages
+> individually with `npm access get status` (step 2 above).
+
+A `npm login` session token also works and has read+write on all five packages,
+but it dies on `npm logout`, so a granular token is preferred for a public repo's
+CI secret. Whatever you use, it cannot be verified as write-capable without an
+actual publish — the first `cli-v*` tag is the real proof.
 
 ### Variables (optional — defaults work)
 
@@ -202,12 +221,12 @@ Together these mean **missing secrets are the only thing blocking a release** �
 not workflow drift and not image breakage. That was borne out: once the AWS
 credential was set, `0.1.314` went green first time.
 
-### 1. Configure secrets — ✅ *AWS done · npm outstanding*
+### 1. Configure secrets — ✅ *done (all 3 set)*
 
 Add the three secrets above to `eve-horizon/eve-horizon`. Confirm:
 
 ```bash
-gh secret list -R eve-horizon/eve-horizon      # expect 3; currently 2
+gh secret list -R eve-horizon/eve-horizon      # expect 3
 gh variable list -R eve-horizon/eve-horizon
 ```
 
