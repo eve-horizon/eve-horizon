@@ -84,22 +84,20 @@ For multi-project app-link work on the same local stack, use `eve local mesh`:
 
 ## Releases
 
-Published CLI: `0.2.70` (npm). All releases are tag-driven via GitHub Actions,
-cut from `eve-horizon/eve-horizon` only.
+Published CLI: `0.2.71` (npm, first cut from the OSS repo). All releases are
+tag-driven via GitHub Actions, cut from `eve-horizon/eve-horizon` only.
 
 > npm versions come from the **tag**, not `package.json` — the in-repo values
 > are stale and misleading (cli says 0.2.44, SDKs say 0.0.1). Run
 > `npm view @eve-horizon/<pkg> version` before choosing a tag. Next tags must be
-> ≥ `cli-v0.2.71`, `sdk-v0.1.6`, `chat-v0.0.3`. See
+> ≥ `cli-v0.2.72`, `sdk-v0.1.6`, `chat-v0.0.3`. See
 > [ci-cd.md](./docs/system/ci-cd.md).
 
-> ✅ **Publishing cut over**: all 3 Actions secrets are set on this repo.
-> Images: `release-v0.1.314` (2026-07-22) published all 7 service images to
-> `public.ecr.aws/w7c4v0w3/eve-horizon` — proves the AWS path end-to-end.
-> npm: `NPM_TOKEN` set 2026-08-04, validated as `tigz` with read+write on all 5
-> `@eve-horizon` packages, but **not yet exercised by an actual publish** — the
-> first `cli-v*`/`sdk-v*`/`chat-v*` tag will confirm it. Next tags must be
-> ≥ `cli-v0.2.71`, `sdk-v0.1.6`, `chat-v0.0.3`. See
+> ✅ **Publishing fully cut over** — both paths proven end-to-end from
+> `eve-horizon/eve-horizon`. Images: `release-v0.1.314` (2026-07-22) published
+> all 7 service images to `public.ecr.aws/w7c4v0w3/eve-horizon`. npm:
+> `cli-v0.2.71` (2026-08-04) published `@eve-horizon/cli@0.2.71`, confirmed live
+> and installable via `npx`. All 3 Actions secrets set and exercised. See
 > [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md).
 
 | Package | Tag prefix | Workflow |
@@ -386,6 +384,7 @@ Never stop before pushing. Never say "ready to push when you are" — push it.
 
 ## Update Log
 
+- **2026-08-04 (later)**: **npm path proven — OSS cutover complete.** Cut `cli-v0.2.71` (single refspec; the checkout carries 77 historical `cli-v*` tags absent from the OSS remote, so never `git push --tags`). `publish-cli.yml` went green and `@eve-horizon/cli@0.2.71` is live on npm as the new `latest`; a fresh `npx @eve-horizon/cli@0.2.71 --version` prints `eve v0.2.71`. This proves `NPM_TOKEN`'s write capability — the last thing the non-destructive checks couldn't. **Both publishing paths (ECR images + npm packages) now proven end-to-end from `eve-horizon/eve-horizon`.** Next npm tags ≥ `cli-v0.2.72`, `sdk-v0.1.6`, `chat-v0.0.3`. Remaining cutover work is private-repo sunsetting (`7qu.5`/`7qu.9`), not publishing capability.
 - **2026-08-04**: **All 3 OSS publishing secrets now set** — cutover secrets complete. `NPM_TOKEN` added to `eve-horizon/eve-horizon` from a **Granular Access Token** (scoped to the `@eve-horizon` packages, read+write) after the two earlier tokens turned out dead (bare `401` from `/-/whoami`). Validated non-destructively: `whoami` → `{"username":"tigz"}` 200, and `npm access get status` returns `public` for all 5 packages (cli/auth/auth-react/chat/chat-react). Trap recorded in the cutover doc: **don't** validate a granular token with `npm access list packages @eve-horizon` — it hits the org-enumeration endpoint (`/-/org/eve-horizon/package`) and 403s even for a token that can publish every package; check packages individually with `npm access get status`. Write-capability is still only *provable* by an actual publish — the first `cli-v*` tag (≥ `cli-v0.2.71`) is the real proof; not cut yet since it's a real user-facing npm release. AWS/image path already proven by `release-v0.1.314`.
 - **2026-07-22 (later)**: **Image publishing cut over.** `release-v0.1.314` is the first release ever cut from `eve-horizon/eve-horizon`; all 7 service images (api, orchestrator, worker, agent-runtime, gateway, sso, dashboard) built green and are live in `public.ecr.aws/w7c4v0w3/eve-horizon` tagged `0.1.314` / `sha-7dbfb3e` / `staging`. AWS creds came from a **second access key minted on the existing `eve-horizon-gha-ecr-public-publisher` IAM user** (acct `767828750268`, `AmazonElasticContainerRegistryPublicFullAccess`) — the same least-privilege identity that shipped `0.1.313`; the private repo's original key is still active and should be rotated out during sunset. Also set optional vars `ECR_NAMESPACE=eve-horizon` / `AWS_ECR_REGION=us-east-1` to match the private repo (both are cosmetic — the public-ECR login and create-repo paths hardcode `us-east-1`, and `ECR_REGISTRY` is a hardcoded workflow env, not a var). **`NPM_TOKEN` remains the one open blocker**: the `CLI_NPM_PUBLISH_TOKEN` in repo-root `secrets.env` is dead — the registry returns a bare `401` for it on `/-/whoami` over raw HTTP, so it's not an npm-CLI or npmrc issue; a replacement pasted in the same session 401'd too. All `@eve-horizon` packages are maintained solely by npm user `tigz <ajchesney@gmail.com>`, so the token must come from that account — mint via `npm login` + `npm token create` so it can be verified at creation. Note when tagging: the local checkout carries 313 historical `release-v*` tags that exist **only** locally, so never `git push --tags` — that would fire `publish-images.yml` 313 times. Push a single refspec.
 - **2026-07-22**: OSS release cutover started. Audit found `eve-horizon/eve-horizon` has **0 git tags and 0 Actions secrets** — every image through `0.1.313` was published by the retired `Incept5/eve-horizon`, so hosted envs are still fed by the private repo. New [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md) (canonical repo, required secrets, verified artifact inventory, cutover steps) + [private-repo-sunset-notice.md](./docs/deploy/private-repo-sunset-notice.md). `docs/system/ci-cd.md` rewritten to cover all 9 workflows. Corrected the deploy model from "two-repo" to three-repo (source → public infra template → private instance). Verified: OSS workflows are clean of rollout coupling; only 7 service images + 5 toolchain images are consumed by a deployment; `worker-images` has never succeeded and `publish-migrate` last failed 2026-02-18, but neither is a cutover blocker. Also fixed `toolchain-images.yml`: it combined a `paths:` filter with a tag trigger, so a toolchain publish could silently no-op when the tagged commit didn't touch `docker/toolchains/**` — no images, no failure. Disambiguation banners added to the `eve-source` checkout (proprietary predecessor whose CLAUDE.md calls itself "Eve Horizon") and stop banners to `eve-horizon-3/-4/-5`. Verified every publish workflow against the private versions that shipped `0.1.313`: functionally identical (only a guardrail comment differs), so missing secrets are the sole blocker, not drift. Found unpushed work in the `eve-horizon-3` checkout — 4 branches on no remote plus a stash — bundled to `eve-horizon-3-RESCUE/`; it needs base commits that exist only in the private repo, so that repo must be **archived, not deleted**. Added `image-build-check.yml`: `ci.yml` never exercised a Dockerfile, so no image had ever been built from OSS `main` — breakage would have first surfaced as a failed release. All 7 images verified building locally and on CI (green), `api` confirmed to carry `pg_dump 16.14`. Blocked on user: add `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`NPM_TOKEN` to the OSS repo, then cut `release-v0.1.314`.

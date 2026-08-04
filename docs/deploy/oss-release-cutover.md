@@ -1,15 +1,15 @@
 # OSS Release Cutover
 
-> **Status**: All secrets set · images proven · npm awaiting first publish · **Created**: 2026-07-22 · **Owner**: Project maintainers
+> **Status**: ✅ Publishing cut over — both paths proven · **Created**: 2026-07-22 · **Owner**: Project maintainers
 >
 > Moving the release-publishing pipeline from the private `Incept5/eve-horizon`
 > repo to the canonical open-source `eve-horizon/eve-horizon` repo.
 >
 > **Images (2026-07-22)**: `release-v0.1.314` cut from this repo — all 7 service
 > images green and live in `public.ecr.aws/w7c4v0w3/eve-horizon`. AWS path proven.
-> **npm (2026-08-04)**: `NPM_TOKEN` set and validated (read+write on all 5
-> `@eve-horizon` packages), but not yet exercised — the first `cli-v*`/`sdk-v*`/
-> `chat-v*` tag confirms the npm path.
+> **npm (2026-08-04)**: `cli-v0.2.71` published `@eve-horizon/cli@0.2.71` — live
+> on npm as `latest`, installable via `npx`. npm path proven end-to-end.
+> What remains is sunsetting the private repo, not publishing capability.
 
 ## Canonical repository
 

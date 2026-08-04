@@ -127,13 +127,18 @@ tag and run `npm version <tag-version>` before publishing. **The `version` field
 in `package.json` is ignored**, so the in-repo values drift and are not a
 reliable guide to what is published.
 
-Always check npm before tagging. As of 2026-07-22:
+Always check npm before tagging. As of 2026-08-04:
 
 | Package | Published | In repo | Next tag must be ≥ |
 | --- | --- | --- | --- |
-| `@eve-horizon/cli` | `0.2.70` | 0.2.44 | `cli-v0.2.71` |
+| `@eve-horizon/cli` | `0.2.71` | 0.2.44 | `cli-v0.2.72` |
 | `@eve-horizon/auth` + `auth-react` | `0.1.5` | 0.0.1 | `sdk-v0.1.6` |
 | `@eve-horizon/chat` + `chat-react` | `0.0.2` | 0.0.1 | `chat-v0.0.3` |
+
+`@eve-horizon/cli@0.2.71` was the first npm release published from the OSS repo
+(`cli-v0.2.71`, 2026-08-04), proving the npm path. `auth`/`chat` are still on
+their private-repo versions — the first `sdk-v*`/`chat-v*` tag will be their
+first OSS publish.
 
 ```bash
 npm view @eve-horizon/cli version    # before choosing a tag
