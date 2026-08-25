@@ -101,7 +101,16 @@ export async function handleInit(
 
     // Initialize git
     console.log('Initializing git repository...');
-    execSync('git init', { cwd: resolvedTarget, stdio: 'pipe' });
+    const initResult = spawnSync('git', ['init', '--initial-branch=main'], {
+      cwd: resolvedTarget,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (initResult.status !== 0) {
+      throw new Error(
+        `Failed to initialize git repository:\n${initResult.stderr || initResult.stdout}`,
+      );
+    }
     execSync('git add -A', { cwd: resolvedTarget, stdio: 'pipe' });
     execSync('git commit -m "Initial commit from eve-horizon-starter"', {
       cwd: resolvedTarget,
