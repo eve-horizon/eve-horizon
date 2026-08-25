@@ -285,6 +285,7 @@ you deploy from `eve-horizon-infra`). `eve.example.com` is a placeholder.
 - [**eve-horizon-starter**](https://github.com/eve-horizon/eve-horizon-starter) — Starter template for new Eve projects. Clone this to get started quickly.
 - [**eve-skillpacks**](https://github.com/eve-horizon/eve-skillpacks) — Public skillpacks distributed via `skills.txt` for users and internal teams.
 - [**eve-horizon-fullstack-example**](https://github.com/eve-horizon/eve-horizon-fullstack-example) — Showcase app for new users and fixture data for E2E tests (tests clone `main`).
+- [**eve-software-factory**](https://github.com/eve-horizon/eve-software-factory) — Public AgentPack and relay example used by the full-stack fixture.
 - [**eve-horizon-docs**](https://github.com/eve-horizon/eve-horizon-docs) — Human-facing documentation site.
 
 ## Run It Locally (from source)

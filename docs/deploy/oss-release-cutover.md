@@ -1,13 +1,13 @@
 # OSS Release Cutover
 
-> **Status**: ✅ Publishing cut over — both paths proven · **Created**: 2026-07-22 · **Owner**: Project maintainers
+> **Status**: ✅ Public publishing is canonical · **Created**: 2026-07-22 · **Last verified**: 2026-08-25 · **Owner**: Project maintainers
 >
 > Moving the release-publishing pipeline from the private `Incept5/eve-horizon`
 > repo to the canonical open-source `eve-horizon/eve-horizon` repo.
 >
 > **Images (2026-07-22)**: `release-v0.1.314` cut from this repo — all 7 service
 > images green and live in `public.ecr.aws/w7c4v0w3/eve-horizon`. AWS path proven.
-> **npm (2026-08-04)**: `cli-v0.2.71` published `@eve-horizon/cli@0.2.71` — live
+> **npm (2026-08-25)**: `cli-v0.2.73` published `@eve-horizon/cli@0.2.73` — live
 > on npm as `latest`, installable via `npx`. npm path proven end-to-end.
 > What remains is sunsetting the private repo, not publishing capability.
 
@@ -46,9 +46,10 @@ moved the **code** to the public repo but not the **release pipeline**. As of
 | Actions variables | **0** | `ECR_REGISTRY`, `ECR_NAMESPACE`, `AWS_ECR_REGION` |
 | Publish workflow runs | **0** | 89 `Publish Images`, 13 `Publish CLI` |
 
-Every image in `public.ecr.aws/w7c4v0w3/eve-horizon` was built by private CI.
-Until the steps below are done, **hosted environments are still fed by the
-private repo**, and the public repo cannot cut a release.
+At that point, every image in `public.ecr.aws/w7c4v0w3/eve-horizon` had been
+built by private CI, hosted environments were still fed by the private repo,
+and the public repo could not cut a release. The completed steps below record
+how that state was retired.
 
 ---
 
@@ -83,9 +84,9 @@ Set these on `eve-horizon/eve-horizon` → Settings → Secrets and variables �
 
 | Secret | Used by | Purpose | State |
 | --- | --- | --- | --- |
-| `AWS_ACCESS_KEY_ID` | `publish-images`, `publish-migrate`, `worker-images`, `toolchain-images` | Public ECR push | ✅ set, proven by `0.1.314` |
+| `AWS_ACCESS_KEY_ID` | `publish-images`, `toolchain-images` | Public ECR push | ✅ set, proven by `0.1.314` |
 | `AWS_SECRET_ACCESS_KEY` | same | Public ECR push | ✅ set, proven by `0.1.314` |
-| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` | npm publish under `@eve-horizon` | ✅ set 2026-08-04, awaiting first publish |
+| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` | npm publish under `@eve-horizon` | ✅ set, proven through `cli-v0.2.73` |
 
 **Where the AWS credential came from.** IAM user
 `eve-horizon-gha-ecr-public-publisher` in account `767828750268`, policy
@@ -159,13 +160,13 @@ Tag prefixes and what each produces. Verified against public ECR on 2026-07-22.
 
 | Tag | Workflow | Publishes | In ECR today |
 | --- | --- | --- | --- |
-| `release-v*` | `publish-images.yml` | `api`, `sso`, `gateway`, `agent-runtime`, `orchestrator`, `worker`, `dashboard` | ✅ through `0.1.313` |
+| `release-v*` | `publish-images.yml` | `api`, `sso`, `gateway`, `agent-runtime`, `orchestrator`, `worker`, `dashboard` | ✅ OSS-published `0.1.314` |
 | `toolchain-images/v*` | `toolchain-images.yml` | `toolchain-{python,media,rust,java,kotlin}` | ✅ `1.0.0` + `latest` |
 | `cli-v*` | `publish-cli.yml` | `@eve-horizon/cli` | n/a (npm) |
 | `sdk-v*` | `publish-sdk.yml` | `@eve-horizon/auth` + `auth-react` | n/a (npm) |
 | `chat-v*` | `publish-chat.yml` | `@eve-horizon/chat` + `chat-react` | n/a (npm) |
-| `eve-migrate/v*` | `publish-migrate.yml` | `migrate` | ⚠️ `1.0.1`, last run **failed** (2026-02-18) |
-| `worker-images/v*` | `worker-images.yml` | `worker-{base,python,rust,java,kotlin,full}` | ❌ **0 tags — never succeeded** |
+| `eve-migrate/v*` | retired; no workflow | legacy `migrate` | frozen legacy artifact; not a release surface |
+| `worker-images/v*` | retired; no workflow | legacy worker variants | no successful tags; not a release surface |
 
 Each `release-v*` build pushes three tags per image: the version (`0.1.313`), the
 short SHA (`sha-abc1234`), and the floating `staging` tag.
@@ -182,9 +183,9 @@ Database migrations run from the **`api`** image (`db-migrate-job`), not the
 `migrate` image. The `worker-*` variant images are superseded by the toolchain
 init-container model.
 
-> The failing `worker-images` and `eve-migrate` workflows are therefore **not**
-> cutover blockers. They are unused legacy paths — either repair or retire them,
-> tracked separately.
+> The unused `worker-images` and `eve-migrate` workflows were retired on
+> 2026-08-25. Their historical registry artifacts are not part of the supported
+> release contract.
 
 Toolchain images are on an **independent version line** (`1.0.0`), not the
 platform version. Bumping the platform does not rebuild them; they only change
@@ -199,11 +200,13 @@ Steps 1, 2 and 5 need a human with repo-admin or cluster authority.
 Two pre-checks were run on 2026-07-22 so the first release doesn't fail on
 something avoidable.
 
-> **Workflow drift check**: every publish workflow here was diffed against the
+> **Historical workflow drift check (2026-07-22)**: every publish workflow here was diffed against the
 > version in the private repo that actually shipped `release-v0.1.313`.
-> `publish-cli`, `publish-sdk`, `publish-chat`, `publish-migrate`,
-> `worker-images` and `ci` are byte-identical; `publish-images` differs only by a
+> `publish-cli`, `publish-sdk`, `publish-chat` and `ci` were byte-identical;
+> `publish-images` differed only by a
 > guardrail comment. The OSS workflows are functionally the proven ones.
+> The unused migrate and worker-variant workflows were subsequently retired;
+> see the current artifact inventory above.
 
 > **Image build check**: `ci.yml` runs `pnpm build` and unit tests but never
 > exercises a Dockerfile, so no image had ever been built from OSS `main`. All
@@ -217,9 +220,9 @@ something avoidable.
 > [`image-build-check.yml`](../../.github/workflows/image-build-check.yml),
 > which builds all seven without pushing on every PR and `main` push.
 
-Together these mean **missing secrets are the only thing blocking a release** —
-not workflow drift and not image breakage. That was borne out: once the AWS
-credential was set, `0.1.314` went green first time.
+At the time, those checks reduced the first public release blocker to missing
+publisher credentials. Once the AWS credential was set, `0.1.314` went green
+first time; the public publishing path is no longer blocked.
 
 ### 1. Configure secrets — ✅ *done (all 3 set)*
 

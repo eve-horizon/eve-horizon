@@ -1,6 +1,16 @@
 # Open-Sourcing Eve Horizon — Plan
 
-> **Status**: Proposed · **Created**: 2026-06-18 · **Last updated**: 2026-06-23 · **Owner**: Project maintainers
+> **Historical record — superseded 2026-08-25.** This document preserves the
+> original scope, audit, and execution checklist; unchecked boxes below are not
+> a current backlog. The canonical platform and its six supporting repositories
+> now live publicly under [`eve-horizon`](https://github.com/eve-horizon), use
+> MIT licensing, and publish from the public source repository. Current release
+> ownership and retirement work are tracked in
+> [OSS Release Cutover](../deploy/oss-release-cutover.md) and by downstream
+> deployment-instance plans. The legacy `Incept5` source and duplicate
+> quickstart remain read-only until their separately approved retirement gates.
+
+> **Status**: Superseded execution record · **Created**: 2026-06-18 · **Last updated**: 2026-08-25 · **Owner**: Project maintainers
 > **License target**: **MIT, everywhere** (platform, services, SDKs, infra, examples, docs)
 > **Copyright holder**: **Adam Chesney and Incept5**
 

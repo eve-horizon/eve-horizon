@@ -44,20 +44,17 @@ All publishing is tag-driven. Push the tag, the workflow does the rest.
 | `cli-v*` | `publish-cli.yml` | `@eve-horizon/cli` → npm |
 | `sdk-v*` | `publish-sdk.yml` | `@eve-horizon/auth` + `auth-react` → npm (lockstep) |
 | `chat-v*` | `publish-chat.yml` | `@eve-horizon/chat` + `chat-react` → npm (lockstep) |
-| `eve-migrate/v*` | `publish-migrate.yml` | `migrate` image → public ECR |
-| `worker-images/v*` | `worker-images.yml` | `worker-*` variant images → public ECR |
 
 ```bash
 git tag <prefix>-v0.1.0 && git push origin <prefix>-v0.1.0
 ```
 
-> **Legacy paths**: `worker-images` has never completed successfully (2 runs,
-> both failed 2026-02-16) and `publish-migrate` last failed 2026-02-18. Neither
-> is consumed by a deployment — migrations run from the `api` image, and worker
-> toolchains ship as init containers. Repair or retire rather than assuming they
-> work. Run logs have expired, so the cause is unconfirmed; one difference worth
-> checking first is that these two build `linux/amd64,linux/arm64` while the
-> service images build `linux/amd64` only.
+> **Retired paths (2026-08-25)**: `worker-images.yml` never completed
+> successfully and `publish-migrate.yml` had been failing since 2026-02-18.
+> Both workflows were removed because no deployment consumes their artifacts.
+> Do not push `worker-images/v*` or `eve-migrate/v*` tags: they no longer have a
+> publishing contract. Migrations run from the versioned `api` service image;
+> language/media toolchains ship as separate init-container images.
 
 ## Service images (`release-v*`)
 
@@ -127,16 +124,16 @@ tag and run `npm version <tag-version>` before publishing. **The `version` field
 in `package.json` is ignored**, so the in-repo values drift and are not a
 reliable guide to what is published.
 
-Always check npm before tagging. As of 2026-08-04:
+Always check npm before tagging. As of 2026-08-25:
 
 | Package | Published | In repo | Next tag must be ≥ |
 | --- | --- | --- | --- |
-| `@eve-horizon/cli` | `0.2.71` | 0.2.44 | `cli-v0.2.72` |
+| `@eve-horizon/cli` | `0.2.73` | 0.2.44 | `cli-v0.2.74` |
 | `@eve-horizon/auth` + `auth-react` | `0.1.5` | 0.0.1 | `sdk-v0.1.6` |
 | `@eve-horizon/chat` + `chat-react` | `0.0.2` | 0.0.1 | `chat-v0.0.3` |
 
-`@eve-horizon/cli@0.2.71` was the first npm release published from the OSS repo
-(`cli-v0.2.71`, 2026-08-04), proving the npm path. `auth`/`chat` are still on
+`@eve-horizon/cli@0.2.71` was the first npm release published from the OSS repo.
+The current `0.2.73` release was published there on 2026-08-25. `auth`/`chat` are still on
 their private-repo versions — the first `sdk-v*`/`chat-v*` tag will be their
 first OSS publish.
 

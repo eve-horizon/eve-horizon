@@ -18,8 +18,11 @@ Eve Horizon is a **job-first platform for running AI-powered skills against Git 
 - [docs/ideas/agent-native-design.md](../ideas/agent-native-design.md)
 
 **Supporting repos**:
+- Infrastructure template: https://github.com/eve-horizon/eve-horizon-infra
+- Starter: https://github.com/eve-horizon/eve-horizon-starter
 - Skillpacks: https://github.com/eve-horizon/eve-skillpacks
 - Fullstack example: https://github.com/eve-horizon/eve-horizon-fullstack-example
+- Software Factory AgentPack: https://github.com/eve-horizon/eve-software-factory
 
 ---
 

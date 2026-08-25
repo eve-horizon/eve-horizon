@@ -1,7 +1,7 @@
 # Deployment
 
 > Status: Current
-> Last Updated: 2026-07-22
+> Last Updated: 2026-08-25
 
 ## Purpose
 
@@ -246,144 +246,25 @@ docker restart k3d-eve-local-serverlb
 
 See [k8s-local-stack.md](./k8s-local-stack.md) for detailed k8s documentation.
 
-## Worker Image Registry
+## Runner and Toolchain Images
 
-Eve Horizon publishes pre-built worker images to public ECR for use in production and integration environments. These images eliminate the need to build worker images locally and ensure consistent toolchain versions across deployments.
+Platform releases publish one versioned `worker` service image alongside the
+other six services:
 
-### Available Images
-
-All worker images are published to `public.ecr.aws/w7c4v0w3/eve-horizon` and follow a consistent naming and tagging convention:
-
-| Image | Public ECR Path | Description |
-|-------|-----------|-------------|
-| **base** | `public.ecr.aws/w7c4v0w3/eve-horizon/worker-base:<version>` | Runtime without toolchains - Node.js, worker harness, and base utilities only |
-| **python** | `public.ecr.aws/w7c4v0w3/eve-horizon/worker-python:<version>-py3.11` | Python 3.11, pip, uv package manager |
-| **rust** | `public.ecr.aws/w7c4v0w3/eve-horizon/worker-rust:<version>-rust1.75` | Rust 1.75 via rustup, cargo |
-| **java** | `public.ecr.aws/w7c4v0w3/eve-horizon/worker-java:<version>-jdk21` | OpenJDK 21 |
-| **kotlin** | `public.ecr.aws/w7c4v0w3/eve-horizon/worker-kotlin:<version>-kotlin2.0-jdk21` | Kotlin 2.0 + OpenJDK 21 |
-| **full** | `public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:<version>` | All toolchains (default) |
-
-### Versioning and Tags
-
-Worker images use a structured tagging scheme for traceability and version pinning:
-
-**Version tags** (created on git tag push):
-- Format: `worker-images/vX.Y.Z` in git
-- Examples:
-- `public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:0.1.0`
-- `public.ecr.aws/w7c4v0w3/eve-horizon/worker-python:0.1.0-py3.11`
-- `public.ecr.aws/w7c4v0w3/eve-horizon/worker-rust:0.1.0-rust1.75`
-
-**SHA tags** (created on every build):
-- Format: `sha-<short-sha>`
-- Example: `public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:sha-a1b2c3d`
-- Use for pinning to exact commits during development
-
-**Multi-architecture support**:
-- All images are built for `linux/amd64` and `linux/arm64` platforms
-- Automatic platform selection based on host architecture
-
-### Configuration
-
-Worker images are configured via the `EVE_RUNNER_IMAGE` environment variable in worker deployments. This variable specifies the container image used for ephemeral runner pods.
-
-#### Kubernetes Deployments
-
-Set `EVE_RUNNER_IMAGE` in the worker deployment manifest:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: worker
-  namespace: eve
-spec:
-  template:
-    spec:
-      containers:
-      - name: worker
-        image: public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:latest
-        env:
-        - name: EVE_RUNNER_IMAGE
-          value: public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:0.1.0
+```text
+public.ecr.aws/w7c4v0w3/eve-horizon/worker:<platform-version>
 ```
 
-For specialized worker pools, use variant-specific images:
+Deployment instances pin that image as both the worker deployment image and
+`EVE_RUNNER_IMAGE`. Language and media tooling is materialised separately from
+`toolchain-{python,media,rust,java,kotlin}` images using
+`EVE_TOOLCHAIN_IMAGE_PREFIX` and `EVE_TOOLCHAIN_IMAGE_TAG` on worker and
+agent-runtime pods. Toolchains have their own release line; they are not
+`worker-full` variants.
 
-```yaml
-# Python-specific worker pool
-- name: EVE_RUNNER_IMAGE
-  value: public.ecr.aws/w7c4v0w3/eve-horizon/worker-python:0.1.0-py3.11
-
-# Rust-specific worker pool
-- name: EVE_RUNNER_IMAGE
-  value: public.ecr.aws/w7c4v0w3/eve-horizon/worker-rust:0.1.0-rust1.75
-```
-
-#### Docker Compose
-
-Set `EVE_RUNNER_IMAGE` in the worker service environment:
-
-```yaml
-services:
-  worker:
-    image: public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:latest
-    environment:
-      - EVE_RUNNER_IMAGE=public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:0.1.0
-```
-
-For multi-worker deployments with different toolchains:
-
-```yaml
-services:
-  worker-python:
-    image: public.ecr.aws/w7c4v0w3/eve-horizon/worker-python:0.1.0-py3.11
-    environment:
-      - EVE_RUNNER_IMAGE=public.ecr.aws/w7c4v0w3/eve-horizon/worker-python:0.1.0-py3.11
-    ports:
-      - "4812:4811"
-
-  worker-rust:
-    image: public.ecr.aws/w7c4v0w3/eve-horizon/worker-rust:0.1.0-rust1.75
-    environment:
-      - EVE_RUNNER_IMAGE=public.ecr.aws/w7c4v0w3/eve-horizon/worker-rust:0.1.0-rust1.75
-    ports:
-      - "4813:4811"
-```
-
-### Version Pinning Strategy
-
-**Production deployments**:
-- Use semantic version tags for stability: `public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:0.1.0`
-- Pin to specific versions to prevent unexpected toolchain updates
-- Update versions explicitly through deployment manifests
-
-**Development/testing**:
-- Use SHA tags for exact commit traceability: `public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:sha-a1b2c3d`
-- Use `latest` tag for continuous integration testing (auto-updated on push)
-
-**Security updates**:
-- Monitor registry for published CVE fixes
-- Update pinned versions in deployment manifests when new versions are released
-
-### Publishing Workflow
-
-Images are automatically published via GitHub Actions when git tags matching `worker-images/v*` are pushed:
-
-```bash
-# Create and push a new version tag
-git tag worker-images/v0.2.0
-git push origin worker-images/v0.2.0
-```
-
-The CI workflow:
-1. Extracts the version from the tag (e.g., `worker-images/v0.2.0` becomes `0.2.0`)
-2. Builds all worker image variants in parallel
-3. Tags each image with:
-   - Version tag: `<version>` or `<version>-<variant>` (e.g., `0.2.0`, `0.2.0-py3.11`)
-   - SHA tag: `sha-<short-sha>` (e.g., `sha-a1b2c3d`)
-4. Pushes images to public ECR with multi-architecture support (amd64 and arm64)
-5. Uses Docker BuildKit layer caching for faster rebuilds
+Production instances must pin the seven service images to one release version.
+Do not use `worker-full`, `worker-python`, or other `worker-*` variant names:
+those images never became a supported public release surface.
 
 ### Image Pull Authentication
 
@@ -487,9 +368,9 @@ For the AWS EKS overlay, the API pod's IRSA role must include `ses:GetSuppressed
 
 Production uses Kubernetes (k3s or managed k8s):
 
-- **Worker images**: Use published ECR images (see [Worker Image Registry](#worker-image-registry) above)
-  - Pin to specific versions: `public.ecr.aws/w7c4v0w3/eve-horizon/worker-full:0.1.0`
-  - Avoid `latest` tag in production for stability
+- **Platform images**: Pin all seven service images, including `worker`, to the
+  same release version. Use the separate toolchain-image prefix/tag settings
+  for on-demand language and media tooling.
 - **ConfigMaps/Secrets**: Environment configuration and credentials
 - **Persistent volumes**: Database and workspace storage
 - **RBAC**: Worker service account permissions (pods, PVCs, services CRUD)

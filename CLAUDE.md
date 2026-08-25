@@ -74,7 +74,7 @@ For multi-project app-link work on the same local stack, use `eve local mesh`:
 
 **Phase**: Pre-MVP. K8s runtime, agent runtime, chat gateway, builds/deploy pipeline, auth/RBAC complete.
 
-**Services** (6): API, orchestrator, worker, agent-runtime, gateway, SSO.
+**Services** (7): API, orchestrator, worker, agent-runtime, gateway, SSO, dashboard.
 
 **Capabilities**: full auth (SSH, GoTrue+SSO, service principals, custom roles, access groups), default-deny RBAC, K8s deploys with manifest interpolation, BuildKit builds + releases + pipelines, 7 harnesses (mclaude/claude/zai/gemini/code/codex/pi) via `eve-agent-cli`, provider registry, agents/teams/threads with repo-first sync + AgentPacks, Slack+Nostr gateway, org filesystem sync, org docs, cost tracking (receipts, `llm.call` events, budgets, balance ledger), analytics, webhooks, app SSO SDK (`@eve-horizon/auth`), embedded chat SDK (`@eve-horizon/chat`).
 
@@ -84,19 +84,19 @@ For multi-project app-link work on the same local stack, use `eve local mesh`:
 
 ## Releases
 
-Published CLI: `0.2.71` (npm, first cut from the OSS repo). All releases are
+Published CLI: `0.2.73` (npm). All releases are
 tag-driven via GitHub Actions, cut from `eve-horizon/eve-horizon` only.
 
 > npm versions come from the **tag**, not `package.json` — the in-repo values
 > are stale and misleading (cli says 0.2.44, SDKs say 0.0.1). Run
 > `npm view @eve-horizon/<pkg> version` before choosing a tag. Next tags must be
-> ≥ `cli-v0.2.72`, `sdk-v0.1.6`, `chat-v0.0.3`. See
+> ≥ `cli-v0.2.74`, `sdk-v0.1.6`, `chat-v0.0.3`. See
 > [ci-cd.md](./docs/system/ci-cd.md).
 
 > ✅ **Publishing fully cut over** — both paths proven end-to-end from
 > `eve-horizon/eve-horizon`. Images: `release-v0.1.314` (2026-07-22) published
 > all 7 service images to `public.ecr.aws/w7c4v0w3/eve-horizon`. npm:
-> `cli-v0.2.71` (2026-08-04) published `@eve-horizon/cli@0.2.71`, confirmed live
+> `cli-v0.2.73` (2026-08-25) published `@eve-horizon/cli@0.2.73`, confirmed live
 > and installable via `npx`. All 3 Actions secrets set and exercised. See
 > [oss-release-cutover.md](./docs/deploy/oss-release-cutover.md).
 
@@ -289,6 +289,7 @@ eve secrets import --org org_manualtestorg --file manual-tests.secrets  # Org/pr
 | [eve-horizon-starter](https://github.com/eve-horizon/eve-horizon-starter) | `../eve-horizon-starter` | Starter template |
 | [eve-horizon-fullstack-example](https://github.com/eve-horizon/eve-horizon-fullstack-example) | `../eve-horizon-fullstack-example` | Example app for deploy testing |
 | [eve-skillpacks](https://github.com/eve-horizon/eve-skillpacks) | `../eve-skillpacks` | Published skill packs |
+| [eve-software-factory](https://github.com/eve-horizon/eve-software-factory) | `../eve-software-factory` | Public AgentPack and relay example |
 | ingest-agentpack | `../../eve-horizon/ingest-agentpack` | Document ingestion AgentPack |
 
 If these are present at expected paths, agents may commit and push to `main` without explicit approval.
