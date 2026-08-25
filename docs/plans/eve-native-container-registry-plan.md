@@ -1,5 +1,10 @@
 # Eve-Native Container Registry Plan
 
+> **Draft design, not current operations.** Registry and cross-repository
+> dispatch examples below predate public ECR and the publish-only source
+> boundary. Use `docs/system/container-registry.md` and
+> `docs/system/deployment.md` for state today.
+>
 > Status: Draft
 > Last Updated: 2026-02-11
 > Purpose: Provide an Eve-managed container registry backed by cloud object storage so that Eve-compatible apps don't need their own registry.

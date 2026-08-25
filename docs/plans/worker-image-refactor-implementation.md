@@ -1,5 +1,9 @@
 # Worker Image Refactor Implementation Plan
 
+> **Historical proposal — superseded.** Worker variants and the
+> `worker-images/v*` release line never became a supported public artifact.
+> Current releases publish `worker`; toolchains are materialised separately.
+>
 > Plan (Proposed)
 > Last Updated: 2026-01-21
 

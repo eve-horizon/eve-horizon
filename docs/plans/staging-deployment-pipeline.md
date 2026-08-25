@@ -1,5 +1,9 @@
 # Staging Deployment Pipeline
 
+> **Historical draft — superseded.** It predates the public infra template,
+> public ECR release path, and instance-owned rollout boundary. Do not use its
+> GHCR, worker-variant, or automatic deployment examples operationally.
+>
 > Status: Draft
 > Last Updated: 2026-01-27
 > Purpose: Set up automated staging deployment infrastructure with Terraform, CI/CD pipeline, and operational skill.

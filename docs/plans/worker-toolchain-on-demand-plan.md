@@ -1,5 +1,10 @@
 # Worker Toolchain-on-Demand Plan
 
+> **Implementation history.** The toolchain-on-demand result shipped, but the
+> document's `worker-full` and `worker-images/v*` statements describe an
+> abandoned intermediate design. See `docs/system/worker-types.md` for state
+> today.
+>
 > **Status**: Implemented (2026-03-06, commit efb9e99)
 > **Date**: 2026-03-06
 > **Motivation**: Worker image is 2.6GB. Nodes with 20GB root volumes hit ephemeral-storage evictions during image pulls. Most agent jobs only need Node.js + harnesses (~800MB).

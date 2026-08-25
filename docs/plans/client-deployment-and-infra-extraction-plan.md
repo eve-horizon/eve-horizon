@@ -1,5 +1,10 @@
 # Client Deployment Strategy & Infrastructure Extraction Plan
 
+> **Historical design record — superseded.** The extraction completed into
+> `eve-horizon/eve-horizon-infra`; current releases use public ECR and never
+> dispatch deployments from the source repository. Use
+> `docs/system/deployment.md` and `docs/system/ci-cd.md` for state today.
+>
 > Status: Draft
 > Last Updated: 2026-02-10
 > Purpose: Decouple Eve platform deployment infrastructure from the source repository, establish a

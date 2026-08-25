@@ -1,5 +1,10 @@
 # Plan: Supabase-Style Migrations for Eve Projects
 
+> **Implementation history.** The standalone migrate runner remains part of
+> the historical implementation, but its dedicated image-publishing workflow
+> is retired. Current applications use `eve db migrate` or an app-owned
+> migration job; see `docs/system/db.md` and `docs/system/manifest.md`.
+>
 > **Status**: Implemented ✅
 > **Created**: 2026-01-28
 > **Completed**: 2026-01-28

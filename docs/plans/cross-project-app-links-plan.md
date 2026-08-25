@@ -1,5 +1,9 @@
 # Cross-Project App Links
 
+> **Proposed feature plan.** Its GHCR examples are historical constraints, not
+> current platform-image or release guidance. Current platform releases use
+> public ECR and are rolled out only by deployment instances.
+>
 > **Status**: Proposed
 > **Last Updated**: 2026-05-15
 > **Spec**: `eve-platform-specs/005 - Cross-Project App Links` (ACME-side request, opened 2026-05-14)
