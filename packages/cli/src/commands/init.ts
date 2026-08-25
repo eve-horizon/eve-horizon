@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import type { FlagValue } from '../lib/args';
 import { getStringFlag } from '../lib/args';
 
@@ -11,6 +11,8 @@ import { getStringFlag } from '../lib/args';
 
 const DEFAULT_TEMPLATE = 'https://github.com/eve-horizon/eve-horizon-starter';
 const DEFAULT_BRANCH = 'main';
+const FALLBACK_GIT_NAME = 'Eve Horizon Starter';
+const FALLBACK_GIT_EMAIL = 'eve-init@users.noreply.github.com';
 
 // ============================================================================
 // Main Handler
@@ -112,45 +114,7 @@ export async function handleInit(
       );
     }
 
-    const addResult = spawnSync('git', ['add', '-A'], {
-      cwd: resolvedTarget,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    if (addResult.status !== 0) {
-      throw new Error(
-        `Failed to stage initialized project:\n${addResult.stderr || addResult.stdout}`,
-      );
-    }
-
-    const gitConfig = (key: string): string => {
-      const result = spawnSync('git', ['config', '--get', key], {
-        cwd: resolvedTarget,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      return result.status === 0 ? result.stdout.trim() : '';
-    };
-
-    const commitArgs: string[] = [];
-    if (!gitConfig('user.name')) {
-      commitArgs.push('-c', 'user.name=Eve Horizon Starter');
-    }
-    if (!gitConfig('user.email')) {
-      commitArgs.push('-c', 'user.email=eve-init@users.noreply.github.com');
-    }
-    commitArgs.push('commit', '-m', 'Initial commit from eve-horizon-starter');
-
-    const commitResult = spawnSync('git', commitArgs, {
-      cwd: resolvedTarget,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    if (commitResult.status !== 0) {
-      throw new Error(
-        `Failed to commit initialized project:\n${commitResult.stderr || commitResult.stdout}`,
-      );
-    }
+    commitStagedChanges(resolvedTarget, 'Initial commit from eve-horizon-starter');
 
     // Install skills
     if (!skipSkills) {
@@ -262,11 +226,14 @@ async function installSkills(projectRoot: string): Promise<void> {
       console.log(`  Installing: ${source}`);
       for (const agent of agents) {
         try {
-          execSync(`${skillsBin} add ${JSON.stringify(source)} -a ${agent} -y --all`, {
+          const result = spawnSync(skillsBin, ['add', source, '-a', agent, '-y', '--all'], {
             cwd: projectRoot,
             stdio: 'inherit',
             timeout: 120000,
           });
+          if (result.status !== 0) {
+            throw new Error(`skills exited with status ${result.status}`);
+          }
         } catch {
           console.log(`  Warning: Failed to install ${source} for ${agent}`);
         }
@@ -276,26 +243,50 @@ async function installSkills(projectRoot: string): Promise<void> {
     // Ensure symlink
     ensureSkillsSymlink(projectRoot);
 
-    // Commit skill changes
-    try {
-      execSync('git add -A', { cwd: projectRoot, stdio: 'pipe' });
-      const hasChanges = spawnSync('git', ['diff', '--cached', '--quiet'], {
-        cwd: projectRoot,
-        encoding: 'utf8',
-      });
-      if (hasChanges.status !== 0) {
-        execSync('git commit -m "chore: install skills from skills.txt"', {
-          cwd: projectRoot,
-          stdio: 'pipe',
-        });
-      }
-    } catch {
-      // Ignore commit failures
-    }
+    commitStagedChanges(projectRoot, 'chore: install skills from skills.txt');
 
   } catch (err) {
     console.log('Warning: Failed to install some skills');
   }
+}
+
+/**
+ * Stage and commit generated project changes. Commit-only fallback identity
+ * keeps clean machines working without changing the user's Git config.
+ */
+export function commitStagedChanges(projectRoot: string, message: string): boolean {
+  const runGit = (args: string[]) => spawnSync('git', args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const addResult = runGit(['add', '-A']);
+  if (addResult.status !== 0) {
+    throw new Error(`Failed to stage initialized project:\n${addResult.stderr || addResult.stdout}`);
+  }
+
+  const diffResult = runGit(['diff', '--cached', '--quiet']);
+  if (diffResult.status === 0) return false;
+  if (diffResult.status !== 1) {
+    throw new Error(`Failed to inspect initialized project:\n${diffResult.stderr || diffResult.stdout}`);
+  }
+
+  const gitConfig = (key: string): string => {
+    const result = runGit(['config', '--get', key]);
+    return result.status === 0 ? result.stdout.trim() : '';
+  };
+
+  const commitArgs: string[] = [];
+  if (!gitConfig('user.name')) commitArgs.push('-c', `user.name=${FALLBACK_GIT_NAME}`);
+  if (!gitConfig('user.email')) commitArgs.push('-c', `user.email=${FALLBACK_GIT_EMAIL}`);
+  commitArgs.push('commit', '-m', message);
+
+  const commitResult = runGit(commitArgs);
+  if (commitResult.status !== 0) {
+    throw new Error(`Failed to commit initialized project:\n${commitResult.stderr || commitResult.stdout}`);
+  }
+  return true;
 }
 
 /**
