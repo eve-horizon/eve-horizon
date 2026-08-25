@@ -111,11 +111,46 @@ export async function handleInit(
         `Failed to initialize git repository:\n${initResult.stderr || initResult.stdout}`,
       );
     }
-    execSync('git add -A', { cwd: resolvedTarget, stdio: 'pipe' });
-    execSync('git commit -m "Initial commit from eve-horizon-starter"', {
+
+    const addResult = spawnSync('git', ['add', '-A'], {
       cwd: resolvedTarget,
-      stdio: 'pipe',
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
+    if (addResult.status !== 0) {
+      throw new Error(
+        `Failed to stage initialized project:\n${addResult.stderr || addResult.stdout}`,
+      );
+    }
+
+    const gitConfig = (key: string): string => {
+      const result = spawnSync('git', ['config', '--get', key], {
+        cwd: resolvedTarget,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return result.status === 0 ? result.stdout.trim() : '';
+    };
+
+    const commitArgs: string[] = [];
+    if (!gitConfig('user.name')) {
+      commitArgs.push('-c', 'user.name=Eve Horizon Starter');
+    }
+    if (!gitConfig('user.email')) {
+      commitArgs.push('-c', 'user.email=eve-init@users.noreply.github.com');
+    }
+    commitArgs.push('commit', '-m', 'Initial commit from eve-horizon-starter');
+
+    const commitResult = spawnSync('git', commitArgs, {
+      cwd: resolvedTarget,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (commitResult.status !== 0) {
+      throw new Error(
+        `Failed to commit initialized project:\n${commitResult.stderr || commitResult.stdout}`,
+      );
+    }
 
     // Install skills
     if (!skipSkills) {

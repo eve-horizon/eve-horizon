@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { handleInit } from '../src/commands/init';
 
-const gitEnvironment = () => ({
+const templateGitEnvironment = () => ({
   ...process.env,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: '/dev/null',
@@ -24,7 +24,16 @@ describe('eve init', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'eve-cli-init-'));
     const template = path.join(root, 'template');
     const target = path.join(root, 'target');
-    const env = gitEnvironment();
+    const templateEnv = templateGitEnvironment();
+    const cleanEnv = {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+    };
+    delete cleanEnv.GIT_AUTHOR_NAME;
+    delete cleanEnv.GIT_AUTHOR_EMAIL;
+    delete cleanEnv.GIT_COMMITTER_NAME;
+    delete cleanEnv.GIT_COMMITTER_EMAIL;
     const previous = {
       GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
       GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
@@ -35,12 +44,16 @@ describe('eve init', () => {
     };
 
     fs.mkdirSync(template);
-    runGit(template, ['init', '--initial-branch=main'], env);
+    runGit(template, ['init', '--initial-branch=main'], templateEnv);
     fs.writeFileSync(path.join(template, 'README.md'), '# Local template\n');
-    runGit(template, ['add', 'README.md'], env);
-    runGit(template, ['commit', '-m', 'Initial template'], env);
+    runGit(template, ['add', 'README.md'], templateEnv);
+    runGit(template, ['commit', '-m', 'Initial template'], templateEnv);
 
-    Object.assign(process.env, env);
+    Object.assign(process.env, cleanEnv);
+    delete process.env.GIT_AUTHOR_NAME;
+    delete process.env.GIT_AUTHOR_EMAIL;
+    delete process.env.GIT_COMMITTER_NAME;
+    delete process.env.GIT_COMMITTER_EMAIL;
 
     try {
       await handleInit([target], {
@@ -48,7 +61,10 @@ describe('eve init', () => {
         'skip-skills': true,
       });
 
-      expect(runGit(target, ['branch', '--show-current'], env)).toBe('main');
+      expect(runGit(target, ['branch', '--show-current'], cleanEnv)).toBe('main');
+      expect(runGit(target, ['log', '-1', '--format=%an <%ae>'], cleanEnv)).toBe(
+        'Eve Horizon Starter <eve-init@users.noreply.github.com>',
+      );
       expect(fs.readFileSync(path.join(target, 'README.md'), 'utf8')).toBe(
         '# Local template\n',
       );
