@@ -5,7 +5,9 @@
  * deployed app to that app's managed database, tracking state in
  * `schema_migrations` with SHA-256 checksums and auto-baseline. Consumers:
  * `eve db migrate --env/--url --path <dir>`, deployer-managed app
- * migrations, and the standalone `eve-migrate` image (publish-migrate.yml).
+ * migrations, and the legacy standalone `eve-migrate` image. Publishing for
+ * that image is retired; current applications should use `eve db migrate` or
+ * declare and build their own migration job.
  *
  * This is NOT the platform runner (packages/db/src/migrate.ts), which
  * applies the platform's own sequence-named migrations to the Eve database
