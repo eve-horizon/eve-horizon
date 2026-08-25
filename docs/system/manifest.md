@@ -332,13 +332,15 @@ x-eve:
 ### Top-Level `x-eve.packs` and `x-eve.install_agents`
 
 AgentPacks let projects import agent, team, chat, and skills configuration
-from external repositories. Packs are resolved by `eve agents sync` and locked
-in `.eve/packs.lock.yaml`.
+from external repositories. `eve agents sync` records each pack in
+`.eve/packs.lock.yaml`. `eve skills install` verifies the manifest ref against
+that lock and installs skills from the exact resolved revision rather than the
+remote default branch.
 
 ```yaml
 x-eve:
-  # Default agents to install skills for (defaults to [claude-code])
-  install_agents: [claude-code, codex, gemini-cli]
+  # Defaults to [claude-code, codex, gemini-cli, pi]
+  install_agents: [claude-code, codex, gemini-cli, pi]
 
   packs:
     # Local pack

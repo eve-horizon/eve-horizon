@@ -8,14 +8,18 @@
 
 ```bash
 # Install the CLI globally
-npm install -g @eve-horizon/cli
+npm install -g @eve-horizon/cli@0.2.73
+
+# Install the skill installer used by eve init
+npm install -g skills@1.5.23
 
 # Initialize a new project
 eve init my-project
 cd my-project
 ```
 
-This downloads the starter template, sets up a fresh git repo, and installs skills.
+This downloads the starter template, creates a fresh `main`-branch repository,
+and installs skills from the public skillpack.
 
 ### 2. Start Your AI Coding Agent
 
@@ -49,9 +53,13 @@ That's it! Your project is ready.
 
 The `eve init` command:
 1. Downloaded the starter template from GitHub
-2. Set up a fresh git repository (no template history)
+2. Set up a fresh `main`-branch git repository (no template history)
 3. Installed Eve skills for your AI coding agent
-4. Made an initial commit
+4. Made an initial commit and, when skills changed the tree, a follow-up skills commit
+
+Generated commits use your configured Git identity. On a clean machine, the
+CLI supplies `Eve Horizon Starter <eve-init@users.noreply.github.com>` only for
+those commits; it does not write local or global Git configuration.
 
 The setup skill then automated:
 1. **Profile Creation**: `eve profile create staging --api-url https://api.eve.example.com`
@@ -108,7 +116,7 @@ cd my-project
 
 # Remove template git history and start fresh
 rm -rf .git
-git init
+git init --initial-branch=main
 git add -A
 git commit -m "Initial commit"
 

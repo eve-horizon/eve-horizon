@@ -4,7 +4,8 @@ Eve Horizon now has a public split between developer skills and runtime skills.
 Both still use OpenSkills `SKILL.md` content, but they are sourced and
 materialized differently.
 
-- **Developer skills** live in root `skills.txt` and are refreshed with `eve skills install`
+- **Developer skills** come from manifest AgentPacks and root `skills.txt`, and
+  are refreshed with `eve skills install`
 - **Runtime skills** live in `.eve/manifest.yaml`, are pinned by `.eve/packs.lock.yaml`, and are materialized with `eve skills materialize`
 
 ## Overview
@@ -51,9 +52,17 @@ Use the install path for local coding agents working on the repo:
 eve skills install
 ```
 
-This command reads `skills.txt` and installs each source via the upstream
-`skills` CLI. It is the compatibility path for remote repos, one-off installs,
-and broader developer tooling.
+This command processes `.eve/manifest.yaml` AgentPacks first, then
+`skills.txt`. Remote AgentPacks require a ref and matching
+`.eve/packs.lock.yaml` entry. The CLI resolves that exact revision into its
+pack cache and passes the resolved local skill directories to the upstream
+`skills` CLI; it does not ask the installer to follow the remote default
+branch. Private-skill paths are excluded unless the source explicitly targets
+`private-skills`, and a manifest-pack installer failure fails the command.
+
+The default install targets are Claude Code, Codex, Gemini CLI, and Pi.
+`x-eve.install_agents` or a pack-level `install_agents` overrides that list.
+The `skills` CLI must be available on `PATH`.
 
 ### Runtime Skills
 
