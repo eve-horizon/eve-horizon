@@ -7,9 +7,11 @@ import {
   findSkillDirs,
   parseSkillSource,
   parseSkillsManifest,
+  resolvePack,
   sourcePathExplicitlyTargetsPrivate,
   UNIVERSAL_SKILLS_DIR,
 } from '@eve/shared';
+import type { PackEntry } from '@eve/shared';
 import type { FlagValue } from '../lib/args';
 import { runSkillsMaterialize } from '../lib/skills-materialize';
 
@@ -90,7 +92,7 @@ async function handleInstall(positionals: string[], flags: Record<string, FlagVa
   }
 
   // Install from packs (from .eve/manifest.yaml x-eve.packs)
-  const packsInstalled = installPackSkills(skillsBin, projectRoot);
+  const packsInstalled = await installPackSkills(skillsBin, projectRoot);
 
   // Also install from skills.txt (complementary to packs — handles additional
   // sources like external skillpacks and private-skills/ that packs exclude)
@@ -190,7 +192,7 @@ const DEFAULT_AGENTS = [...DEFAULT_SKILL_AGENTS];
  * Install skills from packs defined in .eve/manifest.yaml x-eve.packs.
  * Returns true if packs were found and installed, false if no packs configured.
  */
-function installPackSkills(skillsBin: string, projectRoot: string): boolean {
+async function installPackSkills(skillsBin: string, projectRoot: string): Promise<boolean> {
   const manifestPath = path.join(projectRoot, '.eve', 'manifest.yaml');
   if (!fs.existsSync(manifestPath)) return false;
 
@@ -243,33 +245,37 @@ function installPackSkills(skillsBin: string, projectRoot: string): boolean {
     const agents = pack.install_agents ?? installAgents;
     console.log(`  Pack: ${pack.source}`);
 
-    const localDir = resolveLocalDirIfExists({ source: pack.source, type: 'local', raw: pack.source, name: path.basename(pack.source) }, projectRoot);
-    const wantsExcludePrivate =
-      localDir !== null &&
-      !sourcePathExplicitlyTargetsPrivate(pack.source);
+    const projectSlug = typeof manifest.project === 'string'
+      ? manifest.project
+      : path.basename(projectRoot);
+    const resolved = await resolvePack(pack as PackEntry, projectSlug, projectRoot);
+    const excludePrivate = !sourcePathExplicitlyTargetsPrivate(pack.source);
+    const skillPaths = resolved.skillPaths.filter((skillPath) =>
+      !excludePrivate || !skillPath.split(path.sep).includes(PRIVATE_SKILLS_DIRNAME)
+    );
+
+    if (skillPaths.length === 0) {
+      console.log(`  No skills found in ${pack.source}`);
+      continue;
+    }
 
     for (const agent of agents) {
-      try {
-        if (wantsExcludePrivate && localDir) {
-          const skillDirs = findSkillDirs(localDir, { fullDepth: true, excludePrivate: true });
-          for (const dir of skillDirs) {
-            const rel = path.relative(projectRoot, dir);
-            const installSource = rel.startsWith('.') ? rel : `./${rel}`;
-            execSync(`${skillsBin} add ${JSON.stringify(installSource)} -a ${agent} -s '*' -y --full-depth`, {
-              cwd: projectRoot,
-              stdio: 'inherit',
-              timeout: 120000,
-            });
-          }
-        } else {
-          execSync(`${skillsBin} add ${JSON.stringify(pack.source)} -a ${agent} -s '*' -y --full-depth`, {
+      for (const skillPath of skillPaths) {
+        const result = spawnSync(
+          skillsBin,
+          ['add', skillPath, '-a', agent, '-s', '*', '-y', '--full-depth'],
+          {
             cwd: projectRoot,
             stdio: 'inherit',
             timeout: 120000,
-          });
+          },
+        );
+        if (result.status !== 0) {
+          throw new Error(
+            `Failed to install ${skillPath} from ${pack.source} for ${agent} ` +
+            `(skills exited with status ${result.status})`,
+          );
         }
-      } catch (err) {
-        console.error(`  Failed to install pack ${pack.source} for ${agent}:`, err);
       }
     }
   }
