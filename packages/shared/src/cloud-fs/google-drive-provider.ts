@@ -121,6 +121,32 @@ async function streamToBuffer(stream: ReadableStream): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/** Escape a value for use inside a single-quoted Drive `q` string literal. */
+function escapeQueryValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/** Build a multipart/related body for Drive multipart uploads (create or update). */
+function buildMultipartBody(
+  metadata: Record<string, unknown>,
+  content: Buffer,
+  mimeType: string,
+): { body: Buffer; contentType: string } {
+  const boundary = `__eve_cloud_fs_${Date.now()}__`;
+  const preamble = Buffer.from([
+    `--${boundary}\r\n`,
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+    JSON.stringify(metadata),
+    `\r\n--${boundary}\r\n`,
+    `Content-Type: ${mimeType}\r\n\r\n`,
+  ].join(''));
+  const epilogue = Buffer.from(`\r\n--${boundary}--`);
+  return {
+    body: Buffer.concat([preamble, content, epilogue]),
+    contentType: `multipart/related; boundary=${boundary}`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Provider implementation
 // ---------------------------------------------------------------------------
@@ -240,28 +266,14 @@ export class GoogleDriveProvider implements CloudFsProvider {
       ? content
       : await streamToBuffer(content);
 
-    const boundary = `__eve_cloud_fs_${Date.now()}__`;
-    const metadata = JSON.stringify({ name, parents: [parentId] });
-
-    // Build multipart/related body
-    const parts = [
-      `--${boundary}\r\n`,
-      'Content-Type: application/json; charset=UTF-8\r\n\r\n',
-      metadata,
-      `\r\n--${boundary}\r\n`,
-      `Content-Type: ${mimeType}\r\n\r\n`,
-    ];
-
-    const preamble = Buffer.from(parts.join(''));
-    const epilogue = Buffer.from(`\r\n--${boundary}--`);
-    const body = Buffer.concat([preamble, contentBuffer, epilogue]);
+    const { body, contentType } = buildMultipartBody({ name, parents: [parentId] }, contentBuffer, mimeType);
 
     const url = `${UPLOAD_API}/files?uploadType=multipart&supportsAllDrives=true&fields=${FILE_FIELDS}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         ...authHeaders(accessToken),
-        'Content-Type': `multipart/related; boundary=${boundary}`,
+        'Content-Type': contentType,
         'Content-Length': String(body.byteLength),
       },
       body,
@@ -270,6 +282,60 @@ export class GoogleDriveProvider implements CloudFsProvider {
 
     const file = (await response.json()) as DriveFile;
     return toEntry(file);
+  }
+
+  async updateFileContent(
+    accessToken: string,
+    fileId: string,
+    content: Buffer | ReadableStream,
+    mimeType: string,
+  ): Promise<CloudFsEntry> {
+    const contentBuffer = Buffer.isBuffer(content)
+      ? content
+      : await streamToBuffer(content);
+
+    // PATCH with media uploads a new revision of the same file: id, link and
+    // sharing stay stable and Drive keeps the revision history.
+    const { body, contentType } = buildMultipartBody({ mimeType }, contentBuffer, mimeType);
+
+    const url = `${UPLOAD_API}/files/${encodeURIComponent(fileId)}?uploadType=multipart&supportsAllDrives=true&fields=${FILE_FIELDS}`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        ...authHeaders(accessToken),
+        'Content-Type': contentType,
+        'Content-Length': String(body.byteLength),
+      },
+      body,
+    });
+    await assertOk(response, 'updateFileContent');
+
+    const file = (await response.json()) as DriveFile;
+    return toEntry(file);
+  }
+
+  async findFileByName(
+    accessToken: string,
+    parentId: string,
+    name: string,
+  ): Promise<CloudFsEntry | null> {
+    // Drive allows same-name siblings. Prefer the most recently modified file so
+    // replace-in-place converges on the copy readers already treat as current.
+    const params = new URLSearchParams({
+      ...SHARED_DRIVE_LIST_PARAMS,
+      q: `'${parentId}' in parents and name = '${escapeQueryValue(name)}' and mimeType != '${FOLDER_MIME}' and trashed = false`,
+      fields: `files(${FILE_FIELDS})`,
+      orderBy: 'modifiedTime desc',
+      pageSize: '1',
+    });
+
+    const url = `${DRIVE_API}/files?${params.toString()}`;
+    const response = await fetch(url, { headers: authHeaders(accessToken) });
+    await assertOk(response, 'findFileByName');
+
+    const data = (await response.json()) as DriveFileList;
+    const file = data.files[0];
+    return file ? toEntry(file) : null;
   }
 
   async moveFile(
@@ -349,6 +415,18 @@ export class GoogleDriveProvider implements CloudFsProvider {
       headers: authHeaders(accessToken),
     });
     await assertOk(response, 'deleteFile');
+  }
+
+  async trashFile(accessToken: string, fileId: string): Promise<void> {
+    // files.delete is permanent in Drive v3; trashing is recoverable (~30 days).
+    const params = new URLSearchParams({ ...SHARED_DRIVE_PARAMS, fields: 'id,trashed' });
+    const url = `${DRIVE_API}/files/${encodeURIComponent(fileId)}?${params.toString()}`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: true }),
+    });
+    await assertOk(response, 'trashFile');
   }
 
   async searchFiles(

@@ -224,7 +224,7 @@ export class CloudFsController {
     @Headers('x-cloud-fs-path') targetPath: string,
     @Headers('content-type') mimeType: string,
     @Req() req: { rawBody?: Buffer; body?: Buffer },
-  ): Promise<{ file_id: string; web_view_link: string }> {
+  ): Promise<{ file_id: string; web_view_link: string; replaced: boolean }> {
     await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', caller);
     if (!targetPath) throw new BadRequestException('X-Cloud-FS-Path header is required');
     // rawBody is set by the custom Fastify content-type parser in main.ts;
@@ -250,6 +250,23 @@ export class CloudFsController {
   ): Promise<CloudFsEntry> {
     await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', caller);
     return this.cloudFsService.createFolder(orgId, mountId, body.name, body.parent_id);
+  }
+
+  @RequirePermission('cloud_fs:admin')
+  @Delete('mounts/:mount_id/files/:file_id')
+  @ApiOperation({ summary: 'Move a file to the cloud storage trash (recoverable)' })
+  @ApiParam({ name: 'org_id', description: 'Organization ID' })
+  @ApiParam({ name: 'mount_id', description: 'Mount ID' })
+  @ApiParam({ name: 'file_id', description: 'Provider file ID' })
+  async trashFile(
+    @Param('org_id') orgId: string,
+    @Param('mount_id') mountId: string,
+    @Param('file_id') fileId: string,
+    @CurrentUser() caller: AuthUser | undefined,
+  ): Promise<{ ok: boolean; file_id: string; trashed: boolean }> {
+    await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'write', caller);
+    await this.cloudFsService.trashFile(orgId, mountId, fileId);
+    return { ok: true, file_id: fileId, trashed: true };
   }
 
   // ── Search ──────────────────────────────────────────────────────────────

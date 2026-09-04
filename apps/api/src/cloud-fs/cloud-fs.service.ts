@@ -303,7 +303,7 @@ export class CloudFsService {
     targetPath: string,
     content: Buffer,
     mimeType: string,
-  ): Promise<{ file_id: string; web_view_link: string }> {
+  ): Promise<{ file_id: string; web_view_link: string; replaced: boolean }> {
     const mount = await this.resolveMount(orgId, mountId);
     if (mount.mode === 'read_only') throw new ForbiddenException('Mount is read-only');
     const { provider, accessToken } = await this.getProviderAndToken(mount);
@@ -334,8 +334,16 @@ export class CloudFsService {
         }
       }
 
+      // Drive allows same-name siblings, so uploading by path must replace the
+      // existing file in place (new revision, same id) rather than add a copy.
+      const existing = await provider.findFileByName(accessToken, parentId, fileName);
+      if (existing) {
+        const updated = await provider.updateFileContent(accessToken, existing.id, content, mimeType);
+        return { file_id: updated.id, web_view_link: updated.web_url || '', replaced: true };
+      }
+
       const result = await provider.uploadFile(accessToken, parentId, fileName, content, mimeType);
-      return { file_id: result.id, web_view_link: result.web_url || '' };
+      return { file_id: result.id, web_view_link: result.web_url || '', replaced: false };
     } catch (err) {
       this.handleProviderError(err);
     }
@@ -353,6 +361,18 @@ export class CloudFsService {
 
     try {
       return await provider.createFolder(accessToken, parentId || mount.root_folder_id, name);
+    } catch (err) {
+      this.handleProviderError(err);
+    }
+  }
+
+  async trashFile(orgId: string, mountId: string, fileId: string): Promise<void> {
+    const mount = await this.resolveMount(orgId, mountId);
+    if (mount.mode === 'read_only') throw new ForbiddenException('Mount is read-only');
+    const { provider, accessToken } = await this.getProviderAndToken(mount);
+
+    try {
+      await provider.trashFile(accessToken, fileId);
     } catch (err) {
       this.handleProviderError(err);
     }

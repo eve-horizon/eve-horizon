@@ -77,6 +77,24 @@ export interface CloudFsProvider {
 
   deleteFile(accessToken: string, fileId: string): Promise<void>;
 
+  /** Move a file to the provider's trash (recoverable). Never a permanent delete. */
+  trashFile(accessToken: string, fileId: string): Promise<void>;
+
+  /** Newest non-folder child named `name` directly under `parentId`, or null. */
+  findFileByName(
+    accessToken: string,
+    parentId: string,
+    name: string,
+  ): Promise<CloudFsEntry | null>;
+
+  /** Replace an existing file's content in place (same id, new revision). */
+  updateFileContent(
+    accessToken: string,
+    fileId: string,
+    content: Buffer | ReadableStream,
+    mimeType: string,
+  ): Promise<CloudFsEntry>;
+
   searchFiles(
     accessToken: string,
     rootId: string,

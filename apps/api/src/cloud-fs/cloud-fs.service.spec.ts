@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ForbiddenException } from '@nestjs/common';
 import { CloudFsService } from './cloud-fs.service.js';
 import type { CloudFsEntry, CloudFsProvider } from '@eve/shared';
 
@@ -44,6 +45,9 @@ function provider(overrides: Partial<CloudFsProvider> = {}): CloudFsProvider {
     moveFile: vi.fn(),
     createFolder: vi.fn(),
     deleteFile: vi.fn(),
+    trashFile: vi.fn(),
+    findFileByName: vi.fn().mockResolvedValue(null),
+    updateFileContent: vi.fn(),
     searchFiles: vi.fn().mockResolvedValue({ entries: [] }),
     resolvePath: vi.fn(),
     buildPath: vi.fn().mockResolvedValue('/'),
@@ -193,5 +197,59 @@ describe('CloudFsService pagination', () => {
     expect(fakeProvider.listFiles).toHaveBeenCalledWith('access-token', 'folder_reports', {});
     expect(result.path).toBe('/Reports');
     expect(result.entries[0]?.path).toBe('/Reports/Q1.pdf');
+  });
+});
+
+describe('CloudFsService upload-by-path and trash', () => {
+  it('replaces an existing same-name file in place instead of creating a duplicate', async () => {
+    const existing = entry({ id: 'file_existing', name: 'report.md', web_url: 'https://example.com/existing' });
+    const fakeProvider = provider({
+      resolvePath: vi.fn().mockResolvedValue('folder_inputs'),
+      findFileByName: vi.fn().mockResolvedValue(existing),
+      updateFileContent: vi.fn().mockResolvedValue({ ...existing, modified_at: '2026-09-04T00:00:00.000Z' }),
+    });
+    const service = createService(fakeProvider);
+
+    const result = await service.uploadFile('org_test', 'mount_a', '/inputs/report.md', Buffer.from('v2'), 'text/markdown');
+
+    expect(fakeProvider.findFileByName).toHaveBeenCalledWith('access-token', 'folder_inputs', 'report.md');
+    expect(fakeProvider.updateFileContent).toHaveBeenCalledWith('access-token', 'file_existing', Buffer.from('v2'), 'text/markdown');
+    expect(fakeProvider.uploadFile).not.toHaveBeenCalled();
+    expect(result).toEqual({ file_id: 'file_existing', web_view_link: 'https://example.com/existing', replaced: true });
+  });
+
+  it('creates the file when no same-name sibling exists', async () => {
+    const created = entry({ id: 'file_new', name: 'report.md', web_url: 'https://example.com/new' });
+    const fakeProvider = provider({
+      resolvePath: vi.fn().mockResolvedValue('folder_inputs'),
+      findFileByName: vi.fn().mockResolvedValue(null),
+      uploadFile: vi.fn().mockResolvedValue(created),
+    });
+    const service = createService(fakeProvider);
+
+    const result = await service.uploadFile('org_test', 'mount_a', '/inputs/report.md', Buffer.from('v1'), 'text/markdown');
+
+    expect(fakeProvider.uploadFile).toHaveBeenCalledWith('access-token', 'folder_inputs', 'report.md', Buffer.from('v1'), 'text/markdown');
+    expect(fakeProvider.updateFileContent).not.toHaveBeenCalled();
+    expect(result).toEqual({ file_id: 'file_new', web_view_link: 'https://example.com/new', replaced: false });
+  });
+
+  it('trashes a file through the provider, never permanently deleting it', async () => {
+    const fakeProvider = provider({ trashFile: vi.fn().mockResolvedValue(undefined) });
+    const service = createService(fakeProvider);
+
+    await service.trashFile('org_test', 'mount_a', 'file_old');
+
+    expect(fakeProvider.trashFile).toHaveBeenCalledWith('access-token', 'file_old');
+    expect(fakeProvider.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses to trash on a read-only mount', async () => {
+    const fakeProvider = provider({ trashFile: vi.fn() });
+    const service = createService(fakeProvider);
+    (service as any).mounts.findById.mockResolvedValue({ ...mount(), mode: 'read_only' });
+
+    await expect(service.trashFile('org_test', 'mount_a', 'file_old')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(fakeProvider.trashFile).not.toHaveBeenCalled();
   });
 });

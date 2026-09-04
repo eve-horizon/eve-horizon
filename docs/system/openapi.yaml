@@ -11279,6 +11279,33 @@ paths:
       security: *a111
       summary: Get file metadata
       tags: *a112
+    delete:
+      operationId: CloudFsController_trashFile
+      parameters:
+        - name: org_id
+          required: true
+          in: path
+          description: Organization ID
+          schema:
+            type: string
+        - name: mount_id
+          required: true
+          in: path
+          description: Mount ID
+          schema:
+            type: string
+        - name: file_id
+          required: true
+          in: path
+          description: Provider file ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      security: *a111
+      summary: Move a file to the cloud storage trash (recoverable)
+      tags: *a112
   /orgs/{org_id}/cloud-fs/mounts/{mount_id}/files/{file_id}/download:
     get:
       operationId: CloudFsController_downloadFile

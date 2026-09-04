@@ -38,6 +38,8 @@ eve cloud-fs ls / --mount <mount_id> --recursive --json --org <org_id>
 eve cloud-fs search "budget" --mount <mount_id> --mime-type application/pdf --all --json --org <org_id>
 ```
 
+Per-mount file writes go through the API. `POST /orgs/:org_id/cloud-fs/mounts/:mount_id/upload` takes the raw body plus an `X-Cloud-FS-Path` header and is idempotent by path: if a non-folder file with that name already exists in the target folder, the newest one is updated in place as a new revision (same `file_id`, same link) and the response carries `replaced: true`; otherwise the file is created and `replaced: false`. `DELETE /orgs/:org_id/cloud-fs/mounts/:mount_id/files/:file_id` moves a file to the provider trash (recoverable). Nothing is permanently deleted through the API. Both require `cloud_fs:admin` and a `read_write` mount.
+
 Default browse/search returns one provider page and may include `next_page_token`. CLI `--all` loops until the token is absent or `EVE_CLOUD_FS_MAX_AUTO_PAGES` (default 200) is reached; JSON output includes `complete`, `page_count`, and `next_page_token` when incomplete. `--order-by` accepts `name`, `name_desc`, `modified`, or `modified_desc`. Recursive browse is server-side and bounded; it rejects `page_token`/`--all` and reports `truncated: true` when safety limits stop traversal.
 
 ## Slack

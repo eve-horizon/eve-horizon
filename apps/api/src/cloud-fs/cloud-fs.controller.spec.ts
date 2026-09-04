@@ -13,6 +13,7 @@ describe('CloudFsController scoped access', () => {
       browseMount: vi.fn().mockResolvedValue({ mount_id: 'mount_a', path: '/', entries: [] }),
       search: vi.fn().mockResolvedValue({ mount_id: 'mount_a', entries: [] }),
       getMount: vi.fn().mockResolvedValue({ id: 'mount_a', org_id: 'org_test' }),
+      trashFile: vi.fn().mockResolvedValue(undefined),
     };
     const scopedAccess = {
       assert: vi.fn().mockResolvedValue(undefined),
@@ -132,5 +133,22 @@ describe('CloudFsController scoped access', () => {
       orderBy: 'modified_desc',
       mimeType: 'application/pdf',
     });
+  });
+
+  it('asserts write access on the mount before trashing a file', async () => {
+    const { controller, cloudFsService, scopedAccess } = createController();
+    const user = { user_id: 'user_job', is_job_token: true, scope: { cloud_fs: { allow_mount_ids: ['mount_a'] } } };
+
+    const result = await controller.trashFile('org_test', 'mount_a', 'file_old', user);
+
+    expect(scopedAccess.assert).toHaveBeenCalledWith({
+      org_id: 'org_test',
+      permission: 'cloud_fs:admin',
+      user,
+      project_id: undefined,
+      resource: { type: 'cloud_fs', id: 'mount_a', action: 'write' },
+    });
+    expect(cloudFsService.trashFile).toHaveBeenCalledWith('org_test', 'mount_a', 'file_old');
+    expect(result).toEqual({ ok: true, file_id: 'file_old', trashed: true });
   });
 });
