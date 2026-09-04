@@ -670,6 +670,20 @@ workflows:
       expect(retryHints.workflow_retry_generation).toBe(2);
       expect(retryHints.workflow_retry_of).toBe('job_source');
     });
+
+    it('clears the stale claim-time assignee on retried script and action steps', () => {
+      const service = createService(mockManifestYamlWithoutGit);
+      const assigneeFor = (execution_type: string, assignee: string | null) =>
+        (service as any).retryStepAssignee({ execution_type, assignee });
+
+      // A failed script step carries the orchestrator's claim id. Cloning it
+      // makes the retry unclaimable: getReadyJobs requires assignee IS NULL and
+      // getReadyAssignedJobs only considers agent jobs.
+      expect(assigneeFor('script', 'orchestrator')).toBeNull();
+      expect(assigneeFor('action', 'orchestrator')).toBeNull();
+      expect(assigneeFor('agent', 'agent_01test')).toBe('agent_01test');
+      expect(assigneeFor('agent', null)).toBeNull();
+    });
   });
 
   describe('invoke - env_overrides propagation', () => {

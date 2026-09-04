@@ -1349,7 +1349,7 @@ export class WorkflowsService {
           labels: this.withRetryLabels(source.labels, source.id, generation),
           phase: 'ready',
           priority: source.priority,
-          assignee: source.assignee,
+          assignee: this.retryStepAssignee(source),
           review_required: source.review_required,
           review_status: null,
           reviewer: source.reviewer,
@@ -1489,6 +1489,19 @@ export class WorkflowsService {
 
   private isSupersededWorkflowStep(job: Job): boolean {
     return typeof this.asRecord(job.hints).workflow_retry_superseded_by === 'string';
+  }
+
+  /**
+   * Assignee for a workflow retry clone.
+   *
+   * Claiming stamps the claimer id (e.g. 'orchestrator') onto `assignee`, so a
+   * failed script/action step carries a stale claim-time value. The orchestrator
+   * only claims non-agent jobs whose assignee is NULL, so cloning that value
+   * leaves the retried step in `ready` with zero attempts forever. Agent steps
+   * keep their assignment so agent-assigned scheduling still routes them.
+   */
+  private retryStepAssignee(source: Job): string | null {
+    return source.execution_type === 'agent' ? source.assignee : null;
   }
 
   private asRecord(value: unknown): Record<string, unknown> {
