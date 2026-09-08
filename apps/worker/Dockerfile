@@ -189,7 +189,6 @@ ARG INSTALL_MIRROR=true
 ARG INSTALL_SKILLS=true
 ARG HARNESS_INSTALL_CACHE_BUST=latest
 ARG CC_MIRROR_PACKAGE=cc-mirror@latest
-# Pinned harness CLIs (claude-code, codex) keep the image reproducible; bump deliberately.
 ARG CLAUDE_CODE_PACKAGE=@anthropic-ai/claude-code@2.1.260
 ARG CODE_PACKAGE=@just-every/code@latest
 ARG CODEX_PACKAGE=@openai/codex@0.153.4
@@ -527,7 +526,6 @@ FROM dependencies AS development
 # Install global npm packages as root
 ARG HARNESS_INSTALL_CACHE_BUST=latest
 ARG CC_MIRROR_PACKAGE=cc-mirror@latest
-# Pinned harness CLIs (claude-code, codex) keep the image reproducible; bump deliberately.
 ARG CLAUDE_CODE_PACKAGE=@anthropic-ai/claude-code@2.1.260
 ARG CODE_PACKAGE=@just-every/code@latest
 ARG CODEX_PACKAGE=@openai/codex@0.153.4
