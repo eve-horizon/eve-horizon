@@ -26,7 +26,7 @@ Harness configuration now lives on the job:
   "harness_profile": "primary-reviewer",
   "harness_options": {
     "variant": "deep",
-    "model": "opus-4.5",
+    "model": "claude-fable-5-1",
     "reasoning_effort": "high"
   },
   "hints": {
@@ -53,22 +53,22 @@ x-eve:
     profiles:
       primary-orchestrator:
         - harness: mclaude
-          model: opus-4.5
+          model: claude-fable-5-1
           reasoning_effort: high
       primary-coder:
         - harness: codex
-          model: gpt-5.2-codex
+          model: gpt-6-astra
           reasoning_effort: high
       primary-reviewer:
         - harness: mclaude
-          model: opus-4.5
+          model: claude-fable-5-1
           reasoning_effort: high
         - harness: codex
-          model: gpt-5.2-codex
+          model: gpt-6-astra
           reasoning_effort: x-high
       primary-planner:
         - harness: codex
-          model: gpt-5.2-codex
+          model: gpt-6-astra
           reasoning_effort: x-high
       planning-council:
         - profile: primary-planner

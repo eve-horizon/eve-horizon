@@ -18,7 +18,7 @@ function createClaudeFamilyAdapter(
     capabilities: {
       supports_model: true,
       model_notes: 'Model override supported via CLAUDE_MODEL or --model. Opus 4.7 forms such as opus4.7 and opus-4-7 are normalized to Claude Code\'s opus alias.',
-      model_examples: ['opus', 'opus4.7', 'opus-4-7', 'sonnet', 'haiku'],
+      model_examples: ['claude-fable-5-1', 'claude-fable-5', 'opus', 'sonnet', 'haiku'],
       reasoning: {
         supported: true,
         levels: ['low', 'medium', 'high', 'x-high'],

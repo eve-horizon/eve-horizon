@@ -21,7 +21,7 @@ function createCodexFamilyAdapter(params: {
     capabilities: {
       supports_model: true,
       model_notes: 'Model override supported via --model.',
-      model_examples: ['gpt-5.5', 'gpt-5.2-codex', 'gpt-4.1'],
+      model_examples: ['gpt-6-astra', 'gpt-5.5', 'gpt-5.2-codex'],
       reasoning: {
         supported: true,
         levels: ['low', 'medium', 'high', 'x-high'],

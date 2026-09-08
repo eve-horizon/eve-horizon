@@ -2,7 +2,7 @@ import type { BillingDefaultsV1, RateCardV1 } from './types.js';
 
 export const DEFAULT_RATE_CARD_NAME = 'default';
 export const DEFAULT_RATE_CARD_VERSION = 1;
-export const DEFAULT_RATE_CARD_EFFECTIVE_AT = '2026-04-29T00:00:00.000Z';
+export const DEFAULT_RATE_CARD_EFFECTIVE_AT = '2026-09-08T00:00:00.000Z';
 
 export const DEFAULT_BILLING_DEFAULTS_V1: BillingDefaultsV1 = {
   billing_currency: 'usd',
@@ -14,6 +14,20 @@ export const DEFAULT_RATE_CARD_V1: RateCardV1 = {
   llm: {
     byok: {
       anthropic: {
+        'claude-fable-5-1': {
+          input_per_million_usd: '10.00',
+          output_per_million_usd: '50.00',
+          cache_read_per_million_usd: '0.25',
+          cache_write_per_million_usd: '12.50',
+          reasoning_per_million_usd: null,
+        },
+        'claude-fable-5': {
+          input_per_million_usd: '10.00',
+          output_per_million_usd: '50.00',
+          cache_read_per_million_usd: '1.00',
+          cache_write_per_million_usd: '12.50',
+          reasoning_per_million_usd: null,
+        },
         'claude-opus-4-7': {
           input_per_million_usd: '5.00',
           output_per_million_usd: '25.00',
@@ -81,6 +95,13 @@ export const DEFAULT_RATE_CARD_V1: RateCardV1 = {
         },
       },
       openai: {
+        'gpt-6-astra': {
+          input_per_million_usd: '10.00',
+          output_per_million_usd: '50.00',
+          cache_read_per_million_usd: '1.00',
+          cache_write_per_million_usd: '12.50',
+          reasoning_per_million_usd: '50.00',
+        },
         'gpt-5.5': {
           input_per_million_usd: '5.00',
           output_per_million_usd: '30.00',
