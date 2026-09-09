@@ -18,6 +18,13 @@ const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const SHORTCUT_MIME = 'application/vnd.google-apps.shortcut';
+
+/** Drive's alias for the whole of My Drive; a mount may name it as its root. */
+const DRIVE_ROOT_ALIAS = 'root';
+
+/** How many generations of parents a containment check will climb. */
+const MAX_ANCESTRY_DEPTH = 64;
 
 /** Standard file fields requested from the Drive API. */
 const FILE_FIELDS = 'id,name,mimeType,size,modifiedTime,webViewLink,parents';
@@ -470,14 +477,13 @@ export class GoogleDriveProvider implements CloudFsProvider {
 
     const data = (await response.json()) as DriveFileList;
 
-    // If rootId is not 'root', filter to files that descend from rootId.
+    // If rootId is not the whole-drive alias, keep only files inside rootId.
     // This is a post-filter because Drive API doesn't support recursive `in parents`.
     let files = data.files;
-    if (rootId !== 'root') {
+    if (rootId !== DRIVE_ROOT_ALIAS) {
       const filtered: DriveFile[] = [];
       for (const file of files) {
-        const isDescendant = await this.isDescendantOf(accessToken, file.id, rootId);
-        if (isDescendant) {
+        if (await this.isWithinRoot(accessToken, file.id, rootId)) {
           filtered.push(file);
         }
       }
@@ -672,48 +678,88 @@ export class GoogleDriveProvider implements CloudFsProvider {
   }
 
   // -----------------------------------------------------------------------
-  // Internal helpers
+  // Containment
   // -----------------------------------------------------------------------
 
   /**
-   * Check whether `fileId` is a descendant of `ancestorId` by walking up
-   * the parent chain. Returns true if `fileId === ancestorId`.
+   * Whether a mount rooted at `rootId` may operate on `fileId`: the root
+   * itself, or a real node somewhere beneath it.
+   *
+   * Drive is a DAG, not a tree — a file may have several parents — so every
+   * parent is climbed breadth-first, each node fetched at most once, until the
+   * root appears in a parents list or MAX_ANCESTRY_DEPTH generations have been
+   * examined. The root is recognised in its children's parents lists, so a
+   * file directly beneath it costs a single lookup and the root is never
+   * fetched.
+   *
+   * A shortcut is never contained: it is a pointer whose target may live
+   * anywhere, and the target is never followed here.
+   *
+   * The `root` alias names the whole of My Drive, so anything the account can
+   * read is inside it; one lookup settles existence and the shortcut rule.
+   *
+   * An unreadable target surfaces as a DriveApiError so callers can map it
+   * like any other Drive failure. An unreadable ancestor is a dead end, not an
+   * error — a file shared directly with the account often sits in a folder it
+   * cannot see.
    */
-  private async isDescendantOf(
+  async isWithinRoot(
     accessToken: string,
     fileId: string,
-    ancestorId: string,
+    rootId: string,
   ): Promise<boolean> {
-    if (fileId === ancestorId) {
+    if (fileId === rootId) {
       return true;
     }
 
-    let currentId = fileId;
-    const MAX_DEPTH = 50;
+    const target = await this.fetchAncestryNode(accessToken, fileId);
+    if (target.mimeType === SHORTCUT_MIME) {
+      return false;
+    }
+    if (rootId === DRIVE_ROOT_ALIAS) {
+      return true;
+    }
 
-    for (let i = 0; i < MAX_DEPTH; i++) {
-      const params = new URLSearchParams({ ...SHARED_DRIVE_PARAMS, fields: 'parents' });
-      const url = `${DRIVE_API}/files/${encodeURIComponent(currentId)}?${params.toString()}`;
-      const response = await fetch(url, { headers: authHeaders(accessToken) });
+    const visited = new Set<string>([fileId]);
+    let frontier = target.parents ?? [];
 
-      if (!response.ok) {
-        return false;
-      }
-
-      const data = (await response.json()) as { parents?: string[] };
-      if (!data.parents || data.parents.length === 0) {
-        return false;
-      }
-
-      const parentId = data.parents[0];
-      if (parentId === ancestorId) {
+    for (let depth = 1; depth <= MAX_ANCESTRY_DEPTH && frontier.length > 0; depth++) {
+      if (frontier.includes(rootId)) {
         return true;
       }
 
-      currentId = parentId;
+      const next: string[] = [];
+      for (const parentId of frontier) {
+        if (visited.has(parentId)) {
+          continue;
+        }
+        visited.add(parentId);
+
+        try {
+          const parent = await this.fetchAncestryNode(accessToken, parentId);
+          next.push(...(parent.parents ?? []));
+        } catch (err) {
+          if (!(err instanceof DriveApiError)) {
+            throw err;
+          }
+        }
+      }
+      frontier = next;
     }
 
     return false;
+  }
+
+  /** The least a climb needs to know about a node: what it is and where it sits. */
+  private async fetchAncestryNode(
+    accessToken: string,
+    fileId: string,
+  ): Promise<Pick<DriveFile, 'mimeType' | 'parents'>> {
+    const params = new URLSearchParams({ ...SHARED_DRIVE_PARAMS, fields: 'id,mimeType,parents' });
+    const url = `${DRIVE_API}/files/${encodeURIComponent(fileId)}?${params.toString()}`;
+    const response = await fetch(url, { headers: authHeaders(accessToken) });
+    await assertOk(response, 'isWithinRoot');
+    return (await response.json()) as DriveFile;
   }
 }
 

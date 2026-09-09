@@ -22,6 +22,9 @@ const MAX_PAGE_SIZE = 1000;
 const DEFAULT_RECURSIVE_ENTRY_LIMIT = 5000;
 const DEFAULT_RECURSIVE_DEPTH_LIMIT = 50;
 
+/** One answer for a missing id and for an id beyond the mount root, so neither reveals the other. */
+const NOT_FOUND_IN_CLOUD_STORAGE = 'File or folder not found in cloud storage';
+
 interface CloudFsBrowseOptions {
   recursive?: boolean;
   pageToken?: string;
@@ -234,6 +237,10 @@ export class CloudFsService {
     const { provider, accessToken } = await this.getProviderAndToken(mount);
 
     try {
+      if (folderId) {
+        await this.assertWithinRoot(mount, provider, accessToken, folderId);
+      }
+
       let targetFolderId = folderId || mount.root_folder_id;
       let displayPath = this.normalizeBrowsePath(path);
 
@@ -270,6 +277,7 @@ export class CloudFsService {
     const { provider, accessToken } = await this.getProviderAndToken(mount);
 
     try {
+      await this.assertWithinRoot(mount, provider, accessToken, fileId);
       return await provider.getFileMetadata(accessToken, fileId);
     } catch (err) {
       this.handleProviderError(err);
@@ -285,6 +293,7 @@ export class CloudFsService {
     const { provider, accessToken } = await this.getProviderAndToken(mount);
 
     try {
+      await this.assertWithinRoot(mount, provider, accessToken, fileId);
       const result = await provider.downloadFile(accessToken, fileId);
       return {
         stream: result.stream,
@@ -360,6 +369,9 @@ export class CloudFsService {
     const { provider, accessToken } = await this.getProviderAndToken(mount);
 
     try {
+      if (parentId) {
+        await this.assertWithinRoot(mount, provider, accessToken, parentId);
+      }
       return await provider.createFolder(accessToken, parentId || mount.root_folder_id, name);
     } catch (err) {
       this.handleProviderError(err);
@@ -372,6 +384,7 @@ export class CloudFsService {
     const { provider, accessToken } = await this.getProviderAndToken(mount);
 
     try {
+      await this.assertWithinRoot(mount, provider, accessToken, fileId);
       await provider.trashFile(accessToken, fileId);
     } catch (err) {
       this.handleProviderError(err);
@@ -379,6 +392,22 @@ export class CloudFsService {
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────
+
+  /**
+   * Refuse a caller-supplied id the mount may not operate on. Every id-based
+   * route calls this before its first provider call, so nothing outside the
+   * mount root is ever read, written, or trashed on the caller's behalf.
+   */
+  private async assertWithinRoot(
+    mount: Pick<ResolvedCloudFsMount, 'root_folder_id'>,
+    provider: CloudFsProvider,
+    accessToken: string,
+    fileId: string,
+  ): Promise<void> {
+    if (!(await provider.isWithinRoot(accessToken, fileId, mount.root_folder_id))) {
+      throw new NotFoundException(NOT_FOUND_IN_CLOUD_STORAGE);
+    }
+  }
 
   private async resolveMount(orgId: string, mountId?: string): Promise<ResolvedCloudFsMount> {
     if (mountId) {
@@ -556,7 +585,7 @@ export class CloudFsService {
         );
       }
       if (err.status === 404) {
-        throw new NotFoundException('File or folder not found in cloud storage');
+        throw new NotFoundException(NOT_FOUND_IN_CLOUD_STORAGE);
       }
       throw new HttpException(
         `Cloud storage error: ${err.message}`,

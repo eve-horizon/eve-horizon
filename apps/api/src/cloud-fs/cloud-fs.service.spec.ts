@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CloudFsService } from './cloud-fs.service.js';
-import type { CloudFsEntry, CloudFsProvider } from '@eve/shared';
+import { DriveApiError, type CloudFsEntry, type CloudFsProvider } from '@eve/shared';
 
 function entry(overrides: Partial<CloudFsEntry>): CloudFsEntry {
   return {
@@ -51,6 +51,7 @@ function provider(overrides: Partial<CloudFsProvider> = {}): CloudFsProvider {
     searchFiles: vi.fn().mockResolvedValue({ entries: [] }),
     resolvePath: vi.fn(),
     buildPath: vi.fn().mockResolvedValue('/'),
+    isWithinRoot: vi.fn().mockResolvedValue(true),
     getChangesStartToken: vi.fn(),
     listChanges: vi.fn(),
     refreshAccessToken: vi.fn(),
@@ -251,5 +252,114 @@ describe('CloudFsService upload-by-path and trash', () => {
 
     await expect(service.trashFile('org_test', 'mount_a', 'file_old')).rejects.toBeInstanceOf(ForbiddenException);
     expect(fakeProvider.trashFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('CloudFsService root containment', () => {
+  const ROOT = 'folder_root';
+
+  function createContainedService(fakeProvider: CloudFsProvider) {
+    const service = createService(fakeProvider);
+    (service as any).mounts.findById.mockResolvedValue({ ...mount(), root_folder_id: ROOT });
+    return service;
+  }
+
+  function firstCallOrder(fn: unknown): number {
+    return (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+  }
+
+  const routes: Array<{
+    name: string;
+    call: (service: CloudFsService, id: string) => Promise<unknown>;
+    forwarded: (fakeProvider: CloudFsProvider) => unknown[];
+    accept: Partial<CloudFsProvider>;
+  }> = [
+    {
+      name: 'browseMount(folder_id)',
+      call: (service, id) => service.browseMount('org_test', 'mount_a', id),
+      forwarded: (p) => [p.buildPath, p.listFiles],
+      accept: { buildPath: vi.fn().mockResolvedValue('/Inside') },
+    },
+    {
+      name: 'getFileMeta',
+      call: (service, id) => service.getFileMeta('org_test', 'mount_a', id),
+      forwarded: (p) => [p.getFileMetadata],
+      accept: { getFileMetadata: vi.fn().mockResolvedValue(entry({ id: 'file_inside' })) },
+    },
+    {
+      name: 'downloadFile',
+      call: (service, id) => service.downloadFile('org_test', 'mount_a', id),
+      forwarded: (p) => [p.downloadFile],
+      accept: { downloadFile: vi.fn().mockResolvedValue({ stream: Buffer.from('hi'), mime_type: 'text/plain', name: 'File.txt' }) },
+    },
+    {
+      name: 'createFolder(parent_id)',
+      call: (service, id) => service.createFolder('org_test', 'mount_a', 'New folder', id),
+      forwarded: (p) => [p.createFolder],
+      accept: { createFolder: vi.fn().mockResolvedValue(entry({ id: 'folder_new', is_folder: true })) },
+    },
+    {
+      name: 'trashFile',
+      call: (service, id) => service.trashFile('org_test', 'mount_a', id),
+      forwarded: (p) => [p.trashFile],
+      accept: { trashFile: vi.fn().mockResolvedValue(undefined) },
+    },
+  ];
+
+  describe.each(routes)('$name', ({ call, forwarded, accept }) => {
+    it('rejects an id outside the mount root as not found before reaching the provider', async () => {
+      const fakeProvider = provider({ ...accept, isWithinRoot: vi.fn().mockResolvedValue(false) });
+      const service = createContainedService(fakeProvider);
+
+      await expect(call(service, 'file_outside')).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(fakeProvider.isWithinRoot).toHaveBeenCalledWith('access-token', 'file_outside', ROOT);
+      for (const forwardedCall of forwarded(fakeProvider)) {
+        expect(forwardedCall).not.toHaveBeenCalled();
+      }
+    });
+
+    it('checks containment before forwarding an in-root id', async () => {
+      const fakeProvider = provider({ ...accept, isWithinRoot: vi.fn().mockResolvedValue(true) });
+      const service = createContainedService(fakeProvider);
+
+      await call(service, 'file_inside');
+
+      expect(fakeProvider.isWithinRoot).toHaveBeenCalledWith('access-token', 'file_inside', ROOT);
+      for (const forwardedCall of forwarded(fakeProvider)) {
+        expect(forwardedCall).toHaveBeenCalled();
+        expect(firstCallOrder(fakeProvider.isWithinRoot)).toBeLessThan(firstCallOrder(forwardedCall));
+      }
+    });
+
+    it('maps a Drive lookup failure during the check to not found', async () => {
+      const fakeProvider = provider({
+        ...accept,
+        isWithinRoot: vi.fn().mockRejectedValue(new DriveApiError('missing', 404, '')),
+      });
+      const service = createContainedService(fakeProvider);
+
+      await expect(call(service, 'file_missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  it('browses the mount root without a containment lookup when no folder id is given', async () => {
+    const fakeProvider = provider();
+    const service = createContainedService(fakeProvider);
+
+    await service.browseMount('org_test', 'mount_a');
+
+    expect(fakeProvider.isWithinRoot).not.toHaveBeenCalled();
+    expect(fakeProvider.listFiles).toHaveBeenCalledWith('access-token', ROOT, {});
+  });
+
+  it('creates under the mount root without a containment lookup when no parent id is given', async () => {
+    const fakeProvider = provider({ createFolder: vi.fn().mockResolvedValue(entry({ id: 'folder_new', is_folder: true })) });
+    const service = createContainedService(fakeProvider);
+
+    await service.createFolder('org_test', 'mount_a', 'New folder');
+
+    expect(fakeProvider.isWithinRoot).not.toHaveBeenCalled();
+    expect(fakeProvider.createFolder).toHaveBeenCalledWith('access-token', ROOT, 'New folder');
   });
 });

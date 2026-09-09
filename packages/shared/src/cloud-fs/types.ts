@@ -115,6 +115,18 @@ export interface CloudFsProvider {
     rootId: string,
   ): Promise<string>;
 
+  // Containment
+  /**
+   * Whether a mount rooted at `rootId` may operate on `fileId`: the root
+   * itself, or a real node somewhere beneath it. Shortcuts and links are
+   * never contained and must never be followed when answering.
+   */
+  isWithinRoot(
+    accessToken: string,
+    fileId: string,
+    rootId: string,
+  ): Promise<boolean>;
+
   // Change detection
   getChangesStartToken(
     accessToken: string,
