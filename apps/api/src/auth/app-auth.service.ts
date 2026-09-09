@@ -131,6 +131,7 @@ export class AppAuthService {
             login_method: authConfig.login_method,
             self_signup: authConfig.self_signup,
             invite_requires_password: authConfig.invite_requires_password,
+            oauth_providers: authConfig.oauth_providers,
             allowed_redirect_origins: allowedRedirectOrigins,
             org_access: {
               mode: authConfig.org_access.mode,

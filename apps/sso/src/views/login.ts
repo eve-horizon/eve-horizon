@@ -1,4 +1,4 @@
-import { SIGNUP_ALLOWED_DOMAINS } from '../config.js';
+import { GOOGLE_OAUTH_CONFIG, SIGNUP_ALLOWED_DOMAINS } from '../config.js';
 import type { SsoLoginContext } from '../types.js';
 import { escapeHtml, isHttpsUrl, jsString, pageChrome } from './chrome.js';
 
@@ -27,6 +27,16 @@ export function loginPageHtml(
   const magicOnly = showMagicLink && !showPassword;
   const appScopedMagicLink = Boolean(context?.auth && showMagicLink);
   const allowSignup = showPassword && auth.self_signup;
+  const showGoogle = Boolean(
+    GOOGLE_OAUTH_CONFIG && context?.project_id
+    && Array.isArray(auth.oauth_providers) && auth.oauth_providers.includes('google'),
+  );
+  const googleStartUrl = showGoogle
+    ? `/auth/google/start?${new URLSearchParams({
+      project_id: context!.project_id,
+      ...(redirectTo ? { redirect_to: redirectTo } : {}),
+    }).toString()}`
+    : '';
   const isSignup = allowSignup && mode === 'signup';
   const submitText = magicOnly ? 'Send sign-in link' : isSignup ? 'Create Account' : 'Sign In';
   const domainHint = SIGNUP_ALLOWED_DOMAINS.length > 0
@@ -230,7 +240,9 @@ export function loginPageHtml(
       <div class="divider">or</div>
       <button class="btn btn-secondary" id="magic-btn" onclick="handleMagicLink()">
         Send Magic Link
-      </button>` : ''}
+      </button>` : ''}${showGoogle ? `
+      <div class="divider">or</div>
+      <a class="btn btn-secondary" href="${escapeHtml(googleStartUrl)}" style="display:block;text-align:center;text-decoration:none;">Continue with Google</a>` : ''}
     </div>
     <div class="footer">
       Powered by Eve Horizon

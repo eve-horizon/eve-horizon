@@ -89,6 +89,16 @@ type PreparedAppLinkReconciliation = {
   warnings: string[];
 };
 
+/**
+ * Auth configuration representation written to the project row. The parser
+ * supplies an empty oauth_providers default, but omitting that default keeps
+ * disabled-project records readable by the preceding strict schema on a
+ * rollback. A non-empty opt-in remains persisted.
+ */
+type StoredProjectAuthConfig = Omit<ProjectAuthConfig, 'oauth_providers'> & {
+  oauth_providers?: ProjectAuthConfig['oauth_providers'];
+};
+
 @Injectable()
 export class ManifestService {
   private projects: ReturnType<typeof projectQueries>;
@@ -126,7 +136,7 @@ export class ManifestService {
     let parsedDefaults: Record<string, unknown> | null = null;
     let parsedAgents: Record<string, unknown> | null = null;
     let parsedBranding: ProjectBranding | null = null;
-    let parsedAuthConfig: ProjectAuthConfig | null = null;
+    let parsedAuthConfig: StoredProjectAuthConfig | null = null;
     let secretValidation: SecretValidationResult | undefined;
     let warnings: string[] | undefined;
     let appLinkReconciliation: PreparedAppLinkReconciliation | null = null;
@@ -921,7 +931,7 @@ export class ManifestService {
   private async normalizeProjectAuthConfig(
     projectOrgId: string,
     authConfig: ProjectAuthConfig | null,
-  ): Promise<ProjectAuthConfig | null> {
+  ): Promise<StoredProjectAuthConfig | null> {
     if (!authConfig) return null;
 
     const orgAccess = authConfig.org_access;
@@ -974,8 +984,10 @@ export class ManifestService {
       };
     }
 
+    const { oauth_providers: oauthProviders, ...storedAuth } = authConfig;
     return {
-      ...authConfig,
+      ...storedAuth,
+      ...(oauthProviders.length > 0 ? { oauth_providers: oauthProviders } : {}),
       org_access: {
         ...orgAccess,
         allowed_orgs: resolvedAllowedOrgs,

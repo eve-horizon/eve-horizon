@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import type { Db } from '@eve/db';
 import { replayStoreQueries } from '@eve/db';
 import { AuthController } from './auth.controller.js';
+import { OAuthSignInController } from './oauth-sign-in.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { AuthInternalController } from './auth.internal.controller.js';
 import { AuthInvitesController } from './auth.invites.controller.js';
@@ -22,6 +23,7 @@ import { AccessService } from './access.service.js';
 import { ScopedAccessService } from './scoped-access.service.js';
 import { PermissionGuard } from './permission.guard.js';
 import { AppAuthPolicyService } from './app-auth-policy.service.js';
+import { OAuthSignInService } from './oauth-sign-in.service.js';
 import { IdentityProviderRegistry, SshIdentityProvider, NostrIdentityProvider } from './providers/index.js';
 import { MailerModule } from '../mailer/mailer.module.js';
 import { EventsModule } from '../events/events.module.js';
@@ -37,7 +39,7 @@ const MAGIC_LINK_WRAP_RETENTION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 @Module({
   imports: [MailerModule, EventsModule],
-  controllers: [AuthController, AuthInternalController, AuthKeysController, AuthInvitesController, AuthAccessRequestsController, ServicePrincipalsController, AccessController, AccessRolesController, AccessGroupsController],
+  controllers: [AuthController, OAuthSignInController, AuthInternalController, AuthKeysController, AuthInvitesController, AuthAccessRequestsController, ServicePrincipalsController, AccessController, AccessRolesController, AccessGroupsController],
   providers: [
     AuthService,
     MagicLinkService,
@@ -48,6 +50,7 @@ const MAGIC_LINK_WRAP_RETENTION_MS = 24 * 60 * 60 * 1000; // 24 hours
     AccessService,
     ScopedAccessService,
     AppAuthPolicyService,
+    OAuthSignInService,
     IdentityProviderRegistry,
     SshIdentityProvider,
     NostrIdentityProvider,

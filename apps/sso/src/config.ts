@@ -24,3 +24,61 @@ export const SIGNUP_ALLOWED_DOMAINS: string[] = (process.env.EVE_SIGNUP_ALLOWED_
   .map(d => d.trim().toLowerCase())
   .filter(Boolean);
 export const EVE_INTERNAL_API_KEY = process.env.EVE_INTERNAL_API_KEY ?? '';
+
+export type GoogleOauthConfig = {
+  ssoUrl: URL;
+  supabaseAuthExternalUrl: URL;
+  stateKey: Buffer;
+};
+
+const LOCAL_HTTP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', 'lvh.me']);
+
+function isLocalHttpUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return url.protocol === 'http:' && (LOCAL_HTTP_HOSTNAMES.has(host) || host.endsWith('.lvh.me'));
+}
+
+function parsePublicUrl(name: string, value: string | undefined, secureCookies: boolean, requireRootPath: boolean): URL {
+  if (!value) throw new Error(`${name} is required when EVE_SSO_GOOGLE_ENABLED=true`);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${name} must be an absolute public URL`);
+  }
+  if (url.username || url.password || url.search || url.hash || (requireRootPath && url.pathname !== '/')) {
+    throw new Error(requireRootPath
+      ? `${name} must be an origin without credentials, query, hash, or path`
+      : `${name} must not include credentials, query, or hash`);
+  }
+  if (secureCookies ? url.protocol !== 'https:' : !isLocalHttpUrl(url)) {
+    throw new Error(secureCookies
+      ? `${name} must use HTTPS when EVE_SSO_SECURE_COOKIES=true`
+      : `${name} must use HTTP on an explicit local development host when EVE_SSO_SECURE_COOKIES=false`);
+  }
+  return url;
+}
+
+/** Parse the explicitly enabled Google SSO configuration. Kept pure for startup and route tests. */
+export function parseGoogleOauthConfig(env: NodeJS.ProcessEnv = process.env): GoogleOauthConfig | null {
+  if (env.EVE_SSO_GOOGLE_ENABLED !== 'true') return null;
+  const secureCookies = env.EVE_SSO_SECURE_COOKIES === 'true';
+  const ssoUrl = parsePublicUrl('EVE_SSO_URL', env.EVE_SSO_URL, secureCookies, true);
+  const supabaseAuthExternalUrl = parsePublicUrl(
+    'SUPABASE_AUTH_EXTERNAL_URL',
+    env.SUPABASE_AUTH_EXTERNAL_URL,
+    secureCookies,
+    false,
+  );
+  const encodedKey = env.EVE_SSO_OAUTH_STATE_KEY;
+  if (!encodedKey || !/^[A-Za-z0-9_-]+$/.test(encodedKey)) {
+    throw new Error('EVE_SSO_OAUTH_STATE_KEY must be a base64url-encoded 32-byte key');
+  }
+  const stateKey = Buffer.from(encodedKey, 'base64url');
+  if (stateKey.length !== 32 || stateKey.toString('base64url') !== encodedKey) {
+    throw new Error('EVE_SSO_OAUTH_STATE_KEY must be a base64url-encoded 32-byte key');
+  }
+  return { ssoUrl, supabaseAuthExternalUrl, stateKey };
+}
+
+export const GOOGLE_OAUTH_CONFIG = parseGoogleOauthConfig();

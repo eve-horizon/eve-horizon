@@ -20,6 +20,7 @@ export type ProjectAuthConfig = {
     invite_enabled: boolean;
   };
   allowed_redirect_origins?: string[];
+  oauth_providers?: ['google'] | 'google'[];
 };
 
 export type SsoLoginContext = {

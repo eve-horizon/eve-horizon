@@ -636,6 +636,12 @@ export const ProjectAuthConfigSchema = z.object({
   ]).default('password_or_magic_link'),
   self_signup: z.boolean().default(false),
   invite_requires_password: z.boolean().default(true),
+  /**
+   * Explicit third-party sign-in providers enabled for this application.
+   * Provider availability is also controlled by the operator; this list never
+   * changes invitation or self-signup policy.
+   */
+  oauth_providers: z.array(z.literal('google')).default([]).transform((providers) => [...new Set(providers)]),
   org_access: AppOrgAccessConfigSchema,
   /**
    * Explicit allowlist of redirect target origins for post-auth navigation.
