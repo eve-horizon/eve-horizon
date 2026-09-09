@@ -172,6 +172,26 @@ export class RbacService {
     return project.org_id;
   }
 
+  /**
+   * Resolve the project and owning org for a job id. Used by the permission
+   * guard so that `/jobs/:job_id/...` routes are authorized against the
+   * project that owns the job rather than a context-free baseline.
+   * Throws NotFoundException when the job does not exist.
+   */
+  async getJobProjectContext(jobId: string): Promise<{ project_id: string; org_id: string }> {
+    const [row] = await this.db<{ project_id: string; org_id: string }[]>`
+      SELECT j.project_id, p.org_id
+      FROM jobs j
+      JOIN projects p ON p.id = j.project_id
+      WHERE j.id = ${jobId}
+      LIMIT 1
+    `;
+    if (!row) {
+      throw new NotFoundException('Job not found');
+    }
+    return row;
+  }
+
   private async resolveProject(projectInput: string) {
     if (projectInput.startsWith('proj_')) {
       const project = await this.projects.findById(projectInput, { include_deleted: false });

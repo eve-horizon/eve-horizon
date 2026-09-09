@@ -860,6 +860,17 @@ Eve uses a unified permission model for API access.
 - `GET /auth/me` includes the current user's effective permissions.
 - Job tokens carry a limited `permissions` list scoped to the project/job.
 
+### Resolution context
+
+Permissions for user tokens are resolved against the resource the route addresses, never against values the caller supplies in the request body:
+
+- `/projects/:project_id/...` resolves through the project's owning org.
+- `/jobs/:job_id/...` (including job attachments) resolves through the job's project and that project's org. Unknown jobs return 404.
+- `/orgs/:org_id/...` resolves against that org.
+- Routes with none of the above (for example `POST /projects`) may take `org_id` from the request body.
+
+Job, service, and service principal tokens use the explicit `permissions` list carried in the token, and may only address jobs owned by the job, project, or org the token was minted for.
+
 CLI helpers:
 
 ```bash
