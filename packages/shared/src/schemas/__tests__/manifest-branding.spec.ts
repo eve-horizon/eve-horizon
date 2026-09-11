@@ -59,6 +59,7 @@ describe('ProjectAuthConfigSchema', () => {
       login_method: 'magic_link',
       self_signup: false,
       invite_requires_password: false,
+      oauth_providers: [],
       org_access: {
         mode: 'project_org',
         allowed_orgs: [],
@@ -83,6 +84,7 @@ describe('ProjectAuthConfigSchema', () => {
       login_method: 'password_or_magic_link',
       self_signup: false,
       invite_requires_password: true,
+      oauth_providers: [],
       org_access: {
         mode: 'project_org',
         allowed_orgs: [],
@@ -104,6 +106,13 @@ describe('ProjectAuthConfigSchema', () => {
     expect(ProjectAuthConfigSchema.safeParse({
       login_method: 'webauthn',
     }).success).toBe(false);
+  });
+
+  it('defaults OAuth providers to none and accepts Google only once', () => {
+    expect(ProjectAuthConfigSchema.parse({}).oauth_providers).toEqual([]);
+    expect(ProjectAuthConfigSchema.parse({ oauth_providers: ['google'] }).oauth_providers).toEqual(['google']);
+    expect(ProjectAuthConfigSchema.parse({ oauth_providers: ['google', 'google'] }).oauth_providers).toEqual(['google']);
+    expect(ProjectAuthConfigSchema.safeParse({ oauth_providers: ['github'] }).success).toBe(false);
   });
 
   it('accepts app org access and invite policy', () => {
@@ -384,6 +393,7 @@ describe('getManifestAuthConfig', () => {
       login_method: 'magic_link',
       self_signup: false,
       invite_requires_password: false,
+      oauth_providers: [],
       org_access: {
         mode: 'project_org',
         allowed_orgs: [],
@@ -414,6 +424,7 @@ describe('getManifestAuthConfig', () => {
       login_method: 'password',
       self_signup: false,
       invite_requires_password: true,
+      oauth_providers: [],
       org_access: {
         mode: 'project_org',
         allowed_orgs: [],

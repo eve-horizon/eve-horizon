@@ -141,6 +141,7 @@ describe('AuthService app magic-link login', () => {
         login_method: 'magic_link',
         self_signup: false,
         invite_requires_password: false,
+        oauth_providers: [],
         org_access: {
           mode: 'project_org',
           multi_org: false,
