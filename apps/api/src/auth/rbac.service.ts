@@ -11,6 +11,16 @@ const ROLE_RANK: Record<MembershipRole, number> = {
   owner: 3,
 };
 
+/** Project-owned resources that flat `/<kind>/:id/...` routes address by id. */
+export type OwnedResourceKind = 'job' | 'pipeline_run' | 'build' | 'thread';
+
+const OWNED_RESOURCE_LABELS: Record<OwnedResourceKind, string> = {
+  job: 'Job',
+  pipeline_run: 'Pipeline run',
+  build: 'Build',
+  thread: 'Thread',
+};
+
 @Injectable()
 export class RbacService {
   private memberships: ReturnType<typeof membershipQueries>;
@@ -173,21 +183,50 @@ export class RbacService {
   }
 
   /**
-   * Resolve the project and owning org for a job id. Used by the permission
-   * guard so that `/jobs/:job_id/...` routes are authorized against the
-   * project that owns the job rather than a context-free baseline.
-   * Throws NotFoundException when the job does not exist.
+   * Resolve the project and owning org for a job id. Kept for callers that
+   * predate {@link getResourceProjectContext}.
    */
   async getJobProjectContext(jobId: string): Promise<{ project_id: string; org_id: string }> {
-    const [row] = await this.db<{ project_id: string; org_id: string }[]>`
-      SELECT j.project_id, p.org_id
-      FROM jobs j
-      JOIN projects p ON p.id = j.project_id
-      WHERE j.id = ${jobId}
-      LIMIT 1
-    `;
+    return this.getResourceProjectContext('job', jobId);
+  }
+
+  /**
+   * Resolve the project and owning org for a project-owned resource addressed
+   * by id on a route that carries no project or org parameter (jobs, pipeline
+   * runs, builds, threads). The permission guard uses this so such routes are
+   * authorized against the owning project rather than a context-free baseline.
+   * Throws NotFoundException when the resource does not exist.
+   */
+  async getResourceProjectContext(
+    kind: OwnedResourceKind,
+    id: string,
+  ): Promise<{ project_id: string; org_id: string }> {
+    let rows: { project_id: string; org_id: string }[];
+    switch (kind) {
+      case 'job':
+        rows = await this.db<{ project_id: string; org_id: string }[]>`
+          SELECT r.project_id, p.org_id FROM jobs r JOIN projects p ON p.id = r.project_id WHERE r.id = ${id} LIMIT 1
+        `;
+        break;
+      case 'pipeline_run':
+        rows = await this.db<{ project_id: string; org_id: string }[]>`
+          SELECT r.project_id, p.org_id FROM pipeline_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ${id} LIMIT 1
+        `;
+        break;
+      case 'build':
+        rows = await this.db<{ project_id: string; org_id: string }[]>`
+          SELECT r.project_id, p.org_id FROM build_specs r JOIN projects p ON p.id = r.project_id WHERE r.id = ${id} LIMIT 1
+        `;
+        break;
+      case 'thread':
+        rows = await this.db<{ project_id: string; org_id: string }[]>`
+          SELECT r.project_id, p.org_id FROM threads r JOIN projects p ON p.id = r.project_id WHERE r.id = ${id} LIMIT 1
+        `;
+        break;
+    }
+    const row = rows[0];
     if (!row) {
-      throw new NotFoundException('Job not found');
+      throw new NotFoundException(`${OWNED_RESOURCE_LABELS[kind]} not found`);
     }
     return row;
   }

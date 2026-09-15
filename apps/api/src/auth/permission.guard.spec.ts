@@ -14,6 +14,8 @@ function createGuard(options: {
   perms?: PermsResolver;
   projectOrg?: Record<string, string>;
   jobs?: Record<string, JobContext>;
+  /** Other project-owned resources keyed as `<kind>:<id>` */
+  resources?: Record<string, JobContext>;
 } = {}) {
   const authService = { isEnabled: vi.fn(() => true) };
   const rbacService = {
@@ -22,9 +24,9 @@ function createGuard(options: {
       if (!orgId) throw new NotFoundException('Project not found');
       return orgId;
     }),
-    getJobProjectContext: vi.fn(async (jobId: string) => {
-      const context = options.jobs?.[jobId];
-      if (!context) throw new NotFoundException('Job not found');
+    getResourceProjectContext: vi.fn(async (kind: string, id: string) => {
+      const context = options.resources?.[`${kind}:${id}`] ?? (kind === 'job' ? options.jobs?.[id] : undefined);
+      if (!context) throw new NotFoundException(`${kind} not found`);
       return context;
     }),
     getEffectivePermissions: vi.fn(async (userId: string, orgId: string, projectId?: string) =>
@@ -76,7 +78,7 @@ describe('PermissionGuard resource context', () => {
       );
 
       expect(allowed).toBe(true);
-      expect(rbacService.getJobProjectContext).toHaveBeenCalledWith(jobA);
+      expect(rbacService.getResourceProjectContext).toHaveBeenCalledWith('job', jobA);
       expect(rbacService.getEffectivePermissions).toHaveBeenCalledWith('user_member', 'org_a', 'proj_a');
     });
 
@@ -173,7 +175,7 @@ describe('PermissionGuard resource context', () => {
       await expect(
         guard.canActivate(executionContext({ user: jobToken, params: { job_id: `${jobA}.2` }, url: `/jobs/${jobA}.2` })),
       ).resolves.toBe(true);
-      expect(rbacService.getJobProjectContext).not.toHaveBeenCalled();
+      expect(rbacService.getResourceProjectContext).not.toHaveBeenCalled();
     });
 
     it('may address another job in its own project', async () => {
@@ -215,6 +217,90 @@ describe('PermissionGuard resource context', () => {
     });
   });
 
+  describe('other flat resource routes (pipeline runs, builds, threads)', () => {
+    const run = 'prun_01ownedbyproja00000000000';
+    const build = 'bld_01ownedbyprojb000000000000';
+    const thread = 'thr_01ownedbyproja00000000000';
+    const resources: Record<string, JobContext> = {
+      [`pipeline_run:${run}`]: { project_id: 'proj_a', org_id: 'org_a' },
+      [`build:${build}`]: { project_id: 'proj_b', org_id: 'org_b' },
+      [`thread:${thread}`]: { project_id: 'proj_a', org_id: 'org_a' },
+    };
+
+    it("lets an admin of the owning org approve a gated pipeline run", async () => {
+      const { guard, rbacService } = createGuard({ required: ['pipelines:write'], resources, perms: orgAOnly(['pipelines:write']) });
+
+      await expect(
+        guard.canActivate(executionContext({ user: member, params: { runId: run }, url: `/pipeline-runs/${run}/approve` })),
+      ).resolves.toBe(true);
+      expect(rbacService.getResourceProjectContext).toHaveBeenCalledWith('pipeline_run', run);
+      expect(rbacService.getEffectivePermissions).toHaveBeenCalledWith('user_member', 'org_a', 'proj_a');
+    });
+
+    it('denies an admin of another org on the same pipeline run', async () => {
+      const { guard } = createGuard({
+        required: ['pipelines:write'],
+        resources,
+        perms: (_userId, orgId) => (orgId === 'org_attacker' ? new Set(['pipelines:write']) : new Set()),
+      });
+
+      await expect(
+        guard.canActivate(executionContext({ user: member, params: { runId: run }, url: `/pipeline-runs/${run}/approve` })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('resolves builds through the build spec project', async () => {
+      const { guard, rbacService } = createGuard({ required: ['builds:read'], resources, perms: orgAOnly(['builds:read']) });
+
+      await expect(
+        guard.canActivate(executionContext({ user: member, params: { build_id: build }, url: `/builds/${build}` })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(rbacService.getEffectivePermissions).toHaveBeenCalledWith('user_member', 'org_b', 'proj_b');
+    });
+
+    it('resolves flat thread routes through the thread project', async () => {
+      const { guard, rbacService } = createGuard({ required: ['threads:read'], resources, perms: orgAOnly(['threads:read']) });
+
+      await expect(
+        guard.canActivate(executionContext({ user: member, params: { thread_id: thread }, url: `/threads/${thread}` })),
+      ).resolves.toBe(true);
+      expect(rbacService.getResourceProjectContext).toHaveBeenCalledWith('thread', thread);
+    });
+
+    it('keeps the org param authoritative on org-prefixed thread routes', async () => {
+      const { guard, rbacService } = createGuard({ required: ['threads:read'], resources, perms: orgAOnly(['threads:read']) });
+
+      await expect(
+        guard.canActivate(
+          executionContext({ user: member, params: { org_id: 'org_a', thread_id: thread }, url: `/orgs/org_a/threads/${thread}` }),
+        ),
+      ).resolves.toBe(true);
+      expect(rbacService.getResourceProjectContext).not.toHaveBeenCalled();
+      expect(rbacService.getEffectivePermissions).toHaveBeenCalledWith('user_member', 'org_a', undefined);
+    });
+
+    it('returns 404 for an unknown pipeline run instead of the member baseline', async () => {
+      const { guard } = createGuard({ required: ['pipelines:read'], resources: {} });
+
+      await expect(
+        guard.canActivate(executionContext({ user: member, params: { runId: 'prun_ghost' }, url: '/pipeline-runs/prun_ghost/logs' })),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('scopes job tokens to pipeline runs in their own project', async () => {
+      const jobToken: AuthUser = { user_id: 'u', is_job_token: true, job_id: jobA, project_id: 'proj_a', org_id: 'org_a', permissions: ['pipelines:write'] };
+      const { guard } = createGuard({ required: ['pipelines:write'], resources });
+
+      await expect(
+        guard.canActivate(executionContext({ user: jobToken, params: { runId: run }, url: `/pipeline-runs/${run}/approve` })),
+      ).resolves.toBe(true);
+      const foreign = { ...jobToken, project_id: 'proj_b' };
+      await expect(
+        guard.canActivate(executionContext({ user: foreign, params: { runId: run }, url: `/pipeline-runs/${run}/approve` })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
   describe('unchanged behaviour', () => {
     it('keeps the member baseline for routes with no resource context', async () => {
       const { guard, rbacService } = createGuard({ required: ['jobs:read'] });
@@ -234,7 +320,7 @@ describe('PermissionGuard resource context', () => {
       await expect(
         guard.canActivate(executionContext({ user: { user_id: 'root', is_admin: true }, params: { job_id: jobB }, url: `/jobs/${jobB}` })),
       ).resolves.toBe(true);
-      expect(rbacService.getJobProjectContext).not.toHaveBeenCalled();
+      expect(rbacService.getResourceProjectContext).not.toHaveBeenCalled();
     });
   });
 });

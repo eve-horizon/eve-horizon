@@ -8,7 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from './auth.decorator.js';
 import { AuthService, type AuthUser } from './auth.service.js';
-import { RbacService } from './rbac.service.js';
+import { RbacService, type OwnedResourceKind } from './rbac.service.js';
 import { PERMISSION_KEY } from './permission.decorator.js';
 import { expandPermissions, hasAnyPermission, type Permission } from './permissions.js';
 
@@ -81,9 +81,10 @@ export class PermissionGuard implements CanActivate {
    * Resolve the permission context for a request.
    *
    * The resource addressed by the route is authoritative:
-   *   - `/projects/:project_id/...` → the project's owning org. A `body.org_id`
+   *   - `/projects/:project_id/...`  → the project's owning org. A `body.org_id`
    *     is ignored here so the request body cannot steer resolution to another org.
-   *   - `/jobs/:job_id/...`          → the job's project and that project's org.
+   *   - `/jobs/:job_id/...`, `/pipeline-runs/:runId/...`, `/builds/:build_id/...`,
+   *     `/threads/:thread_id/...`    → the resource's project and that project's org.
    *   - `/orgs/:org_id/...`          → that org.
    *   - otherwise                    → `body.org_id` when present (e.g. POST /projects),
    *     else no context (member baseline).
@@ -93,13 +94,13 @@ export class PermissionGuard implements CanActivate {
     request: any,
   ): Promise<ReadonlySet<string>> {
     const projectId = extractProjectId(request);
-    const jobId = projectId ? undefined : extractJobId(request);
+    const resource = projectId ? undefined : extractResourceRef(request);
 
     // Job, service, and service principal tokens carry explicit permissions,
-    // but may only address jobs owned by the project (or org) they were minted for.
+    // but may only address resources owned by the project (or org) they were minted for.
     if (user.is_job_token || user.is_service_token || user.is_service_principal) {
-      if (jobId) {
-        await this.assertTokenMayAddressJob(user, jobId);
+      if (resource) {
+        await this.assertTokenMayAddressResource(user, resource);
       }
       return new Set(user.permissions ?? []);
     }
@@ -112,11 +113,11 @@ export class PermissionGuard implements CanActivate {
       // Throws 404 if the project doesn't exist (instead of silently falling
       // to member baseline).
       orgId = await this.rbacService.getProjectOrgId(projectId);
-    } else if (jobId) {
-      // Throws 404 if the job doesn't exist.
-      const job = await this.rbacService.getJobProjectContext(jobId);
-      orgId = job.org_id;
-      contextProjectId = job.project_id;
+    } else if (resource) {
+      // Throws 404 if the resource doesn't exist.
+      const owner = await this.rbacService.getResourceProjectContext(resource.kind, resource.id);
+      orgId = owner.org_id;
+      contextProjectId = owner.project_id;
     } else {
       orgId = extractOrgId(request);
     }
@@ -130,35 +131,41 @@ export class PermissionGuard implements CanActivate {
   }
 
   /**
-   * A job/service/service-principal token may only address a job that belongs
-   * to its own scope: the job it was minted for (or that job's subtree), then
-   * its project, then its org.
+   * A job/service/service-principal token may only address a resource that
+   * belongs to its own scope: for jobs, the job it was minted for (or that
+   * job's subtree); otherwise its project, then its org.
    */
-  private async assertTokenMayAddressJob(user: AuthUser, jobId: string): Promise<void> {
-    if (user.job_id && (jobId === user.job_id || jobId.startsWith(`${user.job_id}.`))) {
+  private async assertTokenMayAddressResource(user: AuthUser, resource: ResourceRef): Promise<void> {
+    if (
+      resource.kind === 'job'
+      && user.job_id
+      && (resource.id === user.job_id || resource.id.startsWith(`${user.job_id}.`))
+    ) {
       return;
     }
 
-    // Throws 404 if the job doesn't exist.
-    const job = await this.rbacService.getJobProjectContext(jobId);
+    // Throws 404 if the resource doesn't exist.
+    const owner = await this.rbacService.getResourceProjectContext(resource.kind, resource.id);
 
     if (user.project_id) {
-      if (user.project_id !== job.project_id) {
-        throw new ForbiddenException('Token is not scoped to the project that owns this job');
+      if (user.project_id !== owner.project_id) {
+        throw new ForbiddenException('Token is not scoped to the project that owns this resource');
       }
       return;
     }
 
     if (user.org_id) {
-      if (user.org_id !== job.org_id) {
-        throw new ForbiddenException('Token is not scoped to the org that owns this job');
+      if (user.org_id !== owner.org_id) {
+        throw new ForbiddenException('Token is not scoped to the org that owns this resource');
       }
       return;
     }
 
-    throw new ForbiddenException('Token carries no project or org scope for this job');
+    throw new ForbiddenException('Token carries no project or org scope for this resource');
   }
 }
+
+type ResourceRef = { kind: OwnedResourceKind; id: string };
 
 function extractProjectId(request: { params?: Record<string, string>; routeOptions?: { url?: string }; url?: string }): string | undefined {
   const params = request.params ?? {};
@@ -174,9 +181,19 @@ function extractProjectId(request: { params?: Record<string, string>; routeOptio
   return undefined;
 }
 
-function extractJobId(request: { params?: Record<string, string> }): string | undefined {
+/**
+ * Identify a project-owned resource addressed by id on a route that has no
+ * project parameter. Path prefixes keep precedence sane: `/orgs/:org_id/threads/:thread_id`
+ * resolves through the org param, not through the thread.
+ */
+function extractResourceRef(request: { params?: Record<string, string>; routeOptions?: { url?: string }; url?: string }): ResourceRef | undefined {
   const params = request.params ?? {};
-  return params.job_id || undefined;
+  const path = request.routeOptions?.url ?? request.url ?? '';
+  if (params.job_id) return { kind: 'job', id: params.job_id };
+  if (params.runId && path.startsWith('/pipeline-runs/')) return { kind: 'pipeline_run', id: params.runId };
+  if (params.build_id && path.startsWith('/builds/')) return { kind: 'build', id: params.build_id };
+  if (params.thread_id && path.startsWith('/threads/')) return { kind: 'thread', id: params.thread_id };
+  return undefined;
 }
 
 function extractOrgId(request: { params?: Record<string, string>; routeOptions?: { url?: string }; url?: string; body?: any }): string | undefined {

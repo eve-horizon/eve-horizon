@@ -865,7 +865,7 @@ Eve uses a unified permission model for API access.
 Permissions for user tokens are resolved against the resource the route addresses, never against values the caller supplies in the request body:
 
 - `/projects/:project_id/...` resolves through the project's owning org.
-- `/jobs/:job_id/...` (including job attachments) resolves through the job's project and that project's org. Unknown jobs return 404.
+- `/jobs/:job_id/...` (including job attachments), `/pipeline-runs/:runId/...`, `/builds/:build_id/...` and `/threads/:thread_id/...` resolve through the resource's project and that project's org, so org admins can approve gated pipeline runs and read builds and threads they own. Unknown resources return 404.
 - `/orgs/:org_id/...` resolves against that org.
 - Routes with none of the above (for example `POST /projects`) may take `org_id` from the request body.
 
