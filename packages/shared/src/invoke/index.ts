@@ -139,8 +139,14 @@ export {
   EVE_MESSAGE_MAX_SIZE,
 } from './eve-message-relay.js';
 
-// Codex auth write-back
-export { writeBackCodexAuth } from './codex-auth.js';
+// Codex auth provenance and write-back
+export {
+  CODEX_AUTH_SOURCES,
+  selectedCodexAuth,
+  writeBackCodexAuth,
+  type CodexAuthSource,
+  type CodexAuthSelection,
+} from './codex-auth.js';
 
 // Resource hydration events
 export { emitResourceHydrationEvent } from './resource-hydration.js';

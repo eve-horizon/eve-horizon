@@ -212,10 +212,12 @@ Verify the real managed auth path after syncing:
 
 ```bash
 eve auth verify --harness claude --project proj_xxx --json
+eve auth verify --harness codex --project proj_xxx --json
 ```
 
-The JSON verdict includes `ok`, `secret_key`, `scope_type`, `token_class`,
-`apiKeySource`, and `model_replied`.
+The JSON verdict includes `ok`, `secret_key`, `scope_type`, `scope_id`, and
+`model_replied`; claude adds `token_class` and `apiKeySource`, codex adds
+`source`.
 
 ### Automatic Codex/Code Token Write-Back
 

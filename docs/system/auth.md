@@ -620,17 +620,24 @@ eve auth creds --codex
 
 ### eve auth verify
 
-Run a managed Claude-family probe job against a project and verify the selected
-credential works through the same runtime path as normal jobs:
+Run a managed probe job against a project and verify the selected credential
+works through the same runtime path as normal jobs:
 
 ```bash
 eve auth verify --harness claude --project proj_xxx --json
+eve auth verify --harness codex --project proj_xxx --json
 ```
 
-The command creates a short job that asks Claude to return `EVE_AUTH_OK`, waits
-for completion, and inspects runtime logs for `claude_auth_selected` plus Claude
-Code's `system/init.apiKeySource`. JSON output includes `ok`, `secret_key`,
-`scope_type`, `scope_id`, `token_class`, `apiKeySource`, and `model_replied`.
+The command creates a short job that asks the model to return `EVE_AUTH_OK`,
+waits for completion, and inspects the attempt logs for the harness's
+credential-selection event:
+
+- `claude` / `mclaude` read `claude_auth_selected` plus Claude Code's
+  `system/init.apiKeySource`. JSON output includes `ok`, `secret_key`,
+  `scope_type`, `scope_id`, `token_class`, `apiKeySource`, and `model_replied`.
+- `codex` reads `codex_auth_selected`. JSON output includes `ok`, `harness`,
+  `source` (`api_key` | `auth_json` | `oauth_access_token` | `preexisting`),
+  `secret_key`, `scope_type`, `scope_id`, and `model_replied`.
 
 ### eve auth sync
 

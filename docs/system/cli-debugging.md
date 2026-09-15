@@ -237,6 +237,7 @@ eve traces query --project <project> --service <service> --since 5m --error
 | Error | Meaning | Fix |
 |-------|---------|-----|
 | "OAuth token has expired", `apiKeySource: none`, or 401 | Claude auth invalid/not honored | Run `eve auth verify --harness claude --project <id> --json`, inspect `claude_auth_selected` / `claude_auth_failed`, then regenerate with `claude setup-token` if needed |
+| Codex/Code 401, "unauthorized", or "Missing code auth" | Codex credential invalid or not selected | Run `eve auth verify --harness codex --project <id> --json`, inspect `codex_auth_selected` (also the `Auth:` line of `eve job diagnose`), then `eve auth sync --codex` if needed |
 
 | "git clone failed" | Can't access repo | Check GITHUB_TOKEN secret is set |
 | "Service X ready check failed" | Service provisioning issue | Check .eve/manifest.yaml (services), container logs |

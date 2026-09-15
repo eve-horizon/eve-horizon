@@ -1,15 +1,50 @@
 /**
- * Codex auth writeback — after harness execution, read back auth.json from the
- * Codex config directory, compare to the original base64, and update the secret
- * if changed.
+ * Codex auth provenance and writeback.
  *
- * Failures are non-fatal — logged at warn level and swallowed.
+ * Provenance: a redacted `codex_auth_selected` record of which credential an
+ * attempt used (source, key name, scope — never the value), written to the
+ * attempt log so `eve auth verify --harness codex` and job receipts can show it
+ * after the runner pod is gone.
+ *
+ * Writeback: after harness execution, read back auth.json from the Codex
+ * config directory, compare to the original base64, and update the secret if
+ * changed. Failures are non-fatal — logged at warn level and swallowed.
  */
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { updateSecret } from '../api-client/secret-client.js';
+import type { SecretResolveItem } from '../schemas/secret.js';
+
+/** Credential sources in the order the runtime tries them. */
+export const CODEX_AUTH_SOURCES = ['api_key', 'auth_json', 'oauth_access_token', 'preexisting'] as const;
+export type CodexAuthSource = (typeof CODEX_AUTH_SOURCES)[number];
+
+/** Redacted record of the credential a codex-family attempt selected. Carries no secret values. */
+export interface CodexAuthSelection {
+  source: CodexAuthSource;
+  /** Name of the secret the credential came from; absent for pre-existing auth files. */
+  secret_key?: string;
+  scope_type?: string;
+  scope_id?: string;
+}
+
+/**
+ * Describe a selection from the secret that backed it. Only the key name and
+ * scope are copied; fields the secret does not carry are omitted.
+ */
+export function selectedCodexAuth(
+  source: CodexAuthSource,
+  secret?: Pick<SecretResolveItem, 'key'> & Partial<Pick<SecretResolveItem, 'scope_type' | 'scope_id'>> | null,
+): CodexAuthSelection {
+  const selection: CodexAuthSelection = { source };
+  if (!secret) return selection;
+  selection.secret_key = secret.key;
+  if (secret.scope_type) selection.scope_type = secret.scope_type;
+  if (secret.scope_id) selection.scope_id = secret.scope_id;
+  return selection;
+}
 
 export async function writeBackCodexAuth(
   originalB64: string,

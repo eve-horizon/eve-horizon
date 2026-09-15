@@ -1258,9 +1258,25 @@ type AuthVerifyResultResponse = {
   errorMessage: string | null;
 };
 
-type AuthVerifyLog = {
+export type AuthVerifyLog = {
   type: string;
   line: Record<string, unknown>;
+};
+
+const AUTH_VERIFY_HARNESSES = ['claude', 'mclaude', 'codex'] as const;
+type AuthVerifyHarness = (typeof AUTH_VERIFY_HARNESSES)[number];
+
+function isAuthVerifyHarness(value: string): value is AuthVerifyHarness {
+  return (AUTH_VERIFY_HARNESSES as readonly string[]).includes(value);
+}
+
+type AuthProbeRun = {
+  job: AuthVerifyJob;
+  waitResult: AuthVerifyResultResponse;
+  latestAttempt: AuthVerifyAttempt | null;
+  logs: AuthVerifyLog[];
+  succeeded: boolean;
+  modelReplied: boolean;
 };
 
 type AuthVerifyOutput = {
@@ -1279,29 +1295,69 @@ type AuthVerifyOutput = {
   error?: string | null;
 };
 
+type CodexAuthVerifySelection = {
+  source: string | null;
+  secret_key: string | null;
+  scope_type: string | null;
+  scope_id: string | null;
+};
+
+type CodexAuthVerifyOutput = CodexAuthVerifySelection & {
+  ok: boolean;
+  job_id: string;
+  attempt_number: number | null;
+  harness: string;
+  model_replied: boolean;
+  reason?: string;
+  error?: string | null;
+};
+
 async function handleAuthVerify(
   flags: Record<string, FlagValue>,
   context: ResolvedContext,
   json: boolean,
 ): Promise<void> {
   const harness = getStringFlag(flags, ['harness']) ?? 'claude';
-  if (harness !== 'claude' && harness !== 'mclaude') {
-    throw new Error('--harness must be claude or mclaude');
+  if (!isAuthVerifyHarness(harness)) {
+    throw new Error('--harness must be claude, mclaude, or codex');
   }
 
   const projectId = getStringFlag(flags, ['project']) ?? context.projectId;
   if (!projectId) {
-    throw new Error('Usage: eve auth verify --harness claude --project <id> [--json]');
+    throw new Error('Usage: eve auth verify --harness <claude|mclaude|codex> --project <id> [--json]');
   }
 
   const timeoutSeconds = parsePositiveInt(getStringFlag(flags, ['timeout']) ?? '300', '--timeout');
+  const probe = await runAuthProbeJob(context, projectId, harness, timeoutSeconds, json);
+
+  const ok = harness === 'codex'
+    ? reportCodexAuthVerify(probe, harness, json)
+    : reportClaudeAuthVerify(probe, harness, json);
+
+  if (!ok) {
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Create a managed probe job on the given harness, wait for it, and collect
+ * the latest attempt's logs. The job asks the model to reply EVE_AUTH_OK.
+ */
+async function runAuthProbeJob(
+  context: ResolvedContext,
+  projectId: string,
+  harness: AuthVerifyHarness,
+  timeoutSeconds: number,
+  json: boolean,
+): Promise<AuthProbeRun> {
+  const family = harness === 'codex' ? 'Codex' : 'Claude';
   const job = await requestJson<AuthVerifyJob>(context, `/projects/${projectId}/jobs`, {
     method: 'POST',
     body: {
-      title: `Claude auth verify (${harness})`,
+      title: `${family} auth verify (${harness})`,
       description: 'Reply with exactly: EVE_AUTH_OK',
       issue_type: 'task',
-      labels: ['auth-verify', 'claude-auth-verify'],
+      labels: ['auth-verify', `${family.toLowerCase()}-auth-verify`],
       priority: 1,
       review_required: 'none',
       execution_mode: 'ephemeral',
@@ -1333,10 +1389,16 @@ async function handleAuthVerify(
       )
     : { logs: [] };
 
-  const facts = extractAuthVerifyFacts(logs.logs);
   const modelReplied = Boolean(waitResult.resultText?.includes('EVE_AUTH_OK'))
     || JSON.stringify(waitResult.resultJson ?? {}).includes('EVE_AUTH_OK');
   const succeeded = waitResult.status === 'succeeded' && (waitResult.exitCode ?? 0) === 0;
+
+  return { job, waitResult, latestAttempt, logs: logs.logs, succeeded, modelReplied };
+}
+
+function reportClaudeAuthVerify(probe: AuthProbeRun, harness: string, json: boolean): boolean {
+  const { job, waitResult, latestAttempt, succeeded, modelReplied } = probe;
+  const facts = extractAuthVerifyFacts(probe.logs);
   const apiKeySourceOk = Boolean(facts.apiKeySource && facts.apiKeySource !== 'none');
   const ok = succeeded && apiKeySourceOk && modelReplied;
   const reason = ok
@@ -1381,9 +1443,54 @@ async function handleAuthVerify(
     }
   }
 
-  if (!ok) {
-    process.exitCode = 1;
+  return ok;
+}
+
+function reportCodexAuthVerify(probe: AuthProbeRun, harness: string, json: boolean): boolean {
+  const { job, waitResult, latestAttempt, succeeded, modelReplied } = probe;
+  const { selected } = extractCodexAuthVerifyFacts(probe.logs);
+  const ok = succeeded && selected !== null && modelReplied;
+  const reason = ok
+    ? undefined
+    : (!succeeded ? waitResult.errorMessage ?? `Job ${waitResult.status}` : undefined)
+      ?? (!selected ? 'The attempt did not log a codex_auth_selected event' : undefined)
+      ?? (!modelReplied ? 'Codex did not return EVE_AUTH_OK' : undefined)
+      ?? 'Codex auth verification failed';
+
+  const output: CodexAuthVerifyOutput = {
+    ok,
+    job_id: job.id,
+    attempt_number: latestAttempt?.attempt_number ?? null,
+    harness,
+    source: selected?.source ?? null,
+    secret_key: selected?.secret_key ?? null,
+    scope_type: selected?.scope_type ?? null,
+    scope_id: selected?.scope_id ?? null,
+    model_replied: modelReplied,
+    reason,
+    error: waitResult.errorMessage,
+  };
+
+  if (json) {
+    outputJson(output, true);
+  } else if (ok) {
+    console.log(`Codex auth verified (${describeCodexAuthSelection(output)}).`);
+  } else {
+    console.log(`Codex auth verification failed: ${reason}`);
+    console.log(`Job: ${job.id}`);
+    if (selected) {
+      console.log(`Selected: ${describeCodexAuthSelection(selected)}`);
+    }
   }
+
+  return ok;
+}
+
+/** e.g. "api_key OPENAI_API_KEY, project proj_xxx" or "preexisting". */
+function describeCodexAuthSelection(selection: CodexAuthVerifySelection): string {
+  const credential = [selection.source ?? 'unknown', selection.secret_key].filter(Boolean).join(' ');
+  const scope = [selection.scope_type, selection.scope_id].filter(Boolean).join(' ');
+  return scope ? `${credential}, ${scope}` : credential;
 }
 
 async function waitForAuthVerifyJob(
@@ -1448,6 +1555,29 @@ function extractAuthVerifyFacts(logs: AuthVerifyLog[]): {
   }
 
   return { selected, failure, apiKeySource };
+}
+
+/** Read the redacted codex credential selection from an attempt's logs (latest event wins). */
+export function extractCodexAuthVerifyFacts(logs: AuthVerifyLog[]): {
+  selected: CodexAuthVerifySelection | null;
+} {
+  let selected: CodexAuthVerifySelection | null = null;
+
+  for (const log of logs) {
+    const line = log.line;
+    if (!line || typeof line !== 'object') continue;
+
+    if (log.type === 'codex_auth_selected' || line.event === 'codex_auth_selected') {
+      selected = {
+        source: readString(line.source),
+        secret_key: readString(line.secret_key),
+        scope_type: readString(line.scope_type),
+        scope_id: readString(line.scope_id),
+      };
+    }
+  }
+
+  return { selected };
 }
 
 function parsePositiveInt(value: string, label: string): number {

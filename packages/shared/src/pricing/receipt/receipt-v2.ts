@@ -91,6 +91,19 @@ export type ExecutionReceiptBilledCost = {
   compute: Money;
 };
 
+/**
+ * Which credential the harness selected, read from the attempt's
+ * `claude_auth_selected` / `codex_auth_selected` log. Key name and scope only —
+ * never a secret value.
+ */
+export type ExecutionReceiptAuth = {
+  harness: string | null;
+  source: string | null;
+  secret_key: string | null;
+  scope_type: string | null;
+  scope_id: string | null;
+};
+
 export type ExecutionReceiptV2 = {
   version: 2;
   scope: ExecutionReceiptScope;
@@ -102,6 +115,7 @@ export type ExecutionReceiptV2 = {
     by_model: ExecutionReceiptLlmModelBreakdown[];
   };
   compute: ExecutionReceiptCompute;
+  auth: ExecutionReceiptAuth | null;
   pricing: ExecutionReceiptPricing;
   base_cost_usd: ExecutionReceiptBaseCostUsd;
   billed_cost: ExecutionReceiptBilledCost;

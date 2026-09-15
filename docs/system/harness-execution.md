@@ -302,6 +302,34 @@ write_codex_credentials() {
 }
 ```
 
+#### Diagnostics
+
+Each Code/Codex attempt logs `codex_auth_selected` once a credential is chosen,
+in both the agent-runtime and worker paths:
+
+```json
+{"event":"codex_auth_selected","harness":"codex","source":"api_key","secret_key":"OPENAI_API_KEY","scope_type":"project","scope_id":"proj_xxx"}
+```
+
+`source` is one of `api_key` (`OPENAI_API_KEY`), `auth_json`
+(`CODEX_AUTH_JSON_B64`), `oauth_access_token` (`CODEX_OAUTH_ACCESS_TOKEN`), or
+`preexisting` (an `auth.json` already on disk; carries no key or scope). Only
+the secret's key name and scope are recorded — never its value. The selection
+is copied into the attempt receipt's `auth` block, so `eve job diagnose <id>`
+and `eve job receipt <id>` still show it after the runner pod is gone.
+
+#### Verification
+
+```bash
+eve auth verify --harness codex --project <project-id> --json
+```
+
+Expected success includes:
+
+```json
+{"ok":true,"harness":"codex","source":"api_key","secret_key":"OPENAI_API_KEY","scope_type":"project","scope_id":"proj_xxx","model_replied":true}
+```
+
 ## Token Lifecycle Management
 
 ### Claude Tokens
@@ -566,6 +594,7 @@ All harness output is logged to the `execution_logs` table:
 | `spawn_error` | Failed to spawn harness process |
 | `claude_auth_selected` | Redacted Claude auth selection/materialization diagnostic |
 | `claude_auth_failed` | Structured Claude auth failure with selected key/scope/class |
+| `codex_auth_selected` | Redacted Codex/Code credential selection (source, secret key name, scope) |
 
 ## Docker Entrypoint Responsibilities
 

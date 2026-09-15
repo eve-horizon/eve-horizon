@@ -2081,6 +2081,7 @@ function formatDiagnose(
 
   if (receipt) {
     console.log('Receipt Summary:');
+    if (receipt.auth) console.log(`  Auth:   ${formatReceiptAuth(receipt.auth)}`);
     console.log(`  Base:   ${formatMoney(receipt.base_cost_usd?.total_usd)}`);
     console.log(`  Billed: ${formatMoney(receipt.billed_cost?.total)}`);
     console.log('');
@@ -2956,6 +2957,7 @@ type ExecutionReceiptV2Like = {
     billing_currency?: string;
     fx?: { from_currency?: string; to_currency?: string; rate?: string; fetched_at?: string; source?: string } | null;
   };
+  auth?: ReceiptAuthLike | null;
   base_cost_usd?: {
     total_usd?: ReceiptMoney;
     llm_usd?: ReceiptMoney;
@@ -2966,6 +2968,14 @@ type ExecutionReceiptV2Like = {
     llm?: ReceiptMoney;
     compute?: ReceiptMoney;
   };
+};
+
+type ReceiptAuthLike = {
+  harness?: string | null;
+  source?: string | null;
+  secret_key?: string | null;
+  scope_type?: string | null;
+  scope_id?: string | null;
 };
 
 async function handleReceipt(
@@ -3057,6 +3067,13 @@ async function handleCompare(
   }
 }
 
+/** e.g. "codex api_key OPENAI_API_KEY (project proj_xxx)" or "codex preexisting". */
+function formatReceiptAuth(auth: ReceiptAuthLike): string {
+  const credential = [auth.harness, auth.source ?? 'unknown', auth.secret_key].filter(Boolean).join(' ');
+  const scope = [auth.scope_type, auth.scope_id].filter(Boolean).join(' ');
+  return scope ? `${credential} (${scope})` : credential;
+}
+
 function formatMoney(m: ReceiptMoney | null | undefined): string {
   const currency = (m?.currency ?? '').toLowerCase();
   const amount = m?.amount ?? '';
@@ -3086,6 +3103,7 @@ function formatReceiptText(receipt: ExecutionReceiptV2Like): void {
   console.log('Receipt:');
   if (receipt.scope?.attempt_id) console.log(`  Attempt: ${receipt.scope.attempt_id}`);
   if (receipt.scope?.job_id) console.log(`  Job:     ${receipt.scope.job_id}`);
+  if (receipt.auth) console.log(`  Auth:    ${formatReceiptAuth(receipt.auth)}`);
 
   console.log('');
   console.log('Totals:');

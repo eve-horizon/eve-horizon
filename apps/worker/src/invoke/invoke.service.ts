@@ -100,6 +100,7 @@ import {
   threadMessageQueries,
 } from '@eve/db';
 import { resolveHarnessAdapter, type HarnessName, type PermissionPolicy, type HarnessHelpers } from '@eve/shared';
+import { selectedCodexAuth, type CodexAuthSelection, type SecretResolveItem } from '@eve/shared';
 import { runInvocationInK8s } from './k8s-runner';
 import { buildSanitizedHarnessEnv, buildAppApiEnvVars, mintAppLinkToken } from '@eve/shared';
 import { GitWorkspace, buildAuthenticatedHttpsUrl, type GitAuth as GitWorkspaceAuth } from '@eve/shared';
@@ -182,6 +183,24 @@ export class InvokeService {
     await this.logs.appendLog(invocation.attemptId, 'claude_auth_selected', payload);
     await this.logLifecycleEvent(invocation.attemptId, 'secrets', 'log', {
       kind: 'claude_auth_selected',
+      ...payload,
+    });
+  }
+
+  private async logCodexAuthSelected(
+    invocation: HarnessInvocation,
+    harness: HarnessName,
+    selection: CodexAuthSelection,
+  ): Promise<void> {
+    const payload = {
+      event: 'codex_auth_selected',
+      harness,
+      ...selection,
+    };
+
+    await this.logs.appendLog(invocation.attemptId, 'codex_auth_selected', payload);
+    await this.logLifecycleEvent(invocation.attemptId, 'secrets', 'log', {
+      kind: 'codex_auth_selected',
       ...payload,
     });
   }
@@ -1472,7 +1491,7 @@ export class InvokeService {
             };
           },
           resolveCodeAuth: (options?: { configDir?: string }) =>
-            this.resolveCodeAuth({ ...options, env: baseEnv }),
+            this.resolveCodeAuth(effectiveInvocation, harness, resolvedSecrets, { ...options, env: baseEnv }),
         };
 
         const options = await adapter.buildOptions({
@@ -1831,14 +1850,26 @@ export class InvokeService {
     return null;
   }
 
-  private async resolveCodeAuth(options?: {
-    configDir?: string;
-    env?: NodeJS.ProcessEnv;
-  }): Promise<{
+  /**
+   * Select the Codex credential for this attempt from the per-invocation env —
+   * OPENAI_API_KEY, then CODEX_AUTH_JSON_B64, then CODEX_OAUTH_ACCESS_TOKEN,
+   * then pre-existing auth files — and record the redacted selection as
+   * `codex_auth_selected`. `secrets` only supplies the scope of the chosen key.
+   */
+  private async resolveCodeAuth(
+    invocation: HarnessInvocation,
+    harness: HarnessName,
+    secrets: SecretResolveItem[],
+    options?: {
+      configDir?: string;
+      env?: NodeJS.ProcessEnv;
+    },
+  ): Promise<{
     env: Record<string, string | undefined>;
   }> {
     const homeDir = process.env.HOME || os.homedir();
     const env = options?.env ?? process.env;
+    const secretFor = (key: string) => secrets.find(s => s.key === key) ?? { key };
 
     console.log(`[codex-auth] resolveCodeAuth called: configDir=${options?.configDir ?? '(none)'} HOME=${homeDir} OPENAI_API_KEY=${!!env.OPENAI_API_KEY} CODEX_AUTH_JSON_B64=${!!env.CODEX_AUTH_JSON_B64} CODEX_OAUTH_ACCESS_TOKEN=${!!env.CODEX_OAUTH_ACCESS_TOKEN}`);
 
@@ -1846,6 +1877,7 @@ export class InvokeService {
     const apiKey = env.OPENAI_API_KEY;
     if (apiKey) {
       console.log('[codex-auth] Using OPENAI_API_KEY from env');
+      await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('api_key', secretFor('OPENAI_API_KEY')));
       return { env: { OPENAI_API_KEY: apiKey } };
     }
 
@@ -1890,6 +1922,7 @@ export class InvokeService {
 
       // Do NOT pass OPENAI_API_KEY as env var — let the Codex CLI use file-based
       // auth from CODEX_HOME/auth.json so it can auto-refresh using refresh_token.
+      await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('auth_json', secretFor('CODEX_AUTH_JSON_B64')));
       return { env: {} };
     }
 
@@ -1916,6 +1949,7 @@ export class InvokeService {
         }
       }
       // No refresh_token available — pass as env var fallback
+      await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('oauth_access_token', secretFor('CODEX_OAUTH_ACCESS_TOKEN')));
       return { env: { OPENAI_API_KEY: oauthToken } };
     }
 
@@ -1944,6 +1978,7 @@ export class InvokeService {
               // non-fatal
             }
           }
+          await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('preexisting'));
           return { env: {} };
         }
       } catch {

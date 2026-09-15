@@ -1010,17 +1010,19 @@ for cloud deployments. Credentials are stored globally per API URL.`,
         ],
       },
       verify: {
-        description: 'Run a managed Claude auth probe job and report the selected credential',
-        usage: 'eve auth verify --harness claude --project <id> [--timeout 300] [--json]',
+        description: 'Run a managed auth probe job on a harness and report the credential it selected',
+        usage: 'eve auth verify --harness <claude|mclaude|codex> --project <id> [--timeout 300] [--json]',
         options: [
-          '--harness <name>    Claude-family harness to verify (claude|mclaude, default claude)',
+          '--harness <name>    Harness to verify (claude|mclaude|codex, default claude)',
           '--project <id>      Project whose resolved secrets should be verified',
           '--timeout <sec>     Max wait time for the probe job (default 300)',
-          '--json              Emit structured verdict with secret key, scope, token class, and apiKeySource',
+          '--json              Emit structured verdict: secret key and scope for all harnesses;',
+          '                    token class and apiKeySource for claude/mclaude; source for codex',
         ],
         examples: [
           'eve auth verify --harness claude --project proj_xxx --json',
           'eve auth verify --harness mclaude --project proj_xxx',
+          'eve auth verify --harness codex --project proj_xxx --json',
         ],
       },
       permissions: {

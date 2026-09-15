@@ -367,6 +367,10 @@ Receipts include:
 
 - `timing` (billable ms, phase durations)
 - `llm` usage totals (input/output/cache/reasoning tokens)
+- `auth` — the credential the harness selected (`harness`, `source`,
+  `secret_key`, `scope_type`, `scope_id`; key name and scope only, never a
+  value), read from the attempt's `claude_auth_selected` /
+  `codex_auth_selected` log; `null` when no selection was logged
 - `base_cost_usd` and `billed_cost` totals
 
 ## Job Hierarchy

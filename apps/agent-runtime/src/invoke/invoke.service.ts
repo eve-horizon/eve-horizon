@@ -134,6 +134,7 @@ import {
   recordToolchainEvent,
 } from './toolchains';
 import type { SecretResolveItem, EveAgentCliOptions } from '@eve/shared';
+import { selectedCodexAuth, type CodexAuthSelection } from '@eve/shared';
 
 const DEFAULT_K8S_NAMESPACE = 'eve';
 
@@ -252,6 +253,24 @@ export class InvokeService {
     await this.logs.appendLog(invocation.attemptId, 'claude_auth_selected', payload);
     await this.logLifecycleEvent(invocation.attemptId, 'secrets', 'log', {
       kind: 'claude_auth_selected',
+      ...payload,
+    });
+  }
+
+  private async logCodexAuthSelected(
+    invocation: HarnessInvocation,
+    harness: HarnessName,
+    selection: CodexAuthSelection,
+  ): Promise<void> {
+    const payload = {
+      event: 'codex_auth_selected',
+      harness,
+      ...selection,
+    };
+
+    await this.logs.appendLog(invocation.attemptId, 'codex_auth_selected', payload);
+    await this.logLifecycleEvent(invocation.attemptId, 'secrets', 'log', {
+      kind: 'codex_auth_selected',
       ...payload,
     });
   }
@@ -1341,6 +1360,112 @@ export class InvokeService {
   }
 
   /**
+   * Select the Codex credential for this attempt — OPENAI_API_KEY, then
+   * CODEX_AUTH_JSON_B64, then CODEX_OAUTH_ACCESS_TOKEN, then pre-existing auth
+   * files — and record the redacted selection as `codex_auth_selected`.
+   */
+  private async resolveCodeAuth(
+    invocation: HarnessInvocation,
+    harness: HarnessName,
+    secrets: SecretResolveItem[],
+    options?: { configDir?: string },
+  ): Promise<{ env: Record<string, string | undefined> }> {
+    const homeDir = process.env.HOME || os.homedir();
+    const configDir = options?.configDir ?? path.join(homeDir, '.codex');
+
+    // Priority 1: OPENAI_API_KEY from secrets
+    const apiKeySecret = secrets.find(s => s.key === 'OPENAI_API_KEY');
+    if (apiKeySecret) {
+      console.log('[codex-auth] Using OPENAI_API_KEY from resolved secrets');
+      await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('api_key', apiKeySecret));
+      return { env: { OPENAI_API_KEY: apiKeySecret.value } };
+    }
+
+    // Priority 2: CODEX_AUTH_JSON_B64 — decode and write full auth.json
+    const authB64Secret = secrets.find(s => s.key === 'CODEX_AUTH_JSON_B64');
+    if (authB64Secret) {
+      const authJsonStr = Buffer.from(authB64Secret.value, 'base64').toString('utf-8');
+
+      try {
+        const authData = JSON.parse(authJsonStr) as Record<string, unknown>;
+        const tokens = authData.tokens as Record<string, unknown> | undefined;
+        console.log(
+          `[codex-auth] Decoded CODEX_AUTH_JSON_B64: access_token=${!!tokens?.access_token} refresh_token=${!!tokens?.refresh_token} last_refresh=${String(authData.last_refresh ?? 'missing')}`,
+        );
+      } catch {
+        console.warn('[codex-auth] Failed to parse CODEX_AUTH_JSON_B64');
+      }
+
+      // Write auth.json to CODEX_HOME (inside workspace) and fallback locations
+      const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
+      for (const dir of authTargets) {
+        const authPath = path.join(dir, 'auth.json');
+        try {
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(authPath, authJsonStr);
+          console.log(`[codex-auth] Wrote auth.json to ${authPath}`);
+        } catch (error) {
+          console.warn(`[codex-auth] Failed to write auth.json to ${authPath}: ${String(error)}`);
+        }
+      }
+
+      // Let Codex CLI use file-based auth with refresh_token support
+      await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('auth_json', authB64Secret));
+      return { env: {} };
+    }
+
+    // Priority 3: CODEX_OAUTH_ACCESS_TOKEN (no refresh support)
+    const oauthSecret = secrets.find(s => s.key === 'CODEX_OAUTH_ACCESS_TOKEN');
+    if (oauthSecret) {
+      const authPayload = {
+        tokens: { access_token: oauthSecret.value },
+        last_refresh: new Date().toISOString(),
+      };
+      const authJsonStr = JSON.stringify(authPayload, null, 2);
+      const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
+      for (const dir of authTargets) {
+        try {
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(path.join(dir, 'auth.json'), authJsonStr);
+        } catch {
+          // non-fatal
+        }
+      }
+      await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('oauth_access_token', oauthSecret));
+      return { env: { OPENAI_API_KEY: oauthSecret.value } };
+    }
+
+    // Priority 4: Pre-existing auth files
+    const authPaths = [
+      path.join(configDir, 'auth.json'),
+      path.join(homeDir, '.codex', 'auth.json'),
+      path.join(homeDir, '.code', 'auth.json'),
+    ];
+    for (const authPath of authPaths) {
+      try {
+        const content = await fs.readFile(authPath, 'utf-8');
+        const data = JSON.parse(content) as { tokens?: { access_token?: string }; OPENAI_API_KEY?: string };
+        if (data.tokens?.access_token || data.OPENAI_API_KEY) {
+          console.log(`[codex-auth] Found pre-existing auth at ${authPath}`);
+          if (configDir && !authPath.startsWith(configDir)) {
+            try {
+              await fs.mkdir(configDir, { recursive: true });
+              await fs.writeFile(path.join(configDir, 'auth.json'), content);
+            } catch { /* non-fatal */ }
+          }
+          await this.logCodexAuthSelected(invocation, harness, selectedCodexAuth('preexisting'));
+          return { env: {} };
+        }
+      } catch {
+        // next
+      }
+    }
+
+    console.error('[codex-auth] No codex auth found in secrets or filesystem');
+    throw new Error('Missing code auth: set OPENAI_API_KEY or CODEX_AUTH_JSON_B64. Run: eve auth sync --codex');
+  }
+
+  /**
    * Resolve the harness adapter, per-job HOME, Codex/Claude auth, adapter
    * options, security preamble, and the eve-agent-cli binary + args.
    */
@@ -1391,97 +1516,7 @@ export class InvokeService {
           configDir: runtimeConfig.configDir,
         };
       },
-      resolveCodeAuth: async (options) => {
-        const homeDir = process.env.HOME || os.homedir();
-        const configDir = options?.configDir ?? path.join(homeDir, '.codex');
-
-        // Priority 1: OPENAI_API_KEY from secrets
-        const apiKeySecret = resolvedSecrets.find(s => s.key === 'OPENAI_API_KEY');
-        if (apiKeySecret) {
-          console.log('[codex-auth] Using OPENAI_API_KEY from resolved secrets');
-          return { env: { OPENAI_API_KEY: apiKeySecret.value } };
-        }
-
-        // Priority 2: CODEX_AUTH_JSON_B64 — decode and write full auth.json
-        const authB64Secret = resolvedSecrets.find(s => s.key === 'CODEX_AUTH_JSON_B64');
-        if (authB64Secret) {
-          const authJsonStr = Buffer.from(authB64Secret.value, 'base64').toString('utf-8');
-
-          try {
-            const authData = JSON.parse(authJsonStr) as Record<string, unknown>;
-            const tokens = authData.tokens as Record<string, unknown> | undefined;
-            console.log(
-              `[codex-auth] Decoded CODEX_AUTH_JSON_B64: access_token=${!!tokens?.access_token} refresh_token=${!!tokens?.refresh_token} last_refresh=${String(authData.last_refresh ?? 'missing')}`,
-            );
-          } catch {
-            console.warn('[codex-auth] Failed to parse CODEX_AUTH_JSON_B64');
-          }
-
-          // Write auth.json to CODEX_HOME (inside workspace) and fallback locations
-          const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
-          for (const dir of authTargets) {
-            const authPath = path.join(dir, 'auth.json');
-            try {
-              await fs.mkdir(dir, { recursive: true });
-              await fs.writeFile(authPath, authJsonStr);
-              console.log(`[codex-auth] Wrote auth.json to ${authPath}`);
-            } catch (error) {
-              console.warn(`[codex-auth] Failed to write auth.json to ${authPath}: ${String(error)}`);
-            }
-          }
-
-          // Let Codex CLI use file-based auth with refresh_token support
-          return { env: {} };
-        }
-
-        // Priority 3: CODEX_OAUTH_ACCESS_TOKEN (no refresh support)
-        const oauthSecret = resolvedSecrets.find(s => s.key === 'CODEX_OAUTH_ACCESS_TOKEN');
-        if (oauthSecret) {
-          const authPayload = {
-            tokens: { access_token: oauthSecret.value },
-            last_refresh: new Date().toISOString(),
-          };
-          const authJsonStr = JSON.stringify(authPayload, null, 2);
-          const authTargets = [configDir, path.join(homeDir, '.codex'), path.join(homeDir, '.code')];
-          for (const dir of authTargets) {
-            try {
-              await fs.mkdir(dir, { recursive: true });
-              await fs.writeFile(path.join(dir, 'auth.json'), authJsonStr);
-            } catch {
-              // non-fatal
-            }
-          }
-          return { env: { OPENAI_API_KEY: oauthSecret.value } };
-        }
-
-        // Priority 4: Pre-existing auth files
-        const authPaths = [
-          path.join(configDir, 'auth.json'),
-          path.join(homeDir, '.codex', 'auth.json'),
-          path.join(homeDir, '.code', 'auth.json'),
-        ];
-        for (const authPath of authPaths) {
-          try {
-            const content = await fs.readFile(authPath, 'utf-8');
-            const data = JSON.parse(content) as { tokens?: { access_token?: string }; OPENAI_API_KEY?: string };
-            if (data.tokens?.access_token || data.OPENAI_API_KEY) {
-              console.log(`[codex-auth] Found pre-existing auth at ${authPath}`);
-              if (configDir && !authPath.startsWith(configDir)) {
-                try {
-                  await fs.mkdir(configDir, { recursive: true });
-                  await fs.writeFile(path.join(configDir, 'auth.json'), content);
-                } catch { /* non-fatal */ }
-              }
-              return { env: {} };
-            }
-          } catch {
-            // next
-          }
-        }
-
-        console.error('[codex-auth] No codex auth found in secrets or filesystem');
-        throw new Error('Missing code auth: set OPENAI_API_KEY or CODEX_AUTH_JSON_B64. Run: eve auth sync --codex');
-      },
+      resolveCodeAuth: (options) => this.resolveCodeAuth(invocationWithOptions, harnessName, resolvedSecrets, options),
     };
 
     // baseEnv is a read context for adapter resolution.

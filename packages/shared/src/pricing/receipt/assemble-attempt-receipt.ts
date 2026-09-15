@@ -1,5 +1,5 @@
 import type { RateCardV1 } from '../types.js';
-import type { ExecutionReceiptV2 } from './receipt-v2.js';
+import type { ExecutionReceiptAuth, ExecutionReceiptV2 } from './receipt-v2.js';
 import { calculateBilledCost, estimateComputeCostUsd, getTokenRate } from '../cost-calculator.js';
 import type { LlmUsageByModel, ComputeUsage } from '../cost-calculator.js';
 import { inferProviderName } from '../../providers/registry.js';
@@ -65,6 +65,26 @@ function readNumber(value: unknown): number | null {
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+const AUTH_SELECTED_LOG_TYPES = new Set(['claude_auth_selected', 'codex_auth_selected']);
+
+/** The credential the harness selected, from the attempt's latest `*_auth_selected` log. */
+function detectAuthSelection(logs: ExecutionLogLike[]): ExecutionReceiptAuth | null {
+  const entry = [...logs].reverse().find((l) => AUTH_SELECTED_LOG_TYPES.has(l.type));
+  if (!entry) return null;
+  const content = entry.content;
+  return {
+    harness: readString(content.harness),
+    source: readString(content.source),
+    secret_key: readString(content.secret_key),
+    scope_type: readString(content.scope_type),
+    scope_id: readString(content.scope_id),
+  };
 }
 
 function findLifecycleDurationMs(logs: ExecutionLogLike[], type: string): number | null {
@@ -375,6 +395,7 @@ export function assembleAttemptReceiptV2(input: AssembleAttemptReceiptV2Input): 
         ? { vcpu_seconds: compute.vcpu_seconds, memory_gib_seconds: compute.memory_gib_seconds }
         : { vcpu_seconds: 0, memory_gib_seconds: 0 },
     },
+    auth: detectAuthSelection(input.logs),
     pricing: {
       rate_card: {
         name: input.pricing.rate_card.name,
