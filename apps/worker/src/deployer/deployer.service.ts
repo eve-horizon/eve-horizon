@@ -1152,20 +1152,14 @@ export class DeployerService {
       const allVolumeMounts = this.mergeVolumeMounts(volumeMounts, managedTrust.volumeMounts);
 
 
-      // Database services need Recreate strategy (RWO PVCs can't be mounted by two pods)
-      // and extra time for clean shutdown (WAL checkpoint + flush).
-      //
-      // Stable-egress services on EKS also need Recreate: the pod runs with
-      // hostNetwork on a single-node egress pool, so RollingUpdate's default
-      // maxSurge would create a new pod that can't schedule (the existing pod
-      // already binds the container port on the node). Phase 1 already
-      // enforces replicas=1, so killing-then-recreating is a brief gap, not
-      // an availability hit.
-      const isStableEgressEks = stableEgressPlan?.mode === 'eks';
-      const strategy = (isDatabase || isStableEgressEks)
-        ? { type: 'Recreate' }
-        : undefined;
+      const strategy = this.resolveDeploymentStrategy({
+        service,
+        isDatabase,
+        isStableEgressEks: stableEgressPlan?.mode === 'eks',
+        storage,
+      });
 
+      // Database services need extra time for clean shutdown (WAL checkpoint + flush).
       const terminationGracePeriodSeconds = isDatabase ? 120 : undefined;
 
       // preStop hook gives the database process time to shut down cleanly
@@ -2108,6 +2102,36 @@ export class DeployerService {
   private isDatabaseRole(service: Service): boolean {
     const xeve = this.resolveXeve(service);
     return xeve?.role === 'database';
+  }
+
+  /**
+   * Deployment rollout strategy. Undefined leaves the Kubernetes default
+   * (RollingUpdate) in place.
+   *
+   * `x-eve.rollout` is an explicit override. Without one, Recreate is used
+   * when the service mounts a ReadWriteOnce volume (database roles resolve to
+   * one): the PVC can only be attached to one pod, so a RollingUpdate whose
+   * surge pod lands on another node blocks on the volume.
+   *
+   * Stable-egress services on EKS always use Recreate: the pod runs with
+   * hostNetwork on a single-node egress pool, so a surge pod cannot bind the
+   * container port. Phase 1 already enforces replicas=1, so
+   * killing-then-recreating is a brief gap, not an availability hit.
+   */
+  private resolveDeploymentStrategy(params: {
+    service: Service;
+    isDatabase: boolean;
+    isStableEgressEks: boolean;
+    storage: ServiceStorageConfig | null;
+  }): { type: 'Recreate' } | undefined {
+    if (params.isStableEgressEks) return { type: 'Recreate' };
+
+    const rollout = this.resolveXeve(params.service)?.rollout;
+    if (rollout === 'recreate') return { type: 'Recreate' };
+    if (rollout === 'rolling') return undefined;
+
+    const mountsReadWriteOnceVolume = params.storage?.accessMode === 'ReadWriteOnce';
+    return params.isDatabase || mountsReadWriteOnceVolume ? { type: 'Recreate' } : undefined;
   }
 
   private resolveIngressConfig(service: Service): Record<string, unknown> | null {

@@ -497,6 +497,7 @@ services:
 | `worker_type` | Worker pool type for worker services |
 | `files` | Mount repo files into container |
 | `storage` | Persistent volume configuration |
+| `rollout` | `recreate` or `rolling`; overrides the default rollout strategy (see Persistent Storage) |
 | `managed` | Managed DB config (requires `role: managed_db`) |
 | `audit_log_table` | Optional table used by `eve env diagnose --request` |
 | `request_id_column` | Optional request ID column for `audit_log_table` (default `request_id`) |
@@ -635,6 +636,14 @@ services:
         access_mode: ReadWriteOnce
         storage_class: standard
 ```
+
+Services that mount a `ReadWriteOnce` volume (the default `access_mode`, and
+what `role: database` resolves to) deploy with the Kubernetes `Recreate`
+strategy: the volume can only be attached to one pod, so a rolling update whose
+replacement pod lands on another node would block on it. `ReadWriteMany` and
+`ReadOnlyMany` volumes keep the default `RollingUpdate`. Set
+`x-eve.rollout: rolling` to keep `RollingUpdate` regardless, or
+`x-eve.rollout: recreate` to force `Recreate` for a service without storage.
 
 ### Health Checks
 

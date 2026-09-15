@@ -258,6 +258,12 @@ export const ServiceXeveSchema: z.ZodTypeAny = z.object({
   worker_type: z.string().optional(),
   files: z.array(ServiceFilesEntrySchema).optional(),
   storage: ServiceStorageSchema.optional(),
+  /**
+   * Deployment rollout strategy override. Without it, Recreate is used for
+   * services that mount a ReadWriteOnce volume (and database roles); every
+   * other service keeps the Kubernetes default, RollingUpdate.
+   */
+  rollout: z.enum(['recreate', 'rolling']).optional(),
   managed: ManagedDbConfigSchema.optional(),
   object_store: ObjectStoreConfigSchema.optional(),
   networking: ServiceNetworkingSchema.optional(),
