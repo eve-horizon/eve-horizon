@@ -11,7 +11,7 @@ const invocation = {
   projectId: 'proj_1',
   text: '',
   workspacePath: '/tmp/eve-ws',
-} as HarnessInvocation;
+} as unknown as HarnessInvocation;
 
 function secret(
   key: string,
