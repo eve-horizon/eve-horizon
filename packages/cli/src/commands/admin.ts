@@ -47,7 +47,7 @@ export async function handleAdmin(
       const githubUsername = getStringFlag(flags, ['github']);
       const sshKeyPath = getStringFlag(flags, ['ssh-key']);
       const email = getStringFlag(flags, ['email']);
-      const role = getStringFlag(flags, ['role']) ?? 'member';
+      const role = getStringFlag(flags, ['role']);
       const orgId = getStringFlag(flags, ['org']) ?? context.orgId;
       const web = getBooleanFlag(flags, ['web']) ?? false;
       const redirectTo = getStringFlag(flags, ['redirect-to']);
@@ -56,7 +56,7 @@ export async function handleAdmin(
         throw new Error('Usage: eve admin invite --email <email> [--github <username>] [--ssh-key <path>] [--role <role>] [--org <org_id>] [--web] [--redirect-to <url>]');
       }
 
-      if (!['owner', 'admin', 'member'].includes(role)) {
+      if (role !== undefined && !['owner', 'admin', 'member'].includes(role)) {
         throw new Error(`Invalid role: ${role}. Must be one of: owner, admin, member`);
       }
 
@@ -74,14 +74,13 @@ export async function handleAdmin(
         identities: [],
       };
 
-      // Add user to org first - this creates the user if they don't exist
+      // Add user to org first - this creates the user if they don't exist.
+      // `role` is only sent when given: the API keeps an existing member's role
+      // (and defaults a new one to `member`) when it is omitted.
       if (orgId) {
         const membership = await requestJson<MemberResponse>(context, `/orgs/${orgId}/members`, {
           method: 'POST',
-          body: {
-            email,
-            role,
-          },
+          body: role ? { email, role } : { email },
         });
         results.membership = membership;
       }
@@ -152,7 +151,7 @@ export async function handleAdmin(
       const summary = [
         `Invited ${email}`,
         results.keys_registered > 0 ? `${results.keys_registered} SSH key(s) registered` : null,
-        results.membership ? `Added to ${orgId} as ${role}` : null,
+        results.membership ? `Added to ${orgId} as ${results.membership.role}` : null,
         results.web_invite_sent ? 'Web invite email sent' : null,
       ].filter(Boolean).join(', ');
 

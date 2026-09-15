@@ -52,7 +52,8 @@ export const OrgMemberRoleSchema = MemberRoleSchema;
 export const OrgMemberRequestSchema = z.object({
   user_id: z.string().optional(),
   email: z.string().email().optional(),
-  role: OrgMemberRoleSchema,
+  /** Omit to keep an existing membership's role (new memberships default to `member`). */
+  role: OrgMemberRoleSchema.optional(),
 }).refine((value) => Boolean(value.user_id || value.email), {
   message: 'user_id or email is required',
 });

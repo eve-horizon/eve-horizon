@@ -388,7 +388,13 @@ export class OrgsService {
       });
     }
 
-    const membership = await this.memberships.upsertOrgMembership(orgId, user.id, input.role);
+    // Without an explicit role, keep the existing membership's role (or
+    // `member` for a new membership) so re-adding an admin or owner does not
+    // silently downgrade them.
+    const role = input.role
+      ?? (await this.memberships.findOrgMembership(user.id, orgId))?.role
+      ?? 'member';
+    const membership = await this.memberships.upsertOrgMembership(orgId, user.id, role);
     return this.toMemberResponse({ ...membership, email: user.email, display_name: user.display_name });
   }
 

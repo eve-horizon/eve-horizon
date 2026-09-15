@@ -393,6 +393,7 @@ export async function handleAuth(
       return;
     }
     case 'mint': {
+      const usage = 'Usage: eve auth mint --email <email> (--org <org_id> | --project <project_id>) [--role <role>] [--ttl <days>]';
       const email = getStringFlag(flags, ['email']);
       const orgId = getStringFlag(flags, ['org']);
       const projectId = getStringFlag(flags, ['project']);
@@ -405,11 +406,11 @@ export async function handleAuth(
       }
 
       if (!email) {
-        throw new Error('Usage: eve auth mint --email <email> [--org <org_id> | --project <project_id>] [--role <role>]');
+        throw new Error(usage);
       }
 
       if (!orgId && !projectId) {
-        throw new Error('Usage: eve auth mint --email <email> [--org <org_id> | --project <project_id>] [--role <role>]');
+        throw new Error(`${usage}\nOne of --org or --project is required.`);
       }
 
       if (!['owner', 'admin', 'member'].includes(role)) {

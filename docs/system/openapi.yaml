@@ -13472,8 +13472,6 @@ components:
             - owner
             - admin
             - member
-      required:
-        - role
       additionalProperties: false
     OrgMemberResponse:
       type: object

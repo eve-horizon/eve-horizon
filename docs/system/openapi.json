@@ -22613,9 +22613,6 @@
             ]
           }
         },
-        "required": [
-          "role"
-        ],
         "additionalProperties": false
       },
       "OrgMemberResponse": {
