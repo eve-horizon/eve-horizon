@@ -100,7 +100,7 @@ import {
   threadMessageQueries,
 } from '@eve/db';
 import { resolveHarnessAdapter, type HarnessName, type PermissionPolicy, type HarnessHelpers } from '@eve/shared';
-import { selectedCodexAuth, type CodexAuthSelection, type SecretResolveItem } from '@eve/shared';
+import { selectedCodexAuth, type CodexAuthSelection } from '@eve/shared';
 import { runInvocationInK8s } from './k8s-runner';
 import { buildSanitizedHarnessEnv, buildAppApiEnvVars, mintAppLinkToken } from '@eve/shared';
 import { GitWorkspace, buildAuthenticatedHttpsUrl, type GitAuth as GitWorkspaceAuth } from '@eve/shared';
