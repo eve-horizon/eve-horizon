@@ -407,6 +407,11 @@ services:
         engine: postgres
         engine_version: "16"
         extensions: [postgis, pgvector, pg_trgm]
+        roles:
+          - name: app
+            grants: readwrite
+          - name: reports
+            grants: readonly
 ```
 
 Notes:
@@ -414,7 +419,8 @@ Notes:
 - Provisioning happens on first deploy for an environment.
 - Use `eve db status --env <name>` to view provisioning state.
 - Other services may reference managed values with `${managed.<service>.<field>}`
-  placeholders (resolved at deploy time when available).
+  placeholders (resolved at deploy time when available). See
+  [Interpolation fields](#managed-db-interpolation-fields) below.
 - `extensions` is optional and supports plain tenant-local extensions:
   `postgis`, `pgvector`, `pg_trgm`, `btree_gist`, `hstore`, and `citext`.
 - The manifest name `pgvector` maps to the PostgreSQL extension `vector`.
@@ -428,6 +434,49 @@ Notes:
 - `pg_cron` is installed in the instance admin database (`postgres`) following
   the AWS RDS model; tenant-database job targeting is a platform-admin
   operation.
+
+### Roles
+
+Every managed DB has one owner login (used by `${managed.<service>.url}` and
+by `eve db` commands). `roles` optionally declares additional least-privilege
+logins for application runtimes:
+
+```yaml
+roles:
+  - name: app          # ^[a-z][a-z0-9_]{0,15}$, unique per service
+    grants: readwrite  # readwrite | readonly
+```
+
+- `readwrite` grants `SELECT, INSERT, UPDATE, DELETE` on tables and
+  `SELECT, USAGE` on sequences in schema `public`; `readonly` grants `SELECT`
+  on both. Both include `CONNECT` on the database and `USAGE` on `public`.
+- Grants cover existing objects and, via default privileges on the owner role,
+  objects the owner creates later (for example through migration jobs).
+- Roles cannot create objects; run migrations with the owner credential.
+- The Postgres login is `<owner user>-<name>`, truncated with a short hash to
+  stay within the 63-character identifier limit.
+- Roles declared later are created on the next deploy. Roles removed from the
+  manifest are revoked and dropped on the next deploy.
+- `eve db rotate-credentials` rotates role passwords along with the owner
+  password; destroying the managed DB drops its roles.
+- `roles` is currently supported on the local provider only.
+
+### Managed DB interpolation fields
+
+| Placeholder | Value |
+|-------------|-------|
+| `${managed.<service>.url}` | Owner connection URL, published verbatim (including `sslmode`) |
+| `${managed.<service>.host}` | Host component of the owner URL |
+| `${managed.<service>.port}` | Port component (defaults to `5432` when the URL omits it) |
+| `${managed.<service>.database}` | Database name |
+| `${managed.<service>.username}` | Owner login |
+| `${managed.<service>.password}` | Owner password |
+| `${managed.<service>.extensions}` | Comma-separated declared extensions |
+| `${managed.<service>.roles.<name>.url}` | Connection URL for the declared role |
+| `${managed.<service>.roles.<name>.username}` | Role login |
+| `${managed.<service>.roles.<name>.password}` | Role password |
+
+Role logins share `host`, `port`, and `database` with the owner URL.
 - `timescaledb` is still a non-declarable preload candidate on AWS RDS.
 
 ---

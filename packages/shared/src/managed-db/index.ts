@@ -353,10 +353,27 @@ export function generateManagedDbUser(
   return name.slice(0, MAX_PG_IDENTIFIER);
 }
 
+/**
+ * Login name for a declared tenant role: `<tenant db_user>-<role name>`.
+ * When that exceeds Postgres's 63-character identifier limit the tail is
+ * replaced by a short hash of the full name, so truncated names stay
+ * deterministic and never collide across roles of the same tenant.
+ */
+export function generateManagedDbRoleUser(dbUser: string, roleName: string): string {
+  const name = `${dbUser}-${roleName}`;
+  if (name.length <= MAX_PG_IDENTIFIER) {
+    return name;
+  }
+  const hash = shortHash(`${dbUser}/${roleName}`);
+  return `${name.slice(0, MAX_PG_IDENTIFIER - hash.length - 1)}-${hash}`;
+}
+
 // ---------------------------------------------------------------------------
 // Re-exports
 // ---------------------------------------------------------------------------
 
+export * from './connection.js';
+export * from './roles.js';
 export * from './placement.js';
 export * from './snapshot-storage.js';
 export * from './snapshot-executor.js';

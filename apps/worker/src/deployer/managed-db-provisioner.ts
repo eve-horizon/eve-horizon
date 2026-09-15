@@ -14,6 +14,10 @@ import {
   resolveBackupConfig,
   resolveManagedDbTrustBundle,
   normalizeManagedDbExtensions,
+  normalizeManagedDbRoles,
+  diffManagedDbRoles,
+  hasManagedDbRoleChanges,
+  parseManagedDbConnectionUrl,
 } from '@eve/shared';
 import { K8sService } from './k8s.service';
 
@@ -72,6 +76,7 @@ export class ManagedDbProvisioner {
       const config = getManagedDbConfig(service);
       const dbClass = config?.class ?? 'db.p1';
       const desiredExtensions = normalizeManagedDbExtensions(config?.extensions ?? []);
+      const desiredRoles = normalizeManagedDbRoles(config?.roles ?? []);
 
       // Check for existing tenant
       let tenant = await this.managedDb.findTenantByEnv(params.envId, serviceName);
@@ -135,6 +140,7 @@ export class ManagedDbProvisioner {
           db_user: dbUser,
           class: dbClass,
           desired_extensions: desiredExtensions,
+          desired_roles: desiredRoles,
         });
 
         this.logger.log(
@@ -144,11 +150,16 @@ export class ManagedDbProvisioner {
       } else {
         const synced = await this.managedDb.syncTenantDesiredExtensions(tenant.id, desiredExtensions);
         tenant = synced ?? tenant;
+        const syncedRoles = await this.managedDb.syncTenantDesiredRoles(tenant.id, desiredRoles);
+        tenant = syncedRoles ?? tenant;
       }
 
       const enabledExtensions = new Set(tenant.enabled_extensions ?? []);
       const missingExtensions = desiredExtensions.filter((extension) => !enabledExtensions.has(extension));
-      if (missingExtensions.length > 0 && tenant.status === 'ready') {
+      const pendingRoleChanges = tenant.status === 'ready'
+        ? hasManagedDbRoleChanges(diffManagedDbRoles(desiredRoles, await this.managedDb.listTenantRoles(tenant.id)))
+        : false;
+      if ((missingExtensions.length > 0 || pendingRoleChanges) && tenant.status === 'ready') {
         const token = crypto.randomUUID();
         const locked = await this.managedDb.acquireOperationLock(tenant.id, token);
         if (locked) {
@@ -156,12 +167,13 @@ export class ManagedDbProvisioner {
           const refreshed = await this.managedDb.findTenantByEnv(params.envId, serviceName);
           tenant = refreshed ?? tenant;
           this.logger.log(
-            `Requested managed DB extension reconcile for tenant ${tenant.id}: ` +
-            missingExtensions.join(', '),
+            `Requested managed DB reconcile for tenant ${tenant.id}` +
+            (missingExtensions.length > 0 ? ` (extensions: ${missingExtensions.join(', ')})` : '') +
+            (pendingRoleChanges ? ' (roles changed)' : ''),
           );
         } else {
           this.logger.warn(
-            `Managed DB tenant ${tenant.id} needs extension reconcile but is locked; ` +
+            `Managed DB tenant ${tenant.id} needs reconcile but is locked; ` +
             `continuing to poll current state`,
           );
         }
@@ -209,6 +221,16 @@ export class ManagedDbProvisioner {
         );
       }
 
+      const provisionedRoles = await this.managedDb.listTenantRoles(tenant.id);
+      const roleDiff = diffManagedDbRoles(desiredRoles, provisionedRoles);
+      if (hasManagedDbRoleChanges(roleDiff)) {
+        const pending = [...roleDiff.create, ...roleDiff.regrant, ...roleDiff.drop].map((role) => role.name);
+        throw new Error(
+          `Managed DB tenant for ${serviceName} reached ready before declared role(s) were reconciled: ` +
+          pending.join(', '),
+        );
+      }
+
       // Sync backup config from manifest (or apply class-based defaults)
       const backupConfig = resolveBackupConfig(dbClass, config?.backup);
       await this.managedDb.syncTenantBackupConfig(tenant.id, backupConfig);
@@ -234,12 +256,47 @@ export class ManagedDbProvisioner {
       // The credential URL's sslmode is set by the reconciler (inherits from DATABASE_URL).
       // The deployer must not overwrite it — "local" provider instances may be RDS on staging.
       if (tenant.credential_secret_ref) {
-        managedValues.set(`${serviceName}.url`, tenant.credential_secret_ref);
+        this.publishConnectionValues(managedValues, serviceName, tenant.credential_secret_ref, {
+          fields: ['host', 'port', 'database', 'username', 'password'],
+        });
       }
       managedValues.set(`${serviceName}.extensions`, desiredExtensions.join(','));
+
+      // ${managed.<serviceName>.roles.<name>.url|username|password}
+      for (const role of provisionedRoles) {
+        if (!role.credential_secret_ref) continue;
+        this.publishConnectionValues(managedValues, `${serviceName}.roles.${role.name}`, role.credential_secret_ref, {
+          fields: ['username', 'password'],
+        });
+      }
     }
 
     return { managedValues, trustInputs };
+  }
+
+  /**
+   * Publish `<prefix>.url` verbatim plus the requested components derived
+   * from it. A credential that is not a parseable Postgres URL (for example an
+   * unresolved secret reference) still publishes `.url` so nothing regresses.
+   */
+  private publishConnectionValues(
+    managedValues: Map<string, string>,
+    prefix: string,
+    connectionUrl: string,
+    opts: { fields: Array<'host' | 'port' | 'database' | 'username' | 'password'> },
+  ): void {
+    managedValues.set(`${prefix}.url`, connectionUrl);
+    const parsed = parseManagedDbConnectionUrl(connectionUrl);
+    if (!parsed) {
+      this.logger.warn(
+        `Managed DB credential for ${prefix} is not a parseable Postgres URL; ` +
+        `only \${managed.${prefix}.url} will be available`,
+      );
+      return;
+    }
+    for (const field of opts.fields) {
+      managedValues.set(`${prefix}.${field}`, parsed[field]);
+    }
   }
 
   async ensureManagedDbTrustStore(

@@ -1,9 +1,20 @@
 import { Injectable, Inject, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { CronJob } from 'cron';
-import { managedDbQueries, managedDbSnapshotQueries, createDb, type Db, orgQueries, projectQueries, environmentQueries } from '@eve/db';
+import {
+  managedDbQueries,
+  managedDbSnapshotQueries,
+  createDb,
+  type Db,
+  type ManagedDbTenantRole,
+  orgQueries,
+  projectQueries,
+  environmentQueries,
+} from '@eve/db';
 import {
   generateManagedDbInstanceId,
+  generateManagedDbRoleUser,
   generateManagedDbSnapshotId,
+  generateManagedDbTenantRoleId,
   createSnapshotStorageClient,
   executeSnapshot,
   resolveManagedDbSnapshotRetention,
@@ -16,6 +27,14 @@ import {
   normalizeManagedDbExtensions,
   quotePostgresIdentifier,
   sharedPreloadLibrariesContains,
+  buildManagedDbRoleGrantSql,
+  buildManagedDbRoleRevokeSql,
+  diffManagedDbRoles,
+  hasManagedDbRoleChanges,
+  normalizeManagedDbRoles,
+  type ManagedDbRoleDeclaration,
+  type ManagedDbRoleDiff,
+  type ManagedDbRoleGrants,
   type SupportedExtension,
 } from '@eve/shared';
 import * as crypto from 'crypto';
@@ -172,6 +191,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
     backup_retention: string | null;
     desired_extensions: string[];
     enabled_extensions: string[];
+    desired_roles: ManagedDbRoleDeclaration[];
   }): Promise<void> {
     const token = crypto.randomUUID();
     const locked = await this.managedDb.acquireOperationLock(tenant.id, token);
@@ -221,6 +241,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
       class: string;
       desired_extensions: string[];
       enabled_extensions: string[];
+      desired_roles: ManagedDbRoleDeclaration[];
     },
     token: string,
   ): Promise<void> {
@@ -250,6 +271,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
           this.mergeEnabledExtensions(tenant.enabled_extensions, desiredExtensions),
         );
       }
+      await this.applyLocalTenantRoleChanges(instance, tenant, await this.planTenantRoleChanges(tenant));
       await this.managedDb.transitionStatus(tenant.id, token, 'ready', {
         providerTenantId: `local:${tenant.db_name}`,
         credentialSecretRef: connectionUrl,
@@ -261,6 +283,12 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         throw new ManagedDbProvisioningError(
           'provider_unsupported',
           `Managed DB extension provisioning is not implemented for provider "${instance.provider}"`,
+        );
+      }
+      if (normalizeManagedDbRoles(tenant.desired_roles).length > 0) {
+        throw new ManagedDbProvisioningError(
+          'provider_unsupported',
+          `Managed DB role provisioning is not implemented for provider "${instance.provider}"`,
         );
       }
       // Cloud providers — stub for future implementation
@@ -281,6 +309,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
       desired_class: string | null;
       desired_extensions: string[];
       enabled_extensions: string[];
+      desired_roles: ManagedDbRoleDeclaration[];
     },
     token: string,
   ): Promise<void> {
@@ -309,6 +338,26 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
       );
     }
 
+    const rolePlan = await this.planTenantRoleChanges(tenant);
+    if (hasManagedDbRoleChanges(rolePlan.diff)) {
+      const instance = await this.managedDb.findInstanceById(tenant.instance_id);
+      if (!instance) {
+        throw new ManagedDbProvisioningError('instance_not_found', `Instance ${tenant.instance_id} not found`);
+      }
+      if (instance.provider !== 'local') {
+        throw new ManagedDbProvisioningError(
+          'provider_unsupported',
+          `Managed DB role provisioning is not implemented for provider "${instance.provider}"`,
+        );
+      }
+
+      this.logger.log(
+        `[managed-db-reconciler] Reconciling role(s) for tenant ${tenant.id}: ` +
+        this.describeRolePlan(rolePlan.diff),
+      );
+      await this.applyLocalTenantRoleChanges(instance, tenant, rolePlan);
+    }
+
     if (tenant.desired_class) {
       this.logger.log(`[managed-db-reconciler] Scaling tenant ${tenant.id} to ${tenant.desired_class}`);
     }
@@ -331,6 +380,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
         try {
           await adminSql.unsafe(`ALTER ROLE "${tenant.db_user}" WITH PASSWORD '${newPassword}'`);
           const connectionUrl = this.buildTenantConnectionUrl(instance, tenant, newPassword);
+          await this.rotateLocalTenantRoles(adminSql, instance, tenant);
           await this.managedDb.transitionStatus(tenant.id, token, 'ready', {
             credentialSecretRef: connectionUrl,
           });
@@ -714,7 +764,7 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
    */
   private async deleteLocalDb(
     instance: { host: string; port: number },
-    tenant: { db_name: string; db_user: string },
+    tenant: { id: string; db_name: string; db_user: string },
   ): Promise<void> {
     const adminSql = this.connectToInstance(instance);
 
@@ -728,8 +778,180 @@ export class ManagedDbReconcilerService implements OnModuleInit, OnModuleDestroy
 
       await adminSql.unsafe(`DROP DATABASE IF EXISTS "${tenant.db_name}"`);
       await adminSql.unsafe(`DROP ROLE IF EXISTS "${tenant.db_user}"`);
+
+      // Declared role logins only ever held privileges inside the tenant
+      // database, so once it is gone they can be dropped outright.
+      const roles = await this.managedDb.listTenantRoles(tenant.id);
+      for (const role of roles) {
+        await adminSql.unsafe(`DROP ROLE IF EXISTS ${quotePostgresIdentifier(role.db_user)}`);
+      }
+      if (roles.length > 0) {
+        await this.managedDb.deleteTenantRoles(tenant.id);
+      }
     } finally {
       await adminSql.end();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Declared tenant roles (local provider)
+  // ---------------------------------------------------------------------------
+
+  private async planTenantRoleChanges(
+    tenant: { id: string; desired_roles: ManagedDbRoleDeclaration[] },
+  ): Promise<{ diff: ManagedDbRoleDiff<ManagedDbTenantRole>; provisioned: ManagedDbTenantRole[] }> {
+    const desired = normalizeManagedDbRoles(tenant.desired_roles);
+    const provisioned = await this.managedDb.listTenantRoles(tenant.id);
+    return { diff: diffManagedDbRoles(desired, provisioned), provisioned };
+  }
+
+  private describeRolePlan(diff: ManagedDbRoleDiff<ManagedDbTenantRole>): string {
+    const parts: string[] = [];
+    if (diff.create.length > 0) parts.push(`create ${diff.create.map((role) => role.name).join(', ')}`);
+    if (diff.regrant.length > 0) parts.push(`regrant ${diff.regrant.map((role) => role.name).join(', ')}`);
+    if (diff.drop.length > 0) parts.push(`drop ${diff.drop.map((role) => role.name).join(', ')}`);
+    return parts.join('; ');
+  }
+
+  /**
+   * Bring the tenant's Postgres login roles in line with the manifest:
+   * drop roles that are no longer declared, re-grant roles whose grant set
+   * changed, then create newly declared roles with fresh credentials.
+   * No-op (and no connections opened) when nothing changed.
+   */
+  private async applyLocalTenantRoleChanges(
+    instance: { host: string; port: number },
+    tenant: { id: string; db_name: string; db_user: string },
+    plan: { diff: ManagedDbRoleDiff<ManagedDbTenantRole>; provisioned: ManagedDbTenantRole[] },
+  ): Promise<void> {
+    const { diff, provisioned } = plan;
+    if (!hasManagedDbRoleChanges(diff)) return;
+
+    const adminSql = this.connectToInstance(instance);
+    const tenantSql = this.connectToTenantDb(instance, tenant);
+
+    try {
+      for (const role of diff.drop) {
+        await this.dropLocalTenantRole(adminSql, tenantSql, tenant, role);
+      }
+
+      for (const role of diff.regrant) {
+        const existing = provisioned.find((candidate) => candidate.name === role.name);
+        if (!existing) continue;
+        const revoke = buildManagedDbRoleRevokeSql({
+          dbName: tenant.db_name,
+          ownerUser: tenant.db_user,
+          roleUser: existing.db_user,
+        });
+        for (const statement of revoke.tenant) {
+          await tenantSql.unsafe(statement);
+        }
+        await this.grantLocalTenantRole(adminSql, tenantSql, tenant, existing.db_user, role.grants);
+        await this.managedDb.updateTenantRoleGrants(tenant.id, role.name, role.grants);
+      }
+
+      for (const role of diff.create) {
+        const roleUser = generateManagedDbRoleUser(tenant.db_user, role.name);
+        const password = crypto.randomBytes(16).toString('hex');
+        await this.ensureLocalRoleLogin(adminSql, roleUser, password);
+        await this.grantLocalTenantRole(adminSql, tenantSql, tenant, roleUser, role.grants);
+        await this.managedDb.upsertTenantRole({
+          id: generateManagedDbTenantRoleId(),
+          tenant_id: tenant.id,
+          name: role.name,
+          grants: role.grants,
+          db_user: roleUser,
+          credential_secret_ref: this.buildTenantConnectionUrl(
+            instance,
+            { db_name: tenant.db_name, db_user: roleUser },
+            password,
+          ),
+        });
+      }
+    } finally {
+      await tenantSql.end();
+      await adminSql.end();
+    }
+  }
+
+  /**
+   * Create (or reset) a least-privilege login role. Idempotent so a retry
+   * after a partial failure converges instead of erroring on "already exists".
+   */
+  private async ensureLocalRoleLogin(adminSql: Db, roleUser: string, password: string): Promise<void> {
+    const [existingRole] = await adminSql`
+      SELECT 1 FROM pg_roles WHERE rolname = ${roleUser}
+    `;
+    const attributes = `WITH LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '${password}'`;
+    await adminSql.unsafe(
+      `${existingRole ? 'ALTER' : 'CREATE'} ROLE ${quotePostgresIdentifier(roleUser)} ${attributes}`,
+    );
+  }
+
+  private async grantLocalTenantRole(
+    adminSql: Db,
+    tenantSql: Db,
+    tenant: { db_name: string; db_user: string },
+    roleUser: string,
+    grants: ManagedDbRoleGrants,
+  ): Promise<void> {
+    const sql = buildManagedDbRoleGrantSql({
+      dbName: tenant.db_name,
+      ownerUser: tenant.db_user,
+      roleUser,
+      grants,
+    });
+    for (const statement of sql.instance) {
+      await adminSql.unsafe(statement);
+    }
+    for (const statement of sql.tenant) {
+      await tenantSql.unsafe(statement);
+    }
+  }
+
+  private async dropLocalTenantRole(
+    adminSql: Db,
+    tenantSql: Db,
+    tenant: { id: string; db_name: string; db_user: string },
+    role: ManagedDbTenantRole,
+  ): Promise<void> {
+    const revoke = buildManagedDbRoleRevokeSql({
+      dbName: tenant.db_name,
+      ownerUser: tenant.db_user,
+      roleUser: role.db_user,
+    });
+    for (const statement of revoke.tenant) {
+      await tenantSql.unsafe(statement);
+    }
+    for (const statement of revoke.instance) {
+      await adminSql.unsafe(statement);
+    }
+    await adminSql`
+      SELECT pg_terminate_backend(pid)
+      FROM pg_stat_activity
+      WHERE usename = ${role.db_user} AND pid != pg_backend_pid()
+    `;
+    await adminSql.unsafe(`DROP ROLE IF EXISTS ${quotePostgresIdentifier(role.db_user)}`);
+    await this.managedDb.deleteTenantRole(tenant.id, role.name);
+  }
+
+  /** Rotate every declared role's password alongside the owner credential. */
+  private async rotateLocalTenantRoles(
+    adminSql: Db,
+    instance: { host: string; port: number },
+    tenant: { id: string; db_name: string },
+  ): Promise<void> {
+    const roles = await this.managedDb.listTenantRoles(tenant.id);
+    for (const role of roles) {
+      const password = crypto.randomBytes(16).toString('hex');
+      await adminSql.unsafe(
+        `ALTER ROLE ${quotePostgresIdentifier(role.db_user)} WITH PASSWORD '${password}'`,
+      );
+      await this.managedDb.updateTenantRoleCredentialSecretRef(
+        tenant.id,
+        role.name,
+        this.buildTenantConnectionUrl(instance, { db_name: tenant.db_name, db_user: role.db_user }, password),
+      );
     }
   }
 

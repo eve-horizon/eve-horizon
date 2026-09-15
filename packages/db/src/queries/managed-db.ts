@@ -39,6 +39,12 @@ export interface CreateManagedDbInstanceInput {
 // Tenant types
 // ---------------------------------------------------------------------------
 
+/** Manifest intent for one declared tenant role (stored in managed_db_tenants.desired_roles). */
+export interface ManagedDbDesiredRole {
+  name: string;
+  grants: 'readwrite' | 'readonly';
+}
+
 export interface ManagedDbTenant {
   id: string;
   org_id: string;
@@ -58,6 +64,7 @@ export interface ManagedDbTenant {
   last_error_message: string | null;
   desired_extensions: string[];
   enabled_extensions: string[];
+  desired_roles: ManagedDbDesiredRole[];
   ready_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -80,6 +87,28 @@ export interface CreateManagedDbTenantInput {
   db_user: string;
   class: string;
   desired_extensions?: string[];
+  desired_roles?: ManagedDbDesiredRole[];
+}
+
+/** A provisioned tenant role login with its stored credential. */
+export interface ManagedDbTenantRole {
+  id: string;
+  tenant_id: string;
+  name: string;
+  grants: string;
+  db_user: string;
+  credential_secret_ref: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface UpsertManagedDbTenantRoleInput {
+  id: string;
+  tenant_id: string;
+  name: string;
+  grants: string;
+  db_user: string;
+  credential_secret_ref: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,14 +197,16 @@ export function managedDbQueries(db: Db) {
 
     async createTenant(input: CreateManagedDbTenantInput): Promise<ManagedDbTenant> {
       const desiredExtensions = input.desired_extensions ?? [];
+      const desiredRoles = db.json((input.desired_roles ?? []) as never);
       const [row] = await db<ManagedDbTenant[]>`
         INSERT INTO managed_db_tenants (
           id, org_id, project_id, env_id, service_name,
-          instance_id, db_name, db_user, class, desired_extensions
+          instance_id, db_name, db_user, class, desired_extensions, desired_roles
         )
         VALUES (
           ${input.id}, ${input.org_id}, ${input.project_id}, ${input.env_id}, ${input.service_name},
-          ${input.instance_id}, ${input.db_name}, ${input.db_user}, ${input.class}, ${desiredExtensions}::text[]
+          ${input.instance_id}, ${input.db_name}, ${input.db_user}, ${input.class}, ${desiredExtensions}::text[],
+          ${desiredRoles}
         )
         ON CONFLICT (env_id, service_name) DO NOTHING
         RETURNING *
@@ -574,6 +605,102 @@ export function managedDbQueries(db: Db) {
         RETURNING *
       `;
       return row ?? null;
+    },
+
+    async syncTenantDesiredRoles(
+      tenantId: string,
+      desiredRoles: ManagedDbDesiredRole[],
+    ): Promise<ManagedDbTenant | null> {
+      const [row] = await db<ManagedDbTenant[]>`
+        UPDATE managed_db_tenants
+        SET desired_roles = ${db.json(desiredRoles as never)},
+            updated_at = NOW()
+        WHERE id = ${tenantId}
+        RETURNING *
+      `;
+      return row ?? null;
+    },
+
+    // -----------------------------------------------------------------------
+    // Tenant roles (declared least-privilege logins)
+    // -----------------------------------------------------------------------
+
+    async listTenantRoles(tenantId: string): Promise<ManagedDbTenantRole[]> {
+      return db<ManagedDbTenantRole[]>`
+        SELECT * FROM managed_db_tenant_roles
+        WHERE tenant_id = ${tenantId}
+        ORDER BY name ASC
+      `;
+    },
+
+    /**
+     * Insert or refresh a provisioned role. A null credential keeps the
+     * stored one so callers can update grants without touching secrets.
+     */
+    async upsertTenantRole(input: UpsertManagedDbTenantRoleInput): Promise<ManagedDbTenantRole> {
+      const [row] = await db<ManagedDbTenantRole[]>`
+        INSERT INTO managed_db_tenant_roles (
+          id, tenant_id, name, grants, db_user, credential_secret_ref
+        )
+        VALUES (
+          ${input.id}, ${input.tenant_id}, ${input.name}, ${input.grants}, ${input.db_user}, ${input.credential_secret_ref}
+        )
+        ON CONFLICT (tenant_id, name) DO UPDATE
+        SET grants = EXCLUDED.grants,
+            db_user = EXCLUDED.db_user,
+            credential_secret_ref = COALESCE(EXCLUDED.credential_secret_ref, managed_db_tenant_roles.credential_secret_ref),
+            updated_at = NOW()
+        RETURNING *
+      `;
+      return row;
+    },
+
+    async updateTenantRoleGrants(
+      tenantId: string,
+      name: string,
+      grants: string,
+    ): Promise<ManagedDbTenantRole | null> {
+      const [row] = await db<ManagedDbTenantRole[]>`
+        UPDATE managed_db_tenant_roles
+        SET grants = ${grants},
+            updated_at = NOW()
+        WHERE tenant_id = ${tenantId} AND name = ${name}
+        RETURNING *
+      `;
+      return row ?? null;
+    },
+
+    async updateTenantRoleCredentialSecretRef(
+      tenantId: string,
+      name: string,
+      credentialSecretRef: string,
+    ): Promise<ManagedDbTenantRole | null> {
+      const [row] = await db<ManagedDbTenantRole[]>`
+        UPDATE managed_db_tenant_roles
+        SET credential_secret_ref = ${credentialSecretRef},
+            updated_at = NOW()
+        WHERE tenant_id = ${tenantId} AND name = ${name}
+        RETURNING *
+      `;
+      return row ?? null;
+    },
+
+    async deleteTenantRole(tenantId: string, name: string): Promise<boolean> {
+      const [row] = await db<{ id: string }[]>`
+        DELETE FROM managed_db_tenant_roles
+        WHERE tenant_id = ${tenantId} AND name = ${name}
+        RETURNING id
+      `;
+      return !!row;
+    },
+
+    async deleteTenantRoles(tenantId: string): Promise<number> {
+      const rows = await db<{ id: string }[]>`
+        DELETE FROM managed_db_tenant_roles
+        WHERE tenant_id = ${tenantId}
+        RETURNING id
+      `;
+      return rows.length;
     },
   };
 }

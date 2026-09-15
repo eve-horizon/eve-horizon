@@ -894,6 +894,20 @@ async function handleStatus(
     if (tenant.installed_extensions_error) {
       console.log(`  Extension Query Error: ${tenant.installed_extensions_error}`);
     }
+    if (Array.isArray(tenant.declared_roles)) {
+      const declared = tenant.declared_roles as Array<{ name?: unknown; grants?: unknown }>;
+      const label = declared.length > 0
+        ? declared.map((role) => `${role.name ?? '?'} (${role.grants ?? '?'})`).join(', ')
+        : '(none)';
+      console.log(`  Declared Roles:      ${label}`);
+    }
+    if (Array.isArray(tenant.roles)) {
+      const roles = tenant.roles as Array<{ name?: unknown; grants?: unknown; username?: unknown }>;
+      const label = roles.length > 0
+        ? roles.map((role) => `${role.name ?? '?'} (${role.grants ?? '?'}) as ${role.username ?? '?'}`).join(', ')
+        : '(none)';
+      console.log(`  Provisioned Roles:   ${label}`);
+    }
     if (tenant.last_error_code) {
       console.log(`  Last Error:  [${tenant.last_error_code}] ${tenant.last_error_message}`);
     }

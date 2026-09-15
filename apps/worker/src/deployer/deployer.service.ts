@@ -3153,9 +3153,10 @@ export class DeployerService {
       });
     }
 
-    // Handle ${managed.<service>.<field>} patterns (e.g., ${managed.db.url})
+    // Handle ${managed.<service>.<field>} patterns (e.g., ${managed.db.url}).
+    // Fields may be nested, e.g. ${managed.db.roles.app_ro.url}.
     if (context.managedValues) {
-      result = result.replace(/\$\{managed\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_]+)\}/g, (match, service, field) => {
+      result = result.replace(/\$\{managed\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_.]+)\}/g, (match, service, field) => {
         const key = `${service}.${field}`;
         const value = context.managedValues?.get(key);
         if (value === undefined) {

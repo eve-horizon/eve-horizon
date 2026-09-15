@@ -36,6 +36,11 @@ services:
         engine: postgres
         engine_version: "16"
         extensions: [postgis, pgvector, pg_trgm]
+        roles:
+          - name: app
+            grants: readwrite
+          - name: reports
+            grants: readonly
 ```
 
 Provisioning occurs when an environment is deployed; managed DB services are not
@@ -55,6 +60,9 @@ Notes:
 - Managed DB availability depends on platform configuration (ask an admin if provisioning is disabled).
 - Use `eve db status` to confirm tenant readiness before relying on managed values.
 - Managed values can be referenced in env vars via `${managed.<service>.<field>}`.
+  Fields: `url` (verbatim owner URL), `host`, `port`, `database`, `username`,
+  `password`, `extensions`, and `roles.<name>.url|username|password` for declared
+  roles.
 - Plain declarable extensions are `postgis`, `pgvector`, `pg_trgm`, `btree_gist`, `hstore`, and `citext`.
 - Provider-gated preload extensions are rejected unless the platform enables them with `EVE_MANAGED_DB_ENABLED_PRELOAD_EXTENSIONS`. `pg_cron` is the first gated extension; it requires `shared_preload_libraries=pg_cron` on the backing Postgres instance before deploy.
 - `pgvector` is declared as `pgvector` in the manifest but appears as `vector` in `pg_extension`.
@@ -65,6 +73,37 @@ Notes:
 - Local managed DB URLs default to `sslmode=disable`. Supported cloud providers default to `sslmode=verify-full`.
 - The worker owns TLS trust distribution for managed DB clients. For cloud tenants it creates `ConfigMap/eve-db-trust`, mounts `/etc/eve/trust/ca-bundle.pem`, and injects `NODE_EXTRA_CA_CERTS` plus `PGSSLROOTCERT` into Deployments and `x-eve.role: job` pods.
 - App code should use the plain connection string from `DATABASE_URL`. Do not set `ssl: { rejectUnauthorized: false }` in Node `pg`.
+
+### Roles
+
+The tenant owner login is always provisioned. `x-eve.managed.roles` declares
+additional least-privilege logins (`grants: readwrite` or `readonly`) named
+`<owner user>-<name>` (hash-truncated to 63 characters). Per role the
+reconciler runs, as the instance admin:
+
+```sql
+CREATE ROLE "<role>" WITH LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '<random>';
+GRANT CONNECT ON DATABASE "<db>" TO "<role>";
+-- inside the tenant database:
+GRANT USAGE ON SCHEMA "public" TO "<role>";
+GRANT SELECT[, INSERT, UPDATE, DELETE] ON ALL TABLES IN SCHEMA "public" TO "<role>";
+GRANT SELECT[, USAGE] ON ALL SEQUENCES IN SCHEMA "public" TO "<role>";
+ALTER DEFAULT PRIVILEGES FOR ROLE "<owner>" IN SCHEMA "public" GRANT ... ON TABLES TO "<role>";
+ALTER DEFAULT PRIVILEGES FOR ROLE "<owner>" IN SCHEMA "public" GRANT ... ON SEQUENCES TO "<role>";
+```
+
+- Role credentials are stored per role in `managed_db_tenant_roles` the same
+  way the owner credential is stored on the tenant, and are exposed only through
+  `${managed.<service>.roles.<name>.url|username|password}`.
+- Changing `grants` re-grants in place; removing a role revokes its privileges
+  and drops the login on the next deploy. Adding a role does not touch existing
+  roles or the owner credential.
+- `eve db rotate-credentials` rotates every role password with the owner
+  password. `eve db destroy` drops the roles with the database.
+- `eve db status --env <name>` lists declared and provisioned roles (names and
+  logins only, never passwords).
+- Roles are supported on the local provider; cloud providers reject them with
+  `provider_unsupported` until provider support lands.
 
 ## Admin APIs (Managed DB Instances)
 

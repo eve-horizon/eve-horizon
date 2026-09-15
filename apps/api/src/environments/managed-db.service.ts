@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
-import type { Db } from '@eve/db';
+import type { Db, ManagedDbDesiredRole, ManagedDbTenantRole } from '@eve/db';
 import { createDb, managedDbQueries, projectQueries, environmentQueries, orgQueries } from '@eve/db';
 import {
   generateManagedDbInstanceId,
@@ -40,7 +40,8 @@ export class ManagedDbService {
       throw new NotFoundException(`No managed DB found for environment "${envName}"`);
     }
     const extensionStatus = await this.resolveTenantExtensionStatus(tenant);
-    return this.formatTenant(tenant, extensionStatus);
+    const roles = await this.managedDb.listTenantRoles(tenant.id);
+    return this.formatTenant(tenant, extensionStatus, roles);
   }
 
   async rotateCredentials(projectId: string, envName: string) {
@@ -259,13 +260,14 @@ export class ManagedDbService {
     last_error_message: string | null;
     desired_extensions: string[];
     enabled_extensions: string[];
+    desired_roles?: ManagedDbDesiredRole[];
     ready_at: Date | null;
     created_at: Date;
     updated_at: Date;
   }, extensions?: {
     installed_extensions?: Array<{ name: string; version: string }>;
     installed_extensions_error?: string | null;
-  }) {
+  }, roles: Pick<ManagedDbTenantRole, 'name' | 'grants' | 'db_user'>[] = []) {
     return {
       id: tenant.id,
       org_id: tenant.org_id,
@@ -283,6 +285,13 @@ export class ManagedDbService {
       enabled_extensions: tenant.enabled_extensions ?? [],
       installed_extensions: extensions?.installed_extensions,
       installed_extensions_error: extensions?.installed_extensions_error ?? null,
+      declared_roles: tenant.desired_roles ?? [],
+      // Provisioned role logins. Credentials are only exposed through manifest interpolation.
+      roles: roles.map((role) => ({
+        name: role.name,
+        grants: role.grants,
+        username: role.db_user,
+      })),
       ready_at: tenant.ready_at?.toISOString() ?? null,
       created_at: tenant.created_at.toISOString(),
       updated_at: tenant.updated_at.toISOString(),

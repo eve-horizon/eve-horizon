@@ -13,6 +13,10 @@ import {
   getManagedDbExtensionValidationError,
   normalizeManagedDbExtensions,
 } from '../managed-db/extensions.js';
+import {
+  MANAGED_DB_ROLE_GRANTS,
+  MANAGED_DB_ROLE_NAME_PATTERN,
+} from '../managed-db/roles.js';
 import { IngressByteSizeSchema, IngressDurationSchema } from './ingress-units.js';
 
 export const SyncManifestRequestSchema = z.object({
@@ -162,12 +166,39 @@ export const ManagedDbExtensionsSchema = z.array(z.string())
   })
   .transform((extensions) => normalizeManagedDbExtensions(extensions));
 
+export const ManagedDbRoleSchema = z.object({
+  name: z.string().regex(
+    MANAGED_DB_ROLE_NAME_PATTERN,
+    'Managed DB role name must be 1-16 characters of [a-z0-9_] and start with a letter',
+  ),
+  grants: z.enum(MANAGED_DB_ROLE_GRANTS),
+});
+
+export type ManagedDbRole = z.infer<typeof ManagedDbRoleSchema>;
+
+export const ManagedDbRolesSchema = z.array(ManagedDbRoleSchema)
+  .default([])
+  .superRefine((roles, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, role] of roles.entries()) {
+      if (seen.has(role.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, 'name'],
+          message: `Duplicate managed DB role "${role.name}"`,
+        });
+      }
+      seen.add(role.name);
+    }
+  });
+
 export const ManagedDbConfigSchema = z.object({
   class: z.string().min(1),           // e.g., 'db.p1'
   engine: z.literal('postgres').default('postgres'),
   engine_version: z.string().optional(), // e.g., '16'
   backup: ManagedDbBackupConfigSchema.optional(),
   extensions: ManagedDbExtensionsSchema,
+  roles: ManagedDbRolesSchema,
 });
 
 export type ManagedDbConfig = z.infer<typeof ManagedDbConfigSchema>;

@@ -148,6 +148,10 @@ export function generateManagedDbTenantId(): string {
   return typeid('mdbt').toString();
 }
 
+export function generateManagedDbTenantRoleId(): string {
+  return typeid('mdbr').toString();
+}
+
 export function generateManagedDbSnapshotId(): string {
   return typeid('dbsnap').toString();
 }
