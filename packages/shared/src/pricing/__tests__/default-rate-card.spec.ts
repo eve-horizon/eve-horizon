@@ -68,6 +68,37 @@ const CURRENT_GENERATION: RateCase[] = [
     expected_llm_usd: '73.500000',
   },
   {
+    name: 'Claude Code reporting Opus 5.5 (the opus alias)',
+    provider: 'anthropic',
+    reported_model: 'claude-opus-5-5',
+    normalized_model: 'claude-opus-5-5',
+    // 4.00 input + 20.00 output + 0.20 cache read + 5.00 cache write
+    expected_llm_usd: '29.200000',
+  },
+  {
+    name: 'Claude Code reporting Opus 5',
+    provider: 'anthropic',
+    reported_model: 'claude-opus-5',
+    normalized_model: 'claude-opus-5',
+    // 5.00 input + 25.00 output + 0.50 cache read + 6.25 cache write
+    expected_llm_usd: '36.750000',
+  },
+  {
+    name: 'Claude Code reporting Sonnet 5',
+    provider: 'anthropic',
+    reported_model: 'claude-sonnet-5',
+    normalized_model: 'claude-sonnet-5',
+    // 2.00 input + 10.00 output + 0.20 cache read + 2.50 cache write
+    expected_llm_usd: '14.700000',
+  },
+  {
+    name: 'Claude Code reporting Opus 4.8',
+    provider: 'anthropic',
+    reported_model: 'claude-opus-4-8',
+    normalized_model: 'claude-opus-4-8',
+    expected_llm_usd: '36.750000',
+  },
+  {
     name: 'Codex reporting GPT-6 Astra',
     provider: 'openai',
     reported_model: 'gpt-6-astra',

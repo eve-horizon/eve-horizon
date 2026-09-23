@@ -2,7 +2,7 @@ import type { BillingDefaultsV1, RateCardV1 } from './types.js';
 
 export const DEFAULT_RATE_CARD_NAME = 'default';
 export const DEFAULT_RATE_CARD_VERSION = 1;
-export const DEFAULT_RATE_CARD_EFFECTIVE_AT = '2026-09-08T00:00:00.000Z';
+export const DEFAULT_RATE_CARD_EFFECTIVE_AT = '2026-09-23T00:00:00.000Z';
 
 export const DEFAULT_BILLING_DEFAULTS_V1: BillingDefaultsV1 = {
   billing_currency: 'usd',
@@ -26,6 +26,34 @@ export const DEFAULT_RATE_CARD_V1: RateCardV1 = {
           output_per_million_usd: '50.00',
           cache_read_per_million_usd: '1.00',
           cache_write_per_million_usd: '12.50',
+          reasoning_per_million_usd: null,
+        },
+        'claude-opus-5-5': {
+          input_per_million_usd: '4.00',
+          output_per_million_usd: '20.00',
+          cache_read_per_million_usd: '0.20',
+          cache_write_per_million_usd: '5.00',
+          reasoning_per_million_usd: null,
+        },
+        'claude-opus-5': {
+          input_per_million_usd: '5.00',
+          output_per_million_usd: '25.00',
+          cache_read_per_million_usd: '0.50',
+          cache_write_per_million_usd: '6.25',
+          reasoning_per_million_usd: null,
+        },
+        'claude-sonnet-5': {
+          input_per_million_usd: '2.00',
+          output_per_million_usd: '10.00',
+          cache_read_per_million_usd: '0.20',
+          cache_write_per_million_usd: '2.50',
+          reasoning_per_million_usd: null,
+        },
+        'claude-opus-4-8': {
+          input_per_million_usd: '5.00',
+          output_per_million_usd: '25.00',
+          cache_read_per_million_usd: '0.50',
+          cache_write_per_million_usd: '6.25',
           reasoning_per_million_usd: null,
         },
         'claude-opus-4-7': {
