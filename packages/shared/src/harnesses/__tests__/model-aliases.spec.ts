@@ -34,11 +34,16 @@ function buildContext(params: {
 }
 
 describe('Claude Code model aliases', () => {
-  it('maps Opus 4.7 forms to the Claude Code opus alias', () => {
-    expect(normalizeClaudeCodeModelAlias('opus4.7')).toBe('opus');
-    expect(normalizeClaudeCodeModelAlias('opus-4-7')).toBe('opus');
-    expect(normalizeClaudeCodeModelAlias('claude-opus-4.7')).toBe('opus');
-    expect(normalizeClaudeCodeModelAlias('anthropic/claude-opus-4-7')).toBe('opus');
+  it('maps Opus 4.7 forms to the canonical Opus 4.7 id, not the moving opus alias', () => {
+    expect(normalizeClaudeCodeModelAlias('opus4.7')).toBe('claude-opus-4-7');
+    expect(normalizeClaudeCodeModelAlias('opus-4-7')).toBe('claude-opus-4-7');
+    expect(normalizeClaudeCodeModelAlias('claude-opus-4.7')).toBe('claude-opus-4-7');
+    expect(normalizeClaudeCodeModelAlias('anthropic/claude-opus-4-7')).toBe('claude-opus-4-7');
+  });
+
+  it('leaves the opus alias and Opus 5.5 ids untouched', () => {
+    expect(normalizeClaudeCodeModelAlias('opus')).toBe('opus');
+    expect(normalizeClaudeCodeModelAlias('claude-opus-5-5')).toBe('claude-opus-5-5');
   });
 
   it('preserves non-Opus model names', () => {
@@ -50,7 +55,7 @@ describe('Claude Code model aliases', () => {
     const direct = await claudeAdapter.buildOptions(buildContext({ harness: 'claude', model: 'opus4.7' }));
     const mirror = await mclaudeAdapter.buildOptions(buildContext({ harness: 'mclaude', model: 'claude-opus-4-7' }));
 
-    expect(direct.model).toBe('opus');
-    expect(mirror.model).toBe('opus');
+    expect(direct.model).toBe('claude-opus-4-7');
+    expect(mirror.model).toBe('claude-opus-4-7');
   });
 });

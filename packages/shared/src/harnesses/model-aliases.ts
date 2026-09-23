@@ -21,7 +21,7 @@ export function normalizeClaudeCodeModelAlias(model?: string): string | undefine
   const compact = lower.replace(/[\s._-]/g, '');
 
   if (CLAUDE_OPUS_47_ALIASES.has(lower) || CLAUDE_OPUS_47_ALIASES.has(compact)) {
-    return 'opus';
+    return 'claude-opus-4-7';
   }
 
   return trimmed;
