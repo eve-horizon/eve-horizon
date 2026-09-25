@@ -101,6 +101,15 @@ for BR-07. Source code cannot infer the orchestrator's deployed image digest.
 Runner metadata instead records each init container's observed Kubernetes
 `imageID` after its image has been pulled.
 
+Script jobs continue to execute inline by default. Setting
+`EVE_SCRIPT_K8S_RUNNER=true` on a Kubernetes worker opts script jobs into a
+dedicated runner pod. The worker submits the same job to the pod's
+`/scripts/execute` route; the pod carries `EVE_RUNNER_SELF_TERMINATE=1` to
+prevent redispatch. The pod emits the terminal runner event after execution;
+the outer worker emits `runner.failed` only if setup fails before a
+terminal pod event. Both runner paths retain the pulled init-container
+`imageID` when later toolchain metadata is written.
+
 ## Rationale
 
 The current public runtime uses one worker image and independently versioned,

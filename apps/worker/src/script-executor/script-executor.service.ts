@@ -28,6 +28,7 @@ import {
   type AppApiCliInfo,
   type AppApiInfo,
   type GitAuth,
+  type HarnessInvocation,
   type JobGit,
   type RelayDb,
   type ResolvedGitMetadata,
@@ -37,6 +38,7 @@ import {
   deriveNamespace,
 } from '@eve/shared';
 import { runStreamingCommand } from '../execution/streaming-command.js';
+import { runInvocationInK8s } from '../invoke/k8s-runner.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -91,6 +93,7 @@ interface ScriptExecutionResult {
   error?: string;
   errorCode?: string;
   durationMs: number;
+  runnerEventEmitted?: boolean;
 }
 
 type GitRefSource = 'env_release' | 'manifest' | 'project_default' | 'explicit';
@@ -144,6 +147,24 @@ export class ScriptExecutorService {
     this.jobs = jobQueries(this.db);
   }
 
+  shouldDispatchToRunner(): boolean {
+    return process.env.EVE_RUNTIME === 'k8s' && process.env.EVE_SCRIPT_K8S_RUNNER === 'true'
+      && process.env.EVE_RUNNER_SELF_TERMINATE !== '1';
+  }
+
+  private async updateScriptToolchainMeta(attemptId: string, toolchains: Record<string, unknown>): Promise<void> {
+    if (process.env.EVE_TOOLCHAIN_INIT_MOUNTED === 'true') {
+      const [attempt] = await this.db<{ runtime_meta: { toolchains?: Record<string, unknown> } }[]>`
+        SELECT runtime_meta FROM job_attempts WHERE id = ${attemptId}::uuid
+      `;
+      toolchains = { ...toolchains,
+        requested: attempt?.runtime_meta?.toolchains?.requested ?? toolchains.requested,
+        image_ids: attempt?.runtime_meta?.toolchains?.image_ids,
+        source: toolchains.source ?? 'init_container' };
+    }
+    await this.jobs.updateRuntimeMeta(attemptId, { toolchains });
+  }
+
   private buildRelayDb(): RelayDb {
     return {
       queryJobHints: async (jobId) => {
@@ -193,6 +214,20 @@ export class ScriptExecutorService {
       const scriptCommand = (job as unknown as { script_command?: string }).script_command;
       if (!scriptCommand) {
         throw new Error(`Job ${jobId} has no script_command defined`);
+      }
+
+      if (this.shouldDispatchToRunner()) {
+        const invocation = { jobId, attemptId, projectId: job.project_id,
+          text: '', toolchains: getJobToolchains(job) } as HarnessInvocation;
+        const result = await runInvocationInK8s(invocation,
+          (runtimeMeta) => this.jobs.updateRuntimeMeta(attemptId, runtimeMeta).then(() => undefined),
+          undefined, { submitPath: 'scripts/execute' });
+        const data = result.resultJson as { stdout?: string; stderr?: string; error_code?: string } | undefined;
+        return { success: result.success, exitCode: result.exitCode ?? (result.success ? 0 : 1),
+          stdout: data?.stdout, stderr: data?.stderr, error: result.error,
+          errorCode: data?.error_code ?? (result.error?.startsWith('toolchain_unavailable:') ? 'toolchain_unavailable' : undefined),
+          durationMs: Date.now() - startTime,
+          runnerEventEmitted: result.runnerEventObserved === true };
       }
 
       await this.jobs.markExecutionStarted(attemptId);
@@ -382,11 +417,10 @@ export class ScriptExecutorService {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       if (error instanceof ToolchainProvisionError || errorMessage.startsWith('toolchain_unavailable:')) {
-        await this.jobs.updateRuntimeMeta(attemptId, {
-          toolchains: { requested: error instanceof ToolchainProvisionError ? [error.toolchain] : ['browser'],
+        await this.updateScriptToolchainMeta(attemptId,
+          { requested: error instanceof ToolchainProvisionError ? [error.toolchain] : ['browser'],
             source: 'unavailable', error_code: 'toolchain_unavailable', error: errorMessage,
-            image: error instanceof ToolchainProvisionError ? error.image : null },
-        });
+            image: error instanceof ToolchainProvisionError ? error.image : null });
         await this.appendLog(attemptId, 'error', {
           code: 'toolchain_unavailable', message: errorMessage,
           toolchain: error instanceof ToolchainProvisionError ? error.toolchain : 'browser',
@@ -766,11 +800,10 @@ export class ScriptExecutorService {
         });
         env = provisioned.env;
         if (context.toolchains.includes('browser')) {
-          await this.jobs.updateRuntimeMeta(context.attemptId, {
-            toolchains: { requested: context.toolchains, resolved: provisioned.resolved,
+          await this.updateScriptToolchainMeta(context.attemptId,
+            { requested: context.toolchains, resolved: provisioned.resolved,
               browser_source_image_digest: provisioned.sourceDigests?.browser ?? null,
-              runtime_image_digest: process.env.EVE_RUNTIME_IMAGE_DIGEST ?? null },
-          });
+              runtime_image_digest: process.env.EVE_RUNTIME_IMAGE_DIGEST ?? null });
         }
       }
 
