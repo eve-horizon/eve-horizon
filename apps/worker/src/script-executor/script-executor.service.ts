@@ -12,6 +12,9 @@ import {
   DEFAULT_SCRIPT_JOB_PERMISSIONS,
   deliverProvisioningError,
   ensureToolchains,
+  probeBrowserRuntime,
+  rejectBrowserPathOverrides,
+  ToolchainProvisionError,
   buildAuthenticatedHttpsUrl,
   extractSecretRefs,
   GitWorkspace,
@@ -378,7 +381,19 @@ export class ScriptExecutorService {
       const durationMs = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      if (isMissingSecretOverrideError(error)) {
+      if (error instanceof ToolchainProvisionError || errorMessage.startsWith('toolchain_unavailable:')) {
+        await this.jobs.updateRuntimeMeta(attemptId, {
+          toolchains: { requested: error instanceof ToolchainProvisionError ? [error.toolchain] : ['browser'],
+            source: 'unavailable', error_code: 'toolchain_unavailable', error: errorMessage,
+            image: error instanceof ToolchainProvisionError ? error.image : null },
+        });
+        await this.appendLog(attemptId, 'error', {
+          code: 'toolchain_unavailable', message: errorMessage,
+          toolchain: error instanceof ToolchainProvisionError ? error.toolchain : 'browser',
+          image: error instanceof ToolchainProvisionError ? error.image : undefined,
+          timestamp: new Date().toISOString(), duration_ms: durationMs,
+        });
+      } else if (isMissingSecretOverrideError(error)) {
         await this.appendLog(attemptId, 'error', {
           code: error.code,
           message: errorMessage,
@@ -398,6 +413,7 @@ export class ScriptExecutorService {
         success: false,
         exitCode: 1,
         error: errorMessage,
+        errorCode: error instanceof ToolchainProvisionError || errorMessage.startsWith('toolchain_unavailable:') ? 'toolchain_unavailable' : undefined,
         durationMs,
       };
     } finally {
@@ -714,6 +730,7 @@ export class ScriptExecutorService {
         EVE_JOB_ID: context.jobId,
         EVE_PROJECT_ID: context.projectId,
         EVE_ATTEMPT_ID: context.attemptId,
+        EVE_TOOLCHAIN_INIT_MOUNTED: process.env.EVE_TOOLCHAIN_INIT_MOUNTED,
       };
 
       // API URL so the Eve CLI can reach the API from inside the worker pod
@@ -748,6 +765,13 @@ export class ScriptExecutorService {
           logger: context.logToolchainEvent,
         });
         env = provisioned.env;
+        if (context.toolchains.includes('browser')) {
+          await this.jobs.updateRuntimeMeta(context.attemptId, {
+            toolchains: { requested: context.toolchains, resolved: provisioned.resolved,
+              browser_source_image_digest: provisioned.sourceDigests?.browser ?? null,
+              runtime_image_digest: process.env.EVE_RUNTIME_IMAGE_DIGEST ?? null },
+          });
+        }
       }
 
       const appLinkKeys = Object.keys(context.appLinkEnv ?? {}).sort();
@@ -763,6 +787,7 @@ export class ScriptExecutorService {
         });
       }
 
+      rejectBrowserPathOverrides(context.toolchains ?? [], context.envOverrides);
       const overridesResult = await applyEnvOverrides({
         envOverrides: context.envOverrides,
         resolvedSecrets: context.resolvedSecrets ?? [],
@@ -784,6 +809,19 @@ export class ScriptExecutorService {
         });
       }
 
+      if (context.toolchains?.includes('browser')) {
+        try {
+          const probe = await probeBrowserRuntime(env, repoPath);
+          await this.jobs.updateRuntimeMeta(context.attemptId, { browser: probe });
+          await this.appendLog(context.attemptId, 'status', {
+            kind: 'browser_probe', ...probe, timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          throw new ToolchainProvisionError(`Browser setup failed: ${error instanceof Error ? error.message : String(error)}`, 'browser',
+            `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}browser:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`);
+        }
+      }
+
       const result = await runStreamingCommand({
         command,
         cwd: repoPath,
@@ -803,7 +841,8 @@ export class ScriptExecutorService {
         errorCode: result.timedOut ? 'script_timeout' : undefined,
       };
     } catch (error) {
-      if (isMissingSecretOverrideError(error)) {
+      if (isMissingSecretOverrideError(error) || error instanceof ToolchainProvisionError ||
+        (error instanceof Error && error.message.startsWith('toolchain_unavailable:'))) {
         throw error;
       }
 

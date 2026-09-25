@@ -15,6 +15,7 @@ export interface ToolchainRuntimeMeta {
   error?: string;
   toolchain?: string;
   image?: string;
+  image_ids?: Record<string, string>;
 }
 
 export function formatToolchainEvent(event: ToolchainCacheEvent): string {

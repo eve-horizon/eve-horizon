@@ -57,7 +57,7 @@ const AgentContextSchema = z.object({
   threads: AgentContextThreadsSchema.optional(),
 }).passthrough();
 
-export const VALID_TOOLCHAINS = ['python', 'media', 'rust', 'java', 'kotlin'] as const;
+export const VALID_TOOLCHAINS = ['python', 'media', 'rust', 'java', 'kotlin', 'browser'] as const;
 export type Toolchain = typeof VALID_TOOLCHAINS[number];
 export const ToolchainsSchema = z.array(z.enum(VALID_TOOLCHAINS));
 

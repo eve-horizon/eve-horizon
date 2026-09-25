@@ -11,6 +11,8 @@ import {
   type HarnessInvocation,
   type HarnessResult,
   ToolchainProvisionError,
+  probeBrowserRuntime,
+  rejectBrowserPathOverrides,
   type ToolchainCacheEvent,
   type ToolchainProvisionResult,
   type LifecycleEvent,
@@ -920,8 +922,10 @@ export class InvokeService {
   // ---------------------------------------------------------------------------
 
   async execute(invocation: HarnessInvocation): Promise<HarnessResult> {
+    let requestedToolchains = invocation.toolchains ?? [];
     try {
       const effectiveInvocation = await this.applyManifestDefaults(invocation);
+      requestedToolchains = effectiveInvocation.toolchains ?? [];
       const harnessOptions =
         (effectiveInvocation.harness_options &&
           typeof effectiveInvocation.harness_options === 'object')
@@ -1025,6 +1029,23 @@ export class InvokeService {
       return result;
     } catch (error) {
       const errMessage = error instanceof Error ? error.message : String(error);
+      if (requestedToolchains.includes('browser') &&
+        (error instanceof ToolchainProvisionError || errMessage.startsWith('toolchain_unavailable:'))) {
+        const toolchain = error instanceof ToolchainProvisionError ? error.toolchain : 'browser';
+        const image = error instanceof ToolchainProvisionError ? error.image :
+          `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}browser:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`;
+        if (invocation.attemptId) {
+          await this.jobs.updateRuntimeMeta(invocation.attemptId, {
+            toolchains: buildToolchainRuntimeMeta({
+              executionMode: 'inline', requested: requestedToolchains,
+              source: 'unavailable', errorCode: 'toolchain_unavailable', error: errMessage,
+              toolchain, image,
+            }),
+          });
+        }
+        return { attemptId: invocation.attemptId, success: false, exitCode: 1,
+          error: `toolchain_unavailable: ${toolchain} setup failed from ${image}: ${errMessage}` };
+      }
       return {
         attemptId: invocation.attemptId,
         success: false,
@@ -1612,6 +1633,7 @@ export class InvokeService {
     }
 
     const envOverridesRaw = (invocationWithOptions as { env_overrides?: Record<string, string> }).env_overrides;
+    rejectBrowserPathOverrides(invocationWithOptions.toolchains ?? [], envOverridesRaw);
     const envOverrideResult = await applyEnvOverrides({
       envOverrides: envOverridesRaw,
       resolvedSecrets,
@@ -1726,6 +1748,25 @@ export class InvokeService {
       jobUserHome,
       adapterEnv,
     });
+
+    if (provisionedToolchains?.resolved.includes('browser')) {
+      let probe;
+      try {
+        probe = await probeBrowserRuntime(processEnv, repoPath);
+      } catch (error) {
+        throw new ToolchainProvisionError(`Browser setup failed: ${error instanceof Error ? error.message : String(error)}`,
+          'browser', `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}browser:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`);
+      }
+      if (invocationWithOptions.attemptId) {
+        await this.jobs.updateRuntimeMeta(invocationWithOptions.attemptId, {
+          browser: {
+            ...probe,
+            source_image_digest: provisionedToolchains.sourceDigests?.browser,
+            runtime_image_digest: process.env.EVE_RUNTIME_IMAGE_DIGEST ?? null,
+          },
+        });
+      }
+    }
 
     return { startTime, logs, processEnv };
   }

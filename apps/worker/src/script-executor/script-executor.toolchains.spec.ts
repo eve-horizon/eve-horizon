@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { ScriptExecutorService } from './script-executor.service.js';
 import { ActionExecutorService } from '../action-executor/action-executor.service.js';
+import { ToolchainProvisionError } from '@eve/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -182,6 +183,7 @@ describe('worker toolchain execution', () => {
       jobs: {
         findById: vi.fn().mockResolvedValue(job),
         markExecutionStarted: vi.fn().mockResolvedValue(undefined),
+        updateRuntimeMeta: vi.fn().mockResolvedValue(undefined),
       },
       logs: { appendLog: vi.fn().mockResolvedValue(undefined) },
     });
@@ -249,6 +251,22 @@ describe('worker toolchain execution', () => {
       exitCode: 0,
     });
     expect(result.stdout).toContain('ready|/opt/eve/toolchains/python/bin:');
+  });
+
+  it('classifies a missing browser image as a setup failure before script execution', async () => {
+    const source = await tempWorkspace('eve-script-browser-missing-');
+    const image = 'eve-horizon/toolchain-browser:local';
+    sharedMocks.ensureToolchains.mockRejectedValue(new ToolchainProvisionError('browser image not found', 'browser', image));
+    const { service } = createScriptService({
+      id: 'job-browser-missing', project_id: 'proj_1', execution_type: 'script',
+      script_command: 'echo should-not-run', hints: { toolchains: ['python', 'browser'] },
+    }, `file://${source}`);
+    const result = await service.execute('job-browser-missing', 'att-browser-missing');
+    expect(result).toMatchObject({ success: false, exitCode: 1, errorCode: 'toolchain_unavailable' });
+    expect(result.error).toContain('browser image not found');
+    expect((service as any).jobs.updateRuntimeMeta).toHaveBeenCalledWith('att-browser-missing', expect.objectContaining({
+      toolchains: expect.objectContaining({ error_code: 'toolchain_unavailable', image }),
+    }));
   });
 
   it('leaves script jobs without toolchains on the existing environment path', async () => {

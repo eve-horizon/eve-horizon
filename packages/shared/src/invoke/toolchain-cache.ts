@@ -25,6 +25,7 @@ export interface ToolchainCacheEvent {
   image?: string;
   root?: string;
   message?: string;
+  sourceDigest?: string;
 }
 
 export interface EnsureToolchainsOptions {
@@ -44,6 +45,7 @@ export interface ToolchainProvisionResult {
   pathPrefix: string;
   envOverlay: Record<string, string>;
   env: NodeJS.ProcessEnv;
+  sourceDigests?: Record<string, string>;
 }
 
 export class ToolchainProvisionError extends Error {
@@ -67,6 +69,7 @@ export async function ensureToolchains(options: EnsureToolchainsOptions): Promis
       pathPrefix: '',
       envOverlay: {},
       env: baseEnv,
+      sourceDigests: {},
     };
   }
 
@@ -76,10 +79,18 @@ export async function ensureToolchains(options: EnsureToolchainsOptions): Promis
   const insecureRegistry = options.insecureRegistry ?? process.env.EVE_TOOLCHAIN_REGISTRY_INSECURE === 'true';
   await fs.mkdir(toolchainRoot, { recursive: true });
 
+  const sourceDigests: Record<string, string> = {};
   for (const toolchain of requested) {
     const image = `${imagePrefix}${toolchain}:${imageTag}`;
     try {
-      await ensureToolchainInstalled(toolchainRoot, toolchain, image, {
+      if (baseEnv.EVE_TOOLCHAIN_INIT_MOUNTED === 'true') {
+        await assertFile(path.join(toolchainRoot, toolchain, 'env.sh'), `toolchain ${toolchain} init payload is missing env.sh`);
+        await options.logger?.({ type: 'cache_hit', toolchain, image, root: path.join(toolchainRoot, toolchain) });
+        continue;
+      }
+      const digest = await resolveImageDigest(image, insecureRegistry, options.dockerConfigDir ?? process.env.DOCKER_CONFIG);
+      sourceDigests[toolchain] = digest;
+      await ensureToolchainInstalled(toolchainRoot, toolchain, image, digest, {
         dockerConfigDir: options.dockerConfigDir ?? process.env.DOCKER_CONFIG,
         insecureRegistry,
         logger: options.logger,
@@ -97,7 +108,16 @@ export async function ensureToolchains(options: EnsureToolchainsOptions): Promis
   let env: NodeJS.ProcessEnv = { ...baseEnv };
   for (const toolchain of requested) {
     const envPath = path.join(toolchainRoot, toolchain, 'env.sh');
-    env = await sourceToolchainEnv(envPath, env);
+    try {
+      env = await sourceToolchainEnv(envPath, env);
+    } catch (error) {
+      const image = `${imagePrefix}${toolchain}:${imageTag}`;
+      throw new ToolchainProvisionError(
+        `Failed to load toolchain "${toolchain}" environment from ${image}: ${error instanceof Error ? error.message : String(error)}`,
+        toolchain,
+        image,
+      );
+    }
     await options.logger?.({
       type: 'env_loaded',
       toolchain,
@@ -112,7 +132,22 @@ export async function ensureToolchains(options: EnsureToolchainsOptions): Promis
     pathPrefix,
     envOverlay,
     env,
+    sourceDigests,
   };
+}
+
+async function resolveImageDigest(image: string, insecureRegistry: boolean, dockerConfigDir?: string): Promise<string> {
+  const args = [...(insecureRegistry ? ['--insecure'] : []), 'digest', image];
+  const child = spawn('crane', args, {
+    env: { ...process.env, ...(dockerConfigDir ? { DOCKER_CONFIG: dockerConfigDir } : {}) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const [result, output] = await waitForProcessWithStdout(child, 'crane');
+  const digest = output.trim();
+  if (result.code !== 0 || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
+    throw new Error(`crane digest failed for ${image}: ${result.stderr.trim() || output.trim()}`);
+  }
+  return digest;
 }
 
 function normalizeToolchains(toolchains: readonly string[]): string[] {
@@ -133,6 +168,7 @@ async function ensureToolchainInstalled(
   toolchainRoot: string,
   toolchain: string,
   image: string,
+  digest: string,
   options: {
     dockerConfigDir?: string;
     insecureRegistry: boolean;
@@ -140,21 +176,21 @@ async function ensureToolchainInstalled(
   },
 ): Promise<void> {
   const target = path.join(toolchainRoot, toolchain);
-  if (await isInstalled(target, image)) {
-    await options.logger?.({ type: 'cache_hit', toolchain, image, root: target });
+  if (await isInstalled(target, image, digest)) {
+    await options.logger?.({ type: 'cache_hit', toolchain, image, root: target, sourceDigest: digest });
     return;
   }
 
   const lockDir = path.join(toolchainRoot, `.${toolchain}.lock`);
   await withInstallLock(lockDir, async () => {
-    if (await isInstalled(target, image)) {
-      await options.logger?.({ type: 'cache_hit', toolchain, image, root: target });
+    if (await isInstalled(target, image, digest)) {
+      await options.logger?.({ type: 'cache_hit', toolchain, image, root: target, sourceDigest: digest });
       return;
     }
 
-    await options.logger?.({ type: 'install_start', toolchain, image, root: target });
-    await installToolchain(toolchainRoot, toolchain, image, options);
-    await options.logger?.({ type: 'install_done', toolchain, image, root: target });
+    await options.logger?.({ type: 'install_start', toolchain, image, root: target, sourceDigest: digest });
+    await installToolchain(toolchainRoot, toolchain, image, digest, options);
+    await options.logger?.({ type: 'install_done', toolchain, image, root: target, sourceDigest: digest });
   }, async () => {
     await options.logger?.({
       type: 'install_wait',
@@ -166,10 +202,10 @@ async function ensureToolchainInstalled(
   });
 }
 
-async function isInstalled(target: string, image: string): Promise<boolean> {
+async function isInstalled(target: string, image: string, digest: string): Promise<boolean> {
   try {
     const marker = await fs.readFile(path.join(target, '.installed'), 'utf8');
-    return marker.trim() === image;
+    return marker.trim() === `${image}@${digest}`;
   } catch {
     return false;
   }
@@ -179,6 +215,7 @@ async function installToolchain(
   toolchainRoot: string,
   toolchain: string,
   image: string,
+  digest: string,
   options: {
     dockerConfigDir?: string;
     insecureRegistry: boolean;
@@ -194,11 +231,11 @@ async function installToolchain(
   await fs.mkdir(extractRoot, { recursive: true });
 
   try {
-    await exportToolchainImageWithRetry(image, extractRoot, options);
+    await exportToolchainImageWithRetry(`${image.split(':').slice(0, -1).join(':')}@${digest}`, extractRoot, options);
     const payloadDir = path.join(extractRoot, 'toolchain');
     await assertDirectory(payloadDir, `toolchain image ${image} did not contain /toolchain`);
     await fs.cp(payloadDir, installDir, { recursive: true, force: true, verbatimSymlinks: true });
-    await fs.writeFile(path.join(installDir, '.installed'), `${image}\n`, 'utf8');
+    await fs.writeFile(path.join(installDir, '.installed'), `${image}@${digest}\n`, 'utf8');
     await fs.rm(target, { recursive: true, force: true });
     await fs.rename(installDir, target);
   } finally {

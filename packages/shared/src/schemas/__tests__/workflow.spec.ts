@@ -47,6 +47,8 @@ describe('WorkflowStepSchema', () => {
   });
 
   it('accepts toolchains on agent, script, and run steps', () => {
+    expect(WorkflowStepSchema.safeParse({ agent: { name: 'browser' }, toolchains: ['python', 'browser'] }).success).toBe(true);
+    expect(WorkflowStepSchema.safeParse({ script: { run: 'eve-browser-python probe.py' }, toolchains: ['python', 'browser'] }).success).toBe(true);
     expect(WorkflowStepSchema.safeParse({ agent: { name: 'builder' }, toolchains: ['media'] }).success).toBe(true);
     expect(WorkflowStepSchema.safeParse({ script: { run: 'python -m demo' }, toolchains: ['python'] }).success).toBe(true);
     expect(WorkflowStepSchema.safeParse({ run: 'cargo test', toolchains: ['rust'] }).success).toBe(true);

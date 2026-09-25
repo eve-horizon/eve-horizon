@@ -191,7 +191,7 @@ function pushPrefixedEnv(entries: { name: string; value: string }[], prefixes: s
   }
 }
 
-function buildRunnerManifests(
+export function buildRunnerManifests(
   invocation: HarnessInvocation,
   namespace: string,
   pvcName: string,
@@ -213,6 +213,7 @@ function buildRunnerManifests(
     { name: 'EVE_CACHE_ROOT', value: '/opt/eve/cache' },
     { name: 'EVE_STATE_ROOT', value: '/opt/eve/state' },
     { name: 'EVE_TOOLCHAIN_ROOT', value: '/opt/eve/toolchains' },
+    { name: 'EVE_TOOLCHAIN_INIT_MOUNTED', value: 'true' },
   ];
 
   // Platform infra — needed for the runner pod to reach internal APIs
@@ -393,18 +394,48 @@ function buildRunnerManifests(
   return JSON.stringify(manifest);
 }
 
-async function waitForPodReady(namespace: string, podName: string): Promise<void> {
-  const timeout = optionalEnv('EVE_K8S_POD_READY_TIMEOUT', '60s');
-  const result = await execKubectl([
-    'wait',
-    `--namespace=${namespace}`,
-    `--for=condition=Ready`,
-    `pod/${podName}`,
-    `--timeout=${timeout}`,
-  ]);
-  if (result.exitCode !== 0) {
-    throw new Error(`Failed waiting for runner pod: ${result.stderr || result.stdout}`);
+export function readToolchainInitStatuses(
+  statuses: { name: string; imageID?: string; state?: { waiting?: { reason?: string; message?: string }; terminated?: { exitCode?: number; message?: string } } }[],
+  toolchains: readonly string[],
+): Record<string, string> {
+  const imageIds: Record<string, string> = {};
+  for (const tc of toolchains) {
+    const status = statuses.find((entry) => entry.name === `tc-${tc}`);
+    if (status?.imageID) imageIds[tc] = status.imageID;
+    const waiting = status?.state?.waiting;
+    const terminated = status?.state?.terminated;
+    if (waiting?.reason === 'ErrImagePull' || waiting?.reason === 'ImagePullBackOff' || (terminated && terminated.exitCode !== 0)) {
+      const image = `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}${tc}:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`;
+      throw new Error(`toolchain_unavailable: ${tc} init image ${image} failed: ${waiting?.message ?? terminated?.message ?? waiting?.reason ?? terminated?.exitCode}`);
+    }
   }
+  return imageIds;
+}
+
+async function waitForPodReady(namespace: string, podName: string, toolchains: readonly string[]): Promise<Record<string, string>> {
+  const timeout = optionalEnv('EVE_K8S_POD_READY_TIMEOUT', '60s');
+  const duration = /^(\d+)(ms|s|m)$/.exec(timeout);
+  if (!duration) throw new Error(`Invalid EVE_K8S_POD_READY_TIMEOUT: ${timeout}`);
+  const timeoutMs = Number(duration[1]) * (duration[2] === 'm' ? 60_000 : duration[2] === 's' ? 1_000 : 1);
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const result = await execKubectl(['get', 'pod', podName, `--namespace=${namespace}`, '-o', 'json']);
+    if (result.exitCode !== 0) throw new Error(`Failed to inspect runner pod: ${result.stderr || result.stdout}`);
+    const pod = JSON.parse(result.stdout) as {
+      status?: {
+        conditions?: { type: string; status: string }[];
+        initContainerStatuses?: { name: string; imageID?: string; state?: { waiting?: { reason?: string; message?: string }; terminated?: { exitCode?: number; message?: string } } }[];
+      };
+    };
+    const imageIds = readToolchainInitStatuses(pod.status?.initContainerStatuses ?? [], toolchains);
+    if (pod.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True')) {
+      const missingImageId = toolchains.find((toolchain) => !imageIds[toolchain]);
+      if (missingImageId) throw new Error(`toolchain_unavailable: ${missingImageId} init imageID is missing from ready pod ${podName}`);
+      return imageIds;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`Runner pod ${podName} did not become ready within ${timeoutMs}ms`);
 }
 
 async function getPodIp(namespace: string, podName: string): Promise<string> {
@@ -525,7 +556,13 @@ export async function runInvocationInK8s(
       });
     }
 
-    await waitForPodReady(namespace, podName);
+    const pulledToolchainImages = await waitForPodReady(namespace, podName, toolchains);
+    if (onPodCreated && toolchains.length > 0) {
+      await onPodCreated({ runtime: 'k8s', pod_name: podName, namespace,
+        toolchains: { ...buildToolchainRuntimeMeta({ executionMode: 'runner', requested: toolchains, resolved: toolchains }),
+          image_ids: pulledToolchainImages },
+      });
+    }
 
     if (logLifecycle) {
       await logLifecycle('runner', 'end', { pod_name: podName, namespace }, {
@@ -574,6 +611,19 @@ export async function runInvocationInK8s(
         success: false,
         error: errorMessage,
       });
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith('toolchain_unavailable:')) {
+      const failedToolchain = toolchains.find((tc) => message.includes(` ${tc} `)) ?? 'browser';
+      if (onPodCreated) {
+        await onPodCreated({ runtime: 'k8s', pod_name: podName, namespace,
+          toolchains: buildToolchainRuntimeMeta({ executionMode: 'runner', requested: toolchains,
+            resolved: [], missing: toolchains, source: 'unavailable',
+            errorCode: 'toolchain_unavailable', error: message, toolchain: failedToolchain,
+            image: `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}${failedToolchain}:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}` }),
+        });
+      }
+      return { attemptId: invocation.attemptId, success: false, exitCode: 1, error: message };
     }
     throw err;
   } finally {

@@ -172,3 +172,6 @@ export {
   type ToolchainCacheEvent,
   type ToolchainProvisionResult,
 } from './toolchain-cache.js';
+
+export { rejectBrowserPathOverrides, probeBrowserRuntime, BROWSER_PATH_KEYS } from './browser-runtime.js';
+export type { BrowserProbeResult } from './browser-runtime.js';
