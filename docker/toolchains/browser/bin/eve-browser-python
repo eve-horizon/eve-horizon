@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+browser_root=/opt/eve/toolchains/browser
+python_root=/opt/eve/toolchains/python
+if [ ! -x "$python_root/bin/python3" ]; then
+  echo "browser setup failed: declared python toolchain is missing" >&2
+  exit 127
+fi
+if [ ! -d "$browser_root/browsers" ]; then
+  echo "browser setup failed: bundled Chromium is missing" >&2
+  exit 127
+fi
+
+export PLAYWRIGHT_BROWSERS_PATH="$browser_root/browsers"
+export PYTHONHOME="$python_root"
+export PYTHONPATH="$browser_root/python"
+export LD_LIBRARY_PATH="$browser_root/lib"
+export FONTCONFIG_FILE="$browser_root/fonts/fonts.conf"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}"
+
+exec "$python_root/bin/python3" "$@"
