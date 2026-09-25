@@ -37,7 +37,7 @@ describe('harness CLI command construction', () => {
 
     expect(command.binary).toBe('claude');
     expect(command.args).toContain('--model');
-    expect(command.args).toContain('opus');
+    expect(command.args).toContain('claude-opus-4-7');
     expect(command.args).not.toContain('opus4.7');
     expect(command.env.MAX_THINKING_TOKENS).toBe('32000');
   });
@@ -61,8 +61,8 @@ describe('harness CLI command construction', () => {
       model: 'claude-opus-4-7',
     });
 
-    expect(mclaude.command.args).toContain('opus');
-    expect(mclaude.command.args).not.toContain('claude-opus-4-7');
+    expect(mclaude.command.args).toContain('claude-opus-4-7');
+    expect(mclaude.command.args).not.toContain('opus');
     expect(mclaude.command.env.MAX_THINKING_TOKENS).toBe('16000');
     expect(zai.command.args).toContain('claude-opus-4-7');
   });
