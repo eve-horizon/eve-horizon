@@ -54,6 +54,10 @@ import {
   type ClaudeAuthDecision,
   type ClaudeRuntimeConfig,
   type ClaudeCredentialMaterialization,
+  ensureToolchains,
+  ToolchainProvisionError,
+  probeBrowserRuntime,
+  rejectBrowserPathOverrides,
 } from '@eve/shared';
 // Shared invoke module — single source of truth for agent-execution logic
 import {
@@ -1518,6 +1522,7 @@ export class InvokeService {
         };
 
         const envOverridesRaw = (effectiveInvocation as { env_overrides?: Record<string, string> }).env_overrides;
+        rejectBrowserPathOverrides(effectiveInvocation.toolchains ?? [], envOverridesRaw);
         const envOverrideResult = await applyEnvOverrides({
           envOverrides: envOverridesRaw,
           resolvedSecrets,
@@ -1595,6 +1600,24 @@ export class InvokeService {
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+      if (error instanceof ToolchainProvisionError || errMsg.startsWith('toolchain_unavailable:')) {
+        const requested = [...new Set(invocation.toolchains ?? [])];
+        const toolchain = error instanceof ToolchainProvisionError ? error.toolchain : 'browser';
+        const image = error instanceof ToolchainProvisionError ? error.image :
+          `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}${toolchain}:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`;
+        if (invocation.attemptId) {
+          const [attempt] = await this.db<{ runtime_meta: { toolchains?: { image_ids?: Record<string, string> } } }[]>`
+            SELECT runtime_meta FROM job_attempts WHERE id = ${invocation.attemptId}::uuid
+          `;
+          await this.jobs.updateRuntimeMeta(invocation.attemptId, {
+            toolchains: { requested, resolved: [], missing: requested, source: 'unavailable',
+              error_code: 'toolchain_unavailable', toolchain, image, error: errMsg,
+              image_ids: attempt?.runtime_meta?.toolchains?.image_ids },
+          });
+        }
+        return { attemptId: invocation.attemptId, success: false, exitCode: 1,
+          error: `toolchain_unavailable: ${toolchain} setup failed from ${image}: ${errMsg}` };
+      }
       console.error(`Worker execution failed: ${errMsg}`);
       return {
         attemptId: invocation.attemptId,
@@ -2189,7 +2212,6 @@ export class InvokeService {
       // Non-fatal — description still has the URLs
     }
 
-    return new Promise((resolve) => {
       const securityPreamble = buildSecurityPolicyPreamble(repoPath);
       const fullPromptText = securityPreamble + '\n\n' + invocation.text;
 
@@ -2218,8 +2240,13 @@ export class InvokeService {
         args.push('--reasoning', options.reasoning);
       }
 
+      const requestedToolchains = [...new Set(invocation.toolchains ?? [])];
+      const provisionedToolchains = requestedToolchains.length > 0
+        ? await ensureToolchains({ toolchains: requestedToolchains, baseEnv: process.env }) : null;
+      if (provisionedToolchains) Object.assign(adapterEnv, provisionedToolchains.envOverlay);
       const processEnv = buildSanitizedHarnessEnv({
         binPaths: [
+          ...(provisionedToolchains?.pathPrefix.split(path.delimiter).filter(Boolean) ?? []),
           ...appCliBinPaths,
           path.resolve(process.cwd(), 'node_modules', '.bin'),
           path.resolve(process.cwd(), '..', '..', 'node_modules', '.bin'),
@@ -2236,6 +2263,21 @@ export class InvokeService {
         adapterEnv,
       });
 
+      if (requestedToolchains.includes('browser')) {
+        let probe;
+        try {
+          probe = await probeBrowserRuntime(processEnv, repoPath);
+        } catch (error) {
+          throw new ToolchainProvisionError(`Browser setup failed: ${error instanceof Error ? error.message : String(error)}`,
+            'browser', `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}browser:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`);
+        }
+        await this.jobs.updateRuntimeMeta(invocation.attemptId, { browser: {
+          ...probe, source_image_digest: provisionedToolchains?.sourceDigests?.browser,
+          runtime_image_digest: process.env.EVE_RUNTIME_IMAGE_DIGEST ?? null,
+        } });
+      }
+
+      return new Promise((resolve) => {
       const fullArgs = [...prefixArgs, ...args];
       console.log(`[harness] Executing: ${binary} ${fullArgs.join(' ')}`);
       console.log(`[harness-env] CODEX_HOME=${processEnv.CODEX_HOME ?? '(unset)'} OPENAI_API_KEY=${processEnv.OPENAI_API_KEY ? 'present' : '(unset)'}`);

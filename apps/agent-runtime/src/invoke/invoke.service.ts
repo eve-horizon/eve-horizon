@@ -132,6 +132,7 @@ import {
 import {
   appendProvisionedToolchainEnv,
   buildToolchainRuntimeMeta,
+  type ToolchainRuntimeMeta,
   formatToolchainEvent,
   recordToolchainEvent,
 } from './toolchains';
@@ -1035,13 +1036,11 @@ export class InvokeService {
         const image = error instanceof ToolchainProvisionError ? error.image :
           `${process.env.EVE_TOOLCHAIN_IMAGE_PREFIX ?? 'eve-horizon/toolchain-'}browser:${process.env.EVE_TOOLCHAIN_IMAGE_TAG ?? 'local'}`;
         if (invocation.attemptId) {
-          await this.jobs.updateRuntimeMeta(invocation.attemptId, {
-            toolchains: buildToolchainRuntimeMeta({
+          await this.updateToolchainRuntimeMeta(invocation.attemptId, buildToolchainRuntimeMeta({
               executionMode: 'inline', requested: requestedToolchains,
               source: 'unavailable', errorCode: 'toolchain_unavailable', error: errMessage,
               toolchain, image,
-            }),
-          });
+            }));
         }
         return { attemptId: invocation.attemptId, success: false, exitCode: 1,
           error: `toolchain_unavailable: ${toolchain} setup failed from ${image}: ${errMessage}` };
@@ -1099,11 +1098,22 @@ export class InvokeService {
     );
   }
 
-  /**
-   * Provision declared toolchains before harness start. On provisioning
-   * failure, returns the terminal `toolchain_unavailable` result instead of
-   * throwing so execute() can fail fast with the classified error.
-   */
+  /** Preserve runner image IDs across top-level JSONB toolchains replacements. */
+  private async updateToolchainRuntimeMeta(attemptId: string, toolchains: ToolchainRuntimeMeta): Promise<void> {
+    // The runner parent writes the pulled init image IDs before this process
+    // starts. Preserve them across the child's provisioning and failure writes.
+    if (process.env.EVE_TOOLCHAIN_INIT_MOUNTED === 'true') {
+      const [attempt] = await this.db<{ runtime_meta: { toolchains?: ToolchainRuntimeMeta } }[]>`
+        SELECT runtime_meta FROM job_attempts WHERE id = ${attemptId}::uuid
+      `;
+      toolchains = { ...toolchains, execution_mode: 'runner',
+        source: toolchains.source === 'unavailable' ? 'unavailable' : 'init_container',
+        image_ids: attempt?.runtime_meta?.toolchains?.image_ids };
+    }
+    await this.jobs.updateRuntimeMeta(attemptId, { toolchains });
+  }
+
+  /** Provision declared toolchains before harness start, returning setup failures. */
   private async provisionRequestedToolchains(
     effectiveInvocation: HarnessInvocation,
     executeStartTime: number,
@@ -1139,15 +1149,13 @@ export class InvokeService {
           logger: logToolchainEvent,
         });
         if (effectiveInvocation.attemptId) {
-          await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
-            toolchains: buildToolchainRuntimeMeta({
+          await this.updateToolchainRuntimeMeta(effectiveInvocation.attemptId, buildToolchainRuntimeMeta({
               executionMode: 'inline',
               requested: requestedToolchains,
               resolved: provisionedToolchains.resolved,
               missing: provisionedToolchains.missing,
               eventsByToolchain: toolchainEvents,
-            }),
-          });
+            }));
         }
       } catch (error) {
         const provisionError = error instanceof ToolchainProvisionError ? error : null;
@@ -1160,8 +1168,7 @@ export class InvokeService {
         };
 
         if (effectiveInvocation.attemptId) {
-          await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, {
-            toolchains: buildToolchainRuntimeMeta({
+          await this.updateToolchainRuntimeMeta(effectiveInvocation.attemptId, buildToolchainRuntimeMeta({
               executionMode: 'inline',
               requested: requestedToolchains,
               resolved: [],
@@ -1172,8 +1179,7 @@ export class InvokeService {
               error: errorMessage,
               toolchain: provisionError?.toolchain,
               image: provisionError?.image,
-            }),
-          });
+            }));
           await this.logs.appendLog(effectiveInvocation.attemptId, 'status', {
             kind: 'toolchain',
             event_type: 'provision_failed',
