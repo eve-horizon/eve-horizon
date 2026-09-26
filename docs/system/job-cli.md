@@ -108,6 +108,16 @@ classified runtime codes include `toolchain_unavailable`,
 `runtime_meta.toolchains` with requested, resolved, missing, execution mode, and
 source.
 
+For browser-backed jobs, inspect `runtime_meta.browser` and
+`runtime_meta.toolchains` in `eve job diagnose <id> --json`. These include the
+probed Playwright/Chromium versions and source image digest for inline jobs;
+runner jobs report the pulled toolchain init-container `imageID`. Set
+`EVE_RUNTIME_IMAGE_DIGEST` to the exact deployed service image digest to record
+runtime provenance. Browser setup failures use `toolchain_unavailable` and
+must not be treated as page-rendering results. See
+[scenario 57](../../tests/manual/scenarios/57-browser-runtime.md) for a
+receipt and screenshot verification flow.
+
 ### Updating Jobs
 
 ```bash

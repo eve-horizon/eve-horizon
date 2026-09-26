@@ -28,18 +28,32 @@ export class ScriptExecutorController {
     withCorrelationContext(
       { jobId: invocation.jobId, attemptId: invocation.attemptId },
       async () => {
-        await emitRunnerEvent(invocation.projectId, 'runner.started', {
-          attemptId: invocation.attemptId,
-          jobId: invocation.jobId,
-        });
+        const dispatching = this.scriptExecutor.shouldDispatchToRunner();
+        if (!dispatching) {
+          await emitRunnerEvent(invocation.projectId, 'runner.started', {
+            attemptId: invocation.attemptId,
+            jobId: invocation.jobId,
+          });
+        }
 
         try {
           const result = await this.scriptExecutor.execute(invocation.jobId, invocation.attemptId);
-          await emitRunnerEvent(invocation.projectId, 'runner.completed', {
-            attemptId: invocation.attemptId,
-            jobId: invocation.jobId,
-            result: this.toHarnessResult(invocation.attemptId, result),
-          });
+          if (!result.runnerEventEmitted) {
+            if (dispatching && !result.success) {
+              await emitRunnerEvent(invocation.projectId, 'runner.failed', {
+                attemptId: invocation.attemptId,
+                jobId: invocation.jobId,
+                error: result.error ?? 'Script runner setup failed',
+                exitCode: result.exitCode,
+              });
+            } else {
+              await emitRunnerEvent(invocation.projectId, 'runner.completed', {
+                attemptId: invocation.attemptId,
+                jobId: invocation.jobId,
+                result: this.toHarnessResult(invocation.attemptId, result),
+              });
+            }
+          }
         } catch (err) {
           await emitRunnerEvent(invocation.projectId, 'runner.failed', {
             attemptId: invocation.attemptId,
@@ -47,6 +61,10 @@ export class ScriptExecutorController {
             error: err instanceof Error ? err.message : String(err),
             exitCode: 1,
           });
+        } finally {
+          if (process.env.EVE_RUNNER_SELF_TERMINATE === '1') {
+            setTimeout(() => process.exit(0), 2000);
+          }
         }
       },
     ).catch((err) => {
@@ -68,6 +86,7 @@ export class ScriptExecutorController {
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
         exit_code: result.exitCode,
+        ...(result.errorCode ? { error_code: result.errorCode } : {}),
       },
       durationMs: result.durationMs,
       tokenInput: 0,

@@ -16,7 +16,7 @@ The supported public artifact model is:
   services;
 - the same pinned worker image used for ephemeral runner pods through
   `EVE_RUNNER_IMAGE`; and
-- independently versioned `toolchain-{python,media,rust,java,kotlin}` images,
+- independently versioned `toolchain-{python,media,rust,java,kotlin,browser}` images,
   materialised per step through `EVE_TOOLCHAIN_IMAGE_PREFIX` and
   `EVE_TOOLCHAIN_IMAGE_TAG`.
 
@@ -58,6 +58,15 @@ steps to compose the tooling they need.
 For local k3d, `eh k8s-image push-toolchains` imports the toolchain images into
 the cluster registry. Hosted deployment instances configure the public image
 prefix and tag on the worker and agent-runtime pods.
+
+For headless HTML/SVG verification, declare `toolchains: [python, browser]` and
+run `/opt/eve/toolchains/browser/bin/eve-browser-python script.py`. This uses
+the bundled Playwright 1.63.0 client and matching Chromium. Job-installed
+Playwright versions and browser downloads are outside this supported path.
+Provisioning probes a real launch before the job command. Failures surface as
+`toolchain_unavailable`; successful attempts record observed versions and
+source image digest in `runtime_meta`. The source digest identifies the image
+used to populate a writable cache, not integrity of its extracted files.
 
 ## Adding a worker pool
 

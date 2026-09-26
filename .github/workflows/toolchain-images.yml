@@ -22,11 +22,22 @@ env:
   AWS_ECR_REGION: ${{ vars.AWS_ECR_REGION || 'eu-west-1' }}
 
 jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build browser payload
+        run: docker buildx build --platform linux/amd64 -t eve-horizon/toolchain-browser:local --load docker/toolchains/browser
+      - name: Launch in worker and agent-runtime images
+        run: sh docker/toolchains/browser/test-runtime.sh
+
   build:
+    needs: browser-smoke
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        toolchain: [python, media, rust, java, kotlin]
+        toolchain: [python, media, rust, java, kotlin, browser]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -52,12 +63,13 @@ jobs:
           fi
           echo "value=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Ensure ECR repository exists
+      - name: Verify ECR repository exists
         run: |
           ECR_REPOSITORY="${{ env.ECR_NAMESPACE }}/toolchain-${{ matrix.toolchain }}"
-          if ! aws ecr-public describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-1 >/dev/null 2>&1; then
-            aws ecr-public create-repository --repository-name "$ECR_REPOSITORY" --region us-east-1 >/dev/null
-          fi
+          aws ecr-public describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-1 >/dev/null || {
+            echo "::error::Missing ECR repository $ECR_REPOSITORY; provision it through deployment instance Terraform."
+            exit 1
+          }
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -67,4 +79,4 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/toolchain-${{ matrix.toolchain }}:${{ steps.version.outputs.value }}
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/toolchain-${{ matrix.toolchain }}:latest
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64

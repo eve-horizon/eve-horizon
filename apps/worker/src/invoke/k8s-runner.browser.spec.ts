@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HarnessInvocation } from '@eve/shared';
-import { buildRunnerManifests, readToolchainInitStatuses } from './k8s-runner.js';
+import { buildRunnerManifests, readToolchainInitStatuses, resultFromRunnerEvent } from './k8s-runner.js';
 
 const previous = { image: process.env.EVE_RUNNER_IMAGE, db: process.env.DATABASE_URL };
 afterEach(() => {
@@ -28,5 +28,16 @@ describe('worker browser runner manifest', () => {
     expect(pod.spec.initContainers.map((container: { image: string }) => container.image)).toContain('eve-horizon/toolchain-browser:local');
     expect(pod.spec.containers[0].env).toContainEqual({ name: 'EVE_TOOLCHAIN_INIT_MOUNTED', value: 'true' });
     expect(pod.spec.containers[0].securityContext).toMatchObject({ runAsUser: 1000, allowPrivilegeEscalation: false });
+  });
+
+  it('marks both pod terminal event types as already emitted', () => {
+    const completed = resultFromRunnerEvent({ id: 'event-1', type: 'runner.completed',
+      payload_json: { jobId: 'job', attemptId: 'attempt', result: {
+        attemptId: 'attempt', success: true, exitCode: 0,
+      } as never } }, 'attempt');
+    const failed = resultFromRunnerEvent({ id: 'event-2', type: 'runner.failed',
+      payload_json: { jobId: 'job', attemptId: 'attempt', error: 'script failed', exitCode: 1 } }, 'attempt');
+    expect(completed).toMatchObject({ success: true, runnerEventObserved: true });
+    expect(failed).toMatchObject({ success: false, error: 'script failed', runnerEventObserved: true });
   });
 });

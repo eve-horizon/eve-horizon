@@ -157,6 +157,7 @@ export ORG_ID=org_manualtestorg
 | 52 | [App Bucket IAM Isolation](scenarios/52-app-bucket-iam-isolation.md) | ~20-30m | No | App object bucket isolation modes, local fail-fast IRSA, stale row cleanup, and staging cross-app denial |
 | 55 | [Agent Toolchain Inline Runtime](scenarios/55-agent-toolchain-inline.md) | ~4-6m | Yes | Agent workflow `toolchains: [python]`, inline provisioning, `runtime_meta.toolchains`, and `python3` proof |
 | 56 | [Delegated Init Timeout](scenarios/56-delegated-init-timeout.md) | ~3-5m | No | Claimed delegated child with null `execution_started_at`, `attempt_init_timeout`, and lead unblock |
+| 57 | [Declared Browser Runtime](scenarios/57-browser-runtime.md) | ~25m + builds | No | Script, Codex agent, runner, negative setup checks, image provenance, and PNG receipt |
 
 **Core tests (01-04):** ~4 minutes when run in parallel
 **Security tests (09):** ~3-4 minutes (can run parallel with core)

@@ -826,7 +826,7 @@ Step types:
 - **run**: shorthand for `script.run`
 
 `toolchains` can be declared at pipeline root or step level. Valid values are
-`python`, `media`, `rust`, `java`, and `kotlin`. Script, shorthand `run`,
+`python`, `media`, `rust`, `java`, `kotlin`, and `browser`. Script, shorthand `run`,
 agent, and `action: { type: run }` steps resolve `step.toolchains >
 pipeline.toolchains > []`; non-run actions cannot declare step-level
 toolchains, and `action.toolchains` is rejected.
@@ -851,6 +851,12 @@ Agent steps resolve `step.toolchains > agent config toolchains >
 workflow.toolchains > []`. Resolved toolchains are stored in
 `jobs.hints.toolchains`, provisioned before execution, and visible in
 `runtime_meta.toolchains` through `eve job show --verbose` / `eve job diagnose`.
+
+Browser checks declare `[python, browser]` and call the absolute
+`/opt/eve/toolchains/browser/bin/eve-browser-python` wrapper. The wrapper uses
+the pinned Playwright client and Chromium from the browser payload. A
+`PLAYWRIGHT_BROWSERS_PATH`, `LD_LIBRARY_PATH`, or `FONTCONFIG_FILE` step
+`env_overrides` value is rejected as browser setup failure.
 
 ```yaml
 workflows:

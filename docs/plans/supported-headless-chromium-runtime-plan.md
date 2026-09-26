@@ -86,7 +86,7 @@ controller slot, Git base, and resource reservations are proven.
 | --- | --- | --- | --- | --- |
 | U1 — runtime feasibility | none | `docker/toolchains/browser/`, disposable probe files; browser binary/OS ABI | BR-01: bundled client and Chromium launch under UID 1000 in worker and agent-runtime images on amd64, with no missing libraries or security-context changes. Capture client/browser versions, image digest, resource use, and any fallback decision. | High: native libraries, sandbox, image size. |
 | U2 — platform contract | U1 | `packages/shared/src/schemas/`, `packages/shared/src/invoke/`, `apps/worker/src/script-executor/`, both `apps/{worker,agent-runtime}/src/invoke/k8s-runner.ts` paths, `apps/agent-runtime/src/invoke/`, `docker/worker/entrypoint.sh`, `bin/eh-commands/k8s-image.sh`, `.github/workflows/toolchain-images.yml`, `.github/workflows/image-build-check.yml`, and both runtime Dockerfiles if U1 chooses the fallback; toolchain declarations, provenance, and setup errors | BR-02, BR-05, and BR-09: declarations resolve in script, agent, and runner jobs; broken payload, failed launch, or failed init image is a setup failure. Run focused schema/provisioning and runner-manifest tests, `pnpm build`, `pnpm test`, and a build-and-launch image smoke. | High: multiple execution paths and shared environment handling. |
-| U3 — local scenarios and operator guide | U2 | `tests/manual/scenarios/`, `tests/manual/README.md`, `docs/system/worker-types.md`, manifest/job docs and matching public skillpack reference; local evidence | BR-03, BR-04, BR-06, BR-07, and BR-09 pass on the deployed local stack; scenarios and commands are reproducible. Run affected integration tests and local live jobs. This is the merge gate; hosted BR-08 is not required to integrate this unit. | Medium: real harness behavior and isolation. |
+| U3 — local scenarios and operator guide | U2 | `tests/manual/fixtures/browser-runtime/`, `tests/manual/scenarios/`, `tests/manual/README.md`, worker script/runner follow-up, image workflows, `docs/system/worker-types.md`, manifest/job docs; local evidence | BR-03, BR-04, BR-06, BR-07, and BR-09 pass on the deployed local stack; scenarios and commands are reproducible. Run affected integration tests and local live jobs. This is the merge gate; hosted BR-08 is not required to integrate this unit. | Medium: real harness behavior and isolation. |
 | U4 — release and hosted verification | U3 | Release/deployment records and issue #6; no source-code paths or modifying worker lane | Publish the approved toolchain and service artifacts after release gates, then have the owning deployment instance roll them out. BR-08 passes on that deployment and its evidence is attached to #6 before issue closure. | High: external publication and deployment identity. |
 
 Reserve Docker Buildx capacity and image storage for U1/U2, the local k3d
@@ -94,6 +94,14 @@ owner slot and a disposable project for U3, and the registry/deployment-owner
 release window for U4. Do not run another image or cluster mutation in those
 shared resources concurrently. The controller records each reservation with
 its Beads unit before dispatch.
+
+U2's canonical candidate diff reached 65,006 bytes against the 65,536-byte
+single-controller review cap. Its browser core and shared contract integrated
+unchanged. The deferred image workflow, local image helper, script runner,
+worker runner, smoke, and decision-record changes were moved forward from
+the earlier candidate into U3 as a separate exact diff. This is a review-size
+split, not a relaxation of the setup or security contract. U3 also tests the
+published worker `base` target; earlier Rosetta feasibility used `production`.
 
 ### Contract details for U2
 

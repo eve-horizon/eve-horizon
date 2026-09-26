@@ -30,12 +30,23 @@ interface RunnerEvent {
   };
 }
 
+type RunnerResult = HarnessResult & { runnerEventObserved?: boolean };
+
+export function resultFromRunnerEvent(event: RunnerEvent, attemptId: string): RunnerResult {
+  if (event.type === 'runner.completed') {
+    return { ...event.payload_json.result!, runnerEventObserved: true };
+  }
+  return { attemptId: attemptId as HarnessResult['attemptId'], success: false,
+    exitCode: event.payload_json.exitCode ?? 1,
+    error: event.payload_json.error || 'Runner failed', runnerEventObserved: true };
+}
+
 async function pollForCompletion(
   projectId: string,
   attemptId: string,
   pollIntervalMs: number = 5000,
   timeoutMs: number = 1800000, // 30 min default
-): Promise<HarnessResult> {
+): Promise<RunnerResult> {
   const config = loadConfig();
   const startTime = Date.now();
   let pollCount = 0;
@@ -75,17 +86,7 @@ async function pollForCompletion(
 
         if (completionEvent) {
           console.log(`[k8s-poll] Found completion event after ${pollCount} polls (${Date.now() - startTime}ms): type=${completionEvent.type}`);
-          if (completionEvent.type === 'runner.completed') {
-            return completionEvent.payload_json.result!;
-          } else {
-            // runner.failed
-            return {
-              attemptId: attemptId as any,
-              success: false,
-              exitCode: completionEvent.payload_json.exitCode ?? 1,
-              error: completionEvent.payload_json.error || 'Runner failed',
-            };
-          }
+          return resultFromRunnerEvent(completionEvent, attemptId);
         }
 
         // Log periodically when no match found (every 30s)
@@ -512,8 +513,8 @@ export async function runInvocationInK8s(
   invocation: HarnessInvocation,
   onPodCreated?: (runtimeMeta: { runtime: string; pod_name: string; namespace: string; toolchains?: Record<string, unknown> }) => Promise<void>,
   logLifecycle?: LifecycleLogger,
-  opts?: { resources?: RunnerResourceOverrides },
-): Promise<HarnessResult> {
+  opts?: { resources?: RunnerResourceOverrides; submitPath?: 'invoke' | 'scripts/execute' },
+): Promise<RunnerResult> {
   const namespace = optionalEnv('EVE_K8S_NAMESPACE', DEFAULT_NAMESPACE);
   const rawAttempt = normalizeNameRaw(invocation.attemptId);
   const attemptHash = shortHash(invocation.attemptId);
@@ -575,13 +576,16 @@ export async function runInvocationInK8s(
     await waitForRunner(RUNNER_PORT, podIp);
 
     // Submit job (returns 202 immediately)
-    const submitResponse = await fetch(`http://${podIp}:${RUNNER_PORT}/invoke`, {
+    const submitPath = opts?.submitPath ?? 'invoke';
+    const submitResponse = await fetch(`http://${podIp}:${RUNNER_PORT}/${submitPath}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...getCorrelationHeaders(),
       },
-      body: JSON.stringify(k8sInvocation),
+      body: JSON.stringify(submitPath === 'scripts/execute'
+        ? { jobId: invocation.jobId, attemptId: invocation.attemptId, projectId: invocation.projectId }
+        : k8sInvocation),
     });
 
     if (!submitResponse.ok) {
