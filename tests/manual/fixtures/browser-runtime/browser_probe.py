@@ -33,9 +33,7 @@ def main():
         page.set_content(fixture.read_text(encoding="utf-8"))
         text = page.locator("#text").inner_text()
         box = page.locator("#box").bounding_box()
-        chromium = (context.browser.version if context.browser else
-                    subprocess.check_output([playwright.chromium.executable_path, "--version"],
-                                            text=True).strip().split()[-1])
+        chromium = context.new_cdp_session(page).send("Browser.getVersion")["product"].rsplit("/", 1)[-1]
         assert text == EXPECTED_TEXT, text
         assert box and box["width"] == 40 and box["height"] == 20, box
         page.screenshot(path=str(screenshot))
