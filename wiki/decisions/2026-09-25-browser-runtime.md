@@ -1,7 +1,7 @@
 # Browser runtime packaging for verification jobs
 
 > Date: 2026-09-25
-> Status: Rosetta linux/amd64 launch passed; native hardware and pod checks remain subject to the
+> Status: Feasibility pending native linux/amd64 launch; subject to the gate in the
 > [implementation plan](../../docs/plans/supported-headless-chromium-runtime-plan.md)
 > Source: [GitHub issue #6](https://github.com/eve-horizon/eve-horizon/issues/6)
 
@@ -71,44 +71,6 @@ These IDs identify local image builds. A published source-image digest and
 deployed runtime image digests must be recorded after release; the writable
 toolchain cache makes source digest provenance rather than tamper-proof
 attestation of extracted files.
-
-## Follow-up launch evidence (2026-09-25)
-
-An isolated Colima VZ+Rosetta amd64 profile (`colima-browser-rosetta`, 4 GiB
-RAM, 4 CPUs, 40 GiB disk) ran the mandatory `test-runtime.sh` smoke with
-exit 0 in both exact production image builds. The default Docker context
-remained `colima`. Probe derivatives added only two layers, retaining each
-original production image's DiffID prefix. The runtime user was UID/GID 1000,
-with Docker's default seccomp, no-new-privileges, all capabilities dropped,
-and a writable `/tmp` tmpfs. The wrapper reported Playwright 1.63.0 and
-Chromium 153.0.8010.12; fontconfig found Liberation Sans. The synthetic SVG
-rectangle measured 40 × 20 and the screenshot was 6,003 bytes with SHA-256
-`68f09a43c4e7beb79ebea5f139faed51cdd8686680cabc2da70a77e3faae4c0d`.
-Worker memory peak was 566,427,648 bytes; agent-runtime peak was 455,168,000
-bytes. Qualification receipt: `/private/tmp/eve-browser-u1-qualification.json`,
-SHA-256 `6ead227b8fda8c4d05c95d118996a90e54b29c764b9165caa4e61d10033bd966`.
-
-This proves amd64 image execution under Rosetta, not launch on native amd64
-hardware or under a Kubernetes pod. Native hardware, pod capacity, and
-concurrent isolation remain release gates. The self-contained payload remains
-the selected candidate; no base-image OS package fallback is justified by the
-evidence so far.
-
-Inline runtime metadata reads the service image digest from
-`EVE_RUNTIME_IMAGE_DIGEST`; deployment instances must inject the published
-digest and assert that it matches the running worker and agent-runtime image
-for BR-07. Source code cannot infer the orchestrator's deployed image digest.
-Runner metadata instead records each init container's observed Kubernetes
-`imageID` after its image has been pulled.
-
-Script jobs continue to execute inline by default. Setting
-`EVE_SCRIPT_K8S_RUNNER=true` on a Kubernetes worker opts script jobs into a
-dedicated runner pod. The worker submits the same job to the pod's
-`/scripts/execute` route; the pod carries `EVE_RUNNER_SELF_TERMINATE=1` to
-prevent redispatch. The pod emits the terminal runner event after execution;
-the outer worker emits `runner.failed` only if setup fails before a
-terminal pod event. Both runner paths retain the pulled init-container
-`imageID` when later toolchain metadata is written.
 
 ## Rationale
 

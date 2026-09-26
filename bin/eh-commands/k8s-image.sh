@@ -20,7 +20,7 @@ show_help() {
   echo "  build-postgres     Build local Postgres image with supported extensions"
   echo "  import-postgres    Import local Postgres image into k3d"
   echo "  push-postgres      Build + import local Postgres image"
-  echo "  build-toolchains   Build toolchain images (python, media, rust, java, kotlin, browser)"
+  echo "  build-toolchains   Build toolchain images (python, media, rust, java, kotlin)"
   echo "  import-toolchains   Import toolchain images into k3d node cache"
   echo "  publish-toolchains  Push toolchain images to the in-cluster registry"
   echo "  push-toolchains     Build + import + publish toolchain images"
@@ -315,7 +315,7 @@ import_postgres_image() {
   k3d image import "$POSTGRES_LOCAL_IMAGE" -c "$K3D_CLUSTER"
 }
 
-ALL_TOOLCHAINS=("python" "media" "rust" "java" "kotlin" "browser")
+ALL_TOOLCHAINS=("python" "media" "rust" "java" "kotlin")
 
 get_toolchains() {
   if [[ -n "$TOOLCHAIN_FILTER" ]]; then
@@ -338,7 +338,7 @@ build_toolchains() {
       continue
     fi
     echo "Building toolchain: $tc"
-    docker build --platform linux/amd64 -t "eve-horizon/toolchain-${tc}:local" -f "$tc_dir/Dockerfile" "$tc_dir" &
+    docker build -t "eve-horizon/toolchain-${tc}:local" -f "$tc_dir/Dockerfile" "$tc_dir" &
     pids+=($!)
   done
 
