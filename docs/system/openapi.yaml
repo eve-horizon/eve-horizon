@@ -22722,6 +22722,7 @@ components:
                               - rust
                               - java
                               - kotlin
+                              - browser
                       additionalProperties: false
                   resource_refs:
                     $ref: "#/definitions/PipelineListResponse/properties/data/items/properties/defi\
@@ -22950,6 +22951,7 @@ components:
                         - rust
                         - java
                         - kotlin
+                        - browser
                 additionalProperties: false
             resource_refs:
               $ref: "#/definitions/PipelineResponse/properties/definition/properties/steps/it\
@@ -23893,6 +23895,7 @@ components:
                               - rust
                               - java
                               - kotlin
+                              - browser
                       additionalProperties: false
                   inputs:
                     type: object
@@ -24203,6 +24206,7 @@ components:
                         - rust
                         - java
                         - kotlin
+                        - browser
                 additionalProperties: false
             inputs:
               type: object

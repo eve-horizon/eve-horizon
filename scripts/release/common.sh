@@ -33,8 +33,10 @@ release_check_tag_absent() {
   if output=$(docker buildx imagetools inspect "$ref" 2>&1); then
     release_die "version already exists: $ref"
   fi
-  # Only a registry's explicit missing-manifest response may allow publication.
-  if ! grep -Eiq 'manifest unknown|not found|name unknown|404' <<<"$output"; then
-    release_die "cannot prove unused version $ref: $output"
-  fi
+  # Buildx must identify the requested manifest as missing. Other failures,
+  # including a 404 from its token endpoint, cannot prove tag absence.
+  case "$output" in
+    "ERROR: $ref: not found"|"ERROR: $ref: manifest unknown"|"ERROR: failed to get manifest for $ref: manifest unknown") ;;
+    *) release_die "cannot prove unused version $ref: $output" ;;
+  esac
 }

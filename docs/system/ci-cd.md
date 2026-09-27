@@ -24,23 +24,16 @@ cluster credentials or use `repository_dispatch` to reach an instance repo — s
 | `release-v*` | `publish-images.yml` | Seven AMD64 GHCR service images after archive and native gate |
 | manual dispatch | either image publisher | Build and native gate only; no publication |
 
-Every publisher uses per-image immutable Docker archives and receipts. A single
-native gate tests frozen runtime/toolchain inputs, then a global prepublish job
-checks that all version tags are unused. Publisher jobs alone have
-`packages: write`. They load and verify the archived image and compare its
-local config digest to the pushed registry config digest. There are no
-floating release tags and no AWS mutation or rollout coupling. See
-[Container Image Release](../deploy/container-image-release.md) for release
-order, public package visibility, anonymous digest verification, and owner
-rollout receipts.
+Only publisher jobs have `packages: write`; a native gate and global
+absent-tag check precede them. Release artifacts, digest checks, public
+visibility, and owner rollout receipts are specified in
+[Container Image Release](../deploy/container-image-release.md). Image releases
+use only versioned AMD64 tags, with no AWS mutation or rollout coupling.
+Toolchain tags must match `docker/toolchains/release-version.txt`; service
+gates resolve that version's Python and browser digests.
 
-Toolchain version is read from `docker/toolchains/release-version.txt`; a
-toolchain tag must match it. A service release resolves the declared Python
-and browser toolchains at that version to digests before the browser gate.
-First supported platform: linux/amd64.
-
-Other tag publishers remain `cli-v*`, `sdk-v*`, and `chat-v*` for npm.
-The retired `worker-images/v*` and `eve-migrate/v*` paths stay retired.
+The `cli-v*`, `sdk-v*`, and `chat-v*` npm publishers remain. The retired
+`worker-images/v*` and `eve-migrate/v*` paths stay retired.
 
 ## npm packages — the version comes from the tag
 
