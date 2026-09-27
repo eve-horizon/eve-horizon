@@ -15,107 +15,32 @@ from a *deployment instance repo* by its owner. No workflow here may hold
 cluster credentials or use `repository_dispatch` to reach an instance repo — see
 [deployment.md](./deployment.md) for the three-repo model.
 
-## Workflows
+## Image workflows
 
-### Continuous integration
-
-| Workflow | Trigger | Does |
+| Trigger | Workflow | Result |
 | --- | --- | --- |
-| `ci.yml` | push + PR to `main` | pnpm install, build all packages, run unit tests |
-| `image-build-check.yml` | push + PR to `main` (code/Dockerfile paths) | Builds all 7 service images **without pushing** |
-| `kubectl-context-safety.yml` | PR to `main` | Blocks changes that could target the wrong cluster context |
+| PR or main push | `image-build-check.yml` | Builds all seven services and six toolchains without credentials; native source browser smoke |
+| `toolchain-images/v*` | `toolchain-images.yml` | Six independently versioned AMD64 GHCR images after archive and native gate |
+| `release-v*` | `publish-images.yml` | Seven AMD64 GHCR service images after archive and native gate |
+| manual dispatch | either image publisher | Build and native gate only; no publication |
 
-`ci.yml` never exercises a Dockerfile, so image breakage used to reach `main`
-undetected and only surface when someone cut a `release-v*` tag.
-`image-build-check.yml` closes that: same dockerfiles, same targets, same
-platform as `publish-images.yml`, but `push: false` and no credentials (it uses
-the GitHub Actions cache, so it works on fork PRs). **If you change the
-`publish-images.yml` matrix, change this one too** — the check is only
-meaningful while the two agree.
+Every publisher uses per-image immutable Docker archives and receipts. A single
+native gate tests frozen runtime/toolchain inputs, then a global prepublish job
+checks that all version tags are unused. Publisher jobs alone have
+`packages: write`. They load and verify the archived image and compare its
+local config digest to the pushed registry config digest. There are no
+floating release tags and no AWS mutation or rollout coupling. See
+[Container Image Release](../deploy/container-image-release.md) for release
+order, public package visibility, anonymous digest verification, and owner
+rollout receipts.
 
-### Publishing
+Toolchain version is read from `docker/toolchains/release-version.txt`; a
+toolchain tag must match it. A service release resolves the declared Python
+and browser toolchains at that version to digests before the browser gate.
+First supported platform: linux/amd64.
 
-All publishing is tag-driven. Push the tag, the workflow does the rest.
-
-| Tag prefix | Workflow | Publishes |
-| --- | --- | --- |
-| `release-v*` | `publish-images.yml` | 7 service images → public ECR |
-| `toolchain-images/v*` | `toolchain-images.yml` | 5 toolchain images → public ECR |
-| `cli-v*` | `publish-cli.yml` | `@eve-horizon/cli` → npm |
-| `sdk-v*` | `publish-sdk.yml` | `@eve-horizon/auth` + `auth-react` → npm (lockstep) |
-| `chat-v*` | `publish-chat.yml` | `@eve-horizon/chat` + `chat-react` → npm (lockstep) |
-
-```bash
-git tag <prefix>-v0.1.0 && git push origin <prefix>-v0.1.0
-```
-
-> **Retired paths (2026-08-25)**: `worker-images.yml` never completed
-> successfully and `publish-migrate.yml` had been failing since 2026-02-18.
-> Both workflows were removed because no deployment consumes their artifacts.
-> Do not push `worker-images/v*` or `eve-migrate/v*` tags: they no longer have a
-> publishing contract. Migrations run from the versioned `api` service image;
-> language/media toolchains ship as separate init-container images.
-
-## Service images (`release-v*`)
-
-Builds seven images in a parallel matrix: `api`, `sso`, `gateway`,
-`agent-runtime`, `orchestrator`, `worker`, `dashboard`.
-
-Registry: `public.ecr.aws/w7c4v0w3/eve-horizon`
-
-Each image gets **three tags**:
-
-| Tag | Example | Use |
-| --- | --- | --- |
-| version | `0.1.313` | What deployment instances pin |
-| short SHA | `sha-a1b2c3d` | Traceability |
-| `staging` | `staging` | Floating; tracked by non-pinned overlays |
-
-Build metadata (`EVE_BUILD_VERSION`, `EVE_BUILD_SHA`, `EVE_BUILD_TIME`) is passed
-as build args and surfaces in `eve system health`. Registry-backed layer caching
-uses a per-image `-cache` repository. Platform: `linux/amd64`.
-
-## Toolchain images (`toolchain-images/v*`)
-
-Builds `toolchain-{python,media,rust,java,kotlin}`, tagged with the version and
-`latest`, for `linux/amd64` and `linux/arm64`.
-
-These are on an **independent version line** from the platform. A `release-v*`
-does not rebuild them; they change only when `docker/toolchains/**` does.
-Deployments pull them via `EVE_TOOLCHAIN_IMAGE_PREFIX` +
-`EVE_TOOLCHAIN_IMAGE_TAG` (typically `latest`) on the worker and agent-runtime
-pods, which inject them as init containers.
-
-## Required configuration
-
-Repo → Settings → Secrets and variables → Actions.
-
-### Secrets
-
-| Secret | Needed by |
-| --- | --- |
-| `AWS_ACCESS_KEY_ID` | every image workflow |
-| `AWS_SECRET_ACCESS_KEY` | every image workflow |
-| `NPM_TOKEN` | `publish-cli`, `publish-sdk`, `publish-chat` |
-
-The npm token should be a Granular Access Token with read+write on packages, and
-the `@eve-horizon` npm org must exist.
-
-### Variables
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `ECR_NAMESPACE` | `eve-horizon` | Repository prefix within the registry |
-| `AWS_ECR_REGION` | `eu-west-1` | Only feeds credential config; set `us-east-1` to match the proven setup |
-
-`ECR_REGISTRY` is a hardcoded `env:` (`public.ecr.aws/w7c4v0w3`) in each
-workflow, not a variable. All `ecr-public` API calls pass `--region us-east-1`
-explicitly, and missing ECR repositories are created on first push.
-
-### Never add
-
-`DEPLOY_DISPATCH_TOKEN`, `STAGING_KUBECONFIG`, `STAGING_API_URL` — any of these
-in this repo would break the "publish, never deploy" rule.
+Other tag publishers remain `cli-v*`, `sdk-v*`, and `chat-v*` for npm.
+The retired `worker-images/v*` and `eve-migrate/v*` paths stay retired.
 
 ## npm packages — the version comes from the tag
 

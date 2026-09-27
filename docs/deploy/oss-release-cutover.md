@@ -11,6 +11,12 @@
 > on npm as `latest`, installable via `npx`. npm path proven end-to-end.
 > What remains is sunsetting the private repo, not publishing capability.
 
+> **2026-09-27 release transition:** Historical ECR publication below remains
+> evidence for `release-v0.1.314`, not the next browser release. New image
+> workflows target canonical GHCR; see [Container Image Release](./container-image-release.md).
+> No new AWS repository creation is allowed from this source repo. GHCR
+> publication, public visibility, and hosted rollout are still pending.
+
 ## Canonical repository
 
 **`github.com/eve-horizon/eve-horizon` is the only repo that should be worked on.**

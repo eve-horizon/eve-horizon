@@ -238,3 +238,18 @@ current source. No code candidate or live runtime was reviewed.
 | --- | --- | --- |
 | 1 | P1: pre-job probe could miss a job-installed incompatible Playwright client; worker script setup errors were generic; ARM64 was promised without released ARM64 service images. P2: final environment could differ from the probe; mutable-tag cache provenance was weak; review was not bound to exact candidate bytes. | Bundle the pinned client behind an absolute wrapper; name the worker script path and structured error; limit beta to AMD64; probe after final environment assembly; resolve/store digests and refresh moved tags; require exact SCE review/integration evidence. |
 | 2 | P1: U3 required hosted evidence before the release that enables it; the publisher would create an AWS repository outside Terraform. P2: runner support lacked owned paths and failure tests; a source-image digest was overstated as executed-file integrity. | Separate U4 hosted verification from U3 merge acceptance; provision registry infrastructure through owning Terraform and make the workflow read-only; assign runner paths and add BR-09; describe digest as source provenance and test cache refresh. |
+
+## U4 execution split (2026-09-27)
+
+U4a (`eve_horizon-3qb.4`) replaces the image workflows with canonical GHCR
+release preparation and a reproducible native gate. Its acceptance is the
+source review and focused release helper checks; it does not assert a published
+artifact or hosted browser success. The release design and publication sequence
+are in [Container Image Release](../deploy/container-image-release.md) and the
+[source decision](../../wiki/decisions/2026-09-27-canonical-ghcr-browser-release.md).
+
+U4b (`eve_horizon-3qb.6`) owns the first real native gate run, public package
+visibility and anonymous digest reads, digest-pinned deployment-owner rollout,
+hosted BR-08 receipts, and issue #6 closure. The local Rosetta and k3d evidence
+must not be promoted to that claim. Native agent memory headroom follow-up
+`eve_horizon-3qb.5` is tracked separately.

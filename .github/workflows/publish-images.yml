@@ -1,164 +1,135 @@
 name: Publish Images
 
-# This workflow publishes release artifacts only. It must not call
-# deployment-instance repos or trigger hosted/staging rollouts. Operators roll
-# out a published release explicitly from their own infra repo.
+# Release tags publish seven immutable service artifacts; deployment is owned elsewhere.
 on:
   push:
-    tags:
-      - 'release-v*'
+    tags: ['release-v*']
+  workflow_dispatch: # Full build and native gate only; never publishes.
 
-permissions:
-  contents: read
-  id-token: write
-
-env:
-  ECR_REGISTRY: public.ecr.aws/w7c4v0w3
-  ECR_NAMESPACE: ${{ vars.ECR_NAMESPACE || 'eve-horizon' }}
-  AWS_ECR_REGION: ${{ vars.AWS_ECR_REGION || 'eu-west-1' }}
+permissions: {}
+concurrency:
+  group: service-images-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  # ===========================================================================
-  # Job 1: Build and Push Images (Parallel Matrix)
-  # ===========================================================================
-  build-images:
-    name: Build ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - service: api
-            dockerfile: apps/api/Dockerfile
-            target: production
-            image: api
-          - service: sso
-            dockerfile: apps/sso/Dockerfile
-            target: production
-            image: sso
-          - service: gateway
-            dockerfile: apps/gateway/Dockerfile
-            target: production
-            image: gateway
-          - service: agent-runtime
-            dockerfile: apps/agent-runtime/Dockerfile
-            target: production
-            image: agent-runtime
-          - service: orchestrator
-            dockerfile: apps/orchestrator/Dockerfile
-            target: production
-            image: orchestrator
-          - service: worker
-            dockerfile: apps/worker/Dockerfile
-            target: base
-            image: worker
-          - service: dashboard
-            dockerfile: apps/dashboard/Dockerfile
-            target: production
-            image: dashboard
-
+  version:
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+    outputs:
+      value: ${{ steps.version.outputs.value }}
     steps:
-      - name: Capture build job start
-        id: build_job_start
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
         run: |
-          echo "epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
-          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            value=$(bash scripts/release/validate-tag.sh service)
+          else
+            value=0.0.0
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Configure AWS credentials for ECR
-        uses: aws-actions/configure-aws-credentials@v4
+  build:
+    needs: version
+    name: Freeze ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [api, sso, gateway, agent-runtime, orchestrator, worker, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build one AMD64 image and archive its exact identity
+        run: bash scripts/release/image.sh build service '${{ matrix.name }}' '${{ needs.version.outputs.value }}' 'release-artifact/${{ matrix.name }}'
+      - uses: actions/upload-artifact@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_ECR_REGION }}
+          name: service-${{ matrix.name }}
+          path: release-artifact/${{ matrix.name }}/
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
 
-      - name: Login to Amazon ECR (private or public)
-        env:
-          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
-          AWS_ECR_REGION: ${{ env.AWS_ECR_REGION }}
-        run: |
-          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/release-v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Extract short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Get build time
-        id: time
-        run: echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
-
-      - name: Ensure ECR repository exists
-        env:
-          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
-          ECR_NAMESPACE: ${{ env.ECR_NAMESPACE }}
-          ECR_IMAGE: ${{ matrix.image }}
-        run: |
-          ensure_repo() {
-            local repository="$1"
-            ECR_REPOSITORY="${ECR_NAMESPACE}/${repository}"
-
-            if [[ "$ECR_REGISTRY" == public.ecr.aws/* ]]; then
-              if ! aws ecr-public describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-1 >/dev/null 2>&1; then
-                aws ecr-public create-repository --repository-name "$ECR_REPOSITORY" --region us-east-1 >/dev/null
-              fi
-            elif [[ "$ECR_REGISTRY" == *.dkr.ecr.*.amazonaws.com* ]]; then
-              if ! aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
-                aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
-              fi
-            else
-              echo "::error::Unsupported ECR_REGISTRY '$ECR_REGISTRY'."
-              exit 1
-            fi
-          }
-
-          ensure_repo "$ECR_IMAGE"
-          ensure_repo "${ECR_IMAGE}-cache"
-
-      - name: Build image tag list
-        id: tags
-        run: |
-          ECR_PREFIX="${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}"
-
-          {
-            echo "value<<EOF"
-            echo "${ECR_PREFIX}/${{ matrix.image }}:${{ steps.version.outputs.version }}"
-            echo "${ECR_PREFIX}/${{ matrix.image }}:sha-${{ steps.sha.outputs.short }}"
-            echo "${ECR_PREFIX}/${{ matrix.image }}:staging"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
+  native-gate:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
-          context: .
-          file: ./${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          push: true
-          tags: ${{ steps.tags.outputs.value }}
-          build-args: |
-            EVE_BUILD_VERSION=${{ steps.version.outputs.version }}
-            EVE_BUILD_SHA=${{ steps.sha.outputs.short }}
-            EVE_BUILD_TIME=${{ steps.time.outputs.time }}
-            HARNESS_INSTALL_CACHE_BUST=${{ steps.time.outputs.time }}
-          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.image }}-cache:latest
-          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.image }}-cache:latest,mode=max
-          platforms: linux/amd64
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: service-worker
+          path: release-artifact/worker
+      - uses: actions/download-artifact@v4
+        with:
+          name: service-agent-runtime
+          path: release-artifact/agent-runtime
+      - name: Test exact worker and agent artifacts with digest-resolved versioned toolchains
+        run: bash scripts/release/gate.sh service '${{ needs.version.outputs.value }}' release-artifact
 
-      - name: Report build image timing
+      - name: Preserve native gate logs
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-browser-gate-${{ github.run_id }}
+          path: /tmp/eve-browser-release-evidence/*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  prepublish:
+    if: github.event_name == 'push'
+    needs: [version, native-gate]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reject any existing version before the first push
         run: |
-          END_TS=$(date -u +%s)
-          START_TS="${{ steps.build_job_start.outputs.epoch }}"
-          DURATION=$((END_TS - START_TS))
-          echo "::notice::Image build job for ${{ matrix.service }} started at ${{ steps.build_job_start.outputs.started_at }} and finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) (duration ${DURATION}s)"
+          bash scripts/release/validate-tag.sh service
+          bash scripts/release/prepublish.sh service '${{ needs.version.outputs.value }}'
+
+  publish:
+    if: github.event_name == 'push'
+    needs: [version, native-gate, prepublish]
+    name: Publish ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [api, sso, gateway, agent-runtime, orchestrator, worker, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/download-artifact@v4
+        with:
+          name: service-${{ matrix.name }}
+          path: release-artifact/${{ matrix.name }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the frozen archive once, after all builds and the native gate
+        run: |
+          bash scripts/release/validate-tag.sh service
+          bash scripts/release/image.sh publish service '${{ matrix.name }}' '${{ needs.version.outputs.value }}' 'release-artifact/${{ matrix.name }}'
