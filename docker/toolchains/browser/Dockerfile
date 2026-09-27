@@ -30,6 +30,7 @@ RUN set -eu; \
 COPY bin/eve-browser-python /toolchain/bin/eve-browser-python
 COPY probe.py /toolchain/probe.py
 RUN chmod 755 /toolchain/bin/eve-browser-python \
+    && chmod -R a+rX /toolchain \
     && printf '%s\n' 'export PATH="/opt/eve/toolchains/browser/bin:${PATH}"' > /toolchain/env.sh
 
 FROM busybox:stable

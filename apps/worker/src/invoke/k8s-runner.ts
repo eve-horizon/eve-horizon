@@ -237,7 +237,8 @@ export function buildRunnerManifests(
     name: `tc-${tc}`,
     image: `${toolchainImagePrefix}${tc}:${toolchainImageTag}`,
     imagePullPolicy: (process.env.EVE_K8S_IMAGE_PULL_POLICY as 'Always' | 'IfNotPresent' | 'Never') || 'IfNotPresent',
-    command: ['sh', '-c', `cp -a /toolchain/. /opt/eve/toolchains/${tc}/`],
+    command: ['sh', '-ec', `cp -R /toolchain/. /opt/eve/toolchains/${tc}/`],
+    securityContext: { runAsNonRoot: true, allowPrivilegeEscalation: false },
     volumeMounts: [{
       name: 'toolchains',
       mountPath: `/opt/eve/toolchains/${tc}`,
@@ -261,7 +262,8 @@ export function buildRunnerManifests(
       name: `cli-${cli.name}`,
       image: cli.image,
       imagePullPolicy: (process.env.EVE_K8S_IMAGE_PULL_POLICY as 'Always' | 'IfNotPresent' | 'Never') || 'IfNotPresent',
-      command: ['sh', '-c', `cp -a /cli/. /opt/eve/app-cli/${cli.name}/`],
+      command: ['sh', '-ec', `cp -R /cli/. /opt/eve/app-cli/${cli.name}/`],
+      securityContext: { runAsNonRoot: true, allowPrivilegeEscalation: false },
       volumeMounts: [{
         name: 'app-cli',
         mountPath: `/opt/eve/app-cli/${cli.name}`,
@@ -329,8 +331,10 @@ export function buildRunnerManifests(
           securityContext: {
             runAsUser: 1000,
             runAsGroup: 1000,
+            runAsNonRoot: true,
             fsGroup: 1000,
             fsGroupChangePolicy: 'OnRootMismatch',
+            seccompProfile: { type: 'RuntimeDefault' },
           },
           ...(initContainers.length > 0 ? { initContainers } : {}),
           containers: [

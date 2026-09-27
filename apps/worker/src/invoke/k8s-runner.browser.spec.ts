@@ -26,8 +26,14 @@ describe('worker browser runner manifest', () => {
     const manifest = JSON.parse(buildRunnerManifests(invocation, 'eve', 'workspace', 'runner'));
     const pod = manifest.items.find((item: { kind: string }) => item.kind === 'Pod');
     expect(pod.spec.initContainers.map((container: { image: string }) => container.image)).toContain('eve-horizon/toolchain-browser:local');
+    expect(pod.spec.securityContext).toMatchObject({ runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true, seccompProfile: { type: 'RuntimeDefault' } });
+    for (const init of pod.spec.initContainers) {
+      expect(init.securityContext).toMatchObject({ runAsNonRoot: true, allowPrivilegeEscalation: false });
+      expect(init.command).toEqual(expect.arrayContaining(['sh', '-ec']));
+      expect(init.command[2]).toMatch(/^cp -R /);
+    }
     expect(pod.spec.containers[0].env).toContainEqual({ name: 'EVE_TOOLCHAIN_INIT_MOUNTED', value: 'true' });
-    expect(pod.spec.containers[0].securityContext).toMatchObject({ runAsUser: 1000, allowPrivilegeEscalation: false });
+    expect(pod.spec.containers[0].securityContext).toMatchObject({ runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false });
   });
 
   it('marks both pod terminal event types as already emitted', () => {

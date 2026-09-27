@@ -98,33 +98,32 @@ jobs:
         id: time
         run: echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
-      - name: Verify ECR repositories exist
+      - name: Ensure ECR repository exists
         env:
           ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
           ECR_NAMESPACE: ${{ env.ECR_NAMESPACE }}
           ECR_IMAGE: ${{ matrix.image }}
         run: |
-          verify_repo() {
+          ensure_repo() {
             local repository="$1"
-            local name="${ECR_NAMESPACE}/${repository}"
+            ECR_REPOSITORY="${ECR_NAMESPACE}/${repository}"
+
             if [[ "$ECR_REGISTRY" == public.ecr.aws/* ]]; then
-              aws ecr-public describe-repositories --repository-names "$name" --region us-east-1 >/dev/null || {
-                echo "::error::Missing ECR repository $name; provision it through deployment instance Terraform."
-                exit 1
-              }
+              if ! aws ecr-public describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-1 >/dev/null 2>&1; then
+                aws ecr-public create-repository --repository-name "$ECR_REPOSITORY" --region us-east-1 >/dev/null
+              fi
             elif [[ "$ECR_REGISTRY" == *.dkr.ecr.*.amazonaws.com* ]]; then
-              aws ecr describe-repositories --repository-names "$name" >/dev/null || {
-                echo "::error::Missing ECR repository $name; provision it through deployment instance Terraform."
-                exit 1
-              }
+              if ! aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
+                aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
+              fi
             else
               echo "::error::Unsupported ECR_REGISTRY '$ECR_REGISTRY'."
               exit 1
             fi
           }
 
-          verify_repo "$ECR_IMAGE"
-          verify_repo "${ECR_IMAGE}-cache"
+          ensure_repo "$ECR_IMAGE"
+          ensure_repo "${ECR_IMAGE}-cache"
 
       - name: Build image tag list
         id: tags

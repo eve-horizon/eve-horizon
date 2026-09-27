@@ -23,6 +23,14 @@ def main():
     diagnosis = json.loads(args.diagnose.read_text(encoding="utf-8"))
     attempts = diagnosis["attempts"]
     attempt = next(item for item in attempts if item["id"] == receipt["attempt_id"])
+    assert diagnosis["job"]["phase"] == "done", "job has not completed successfully"
+    assert attempt["job_id"] == receipt["job_id"]
+    assert attempt["attempt_number"] == max(item["attempt_number"] for item in attempts), (
+        "receipt is from an older attempt"
+    )
+    assert attempt["status"] == "succeeded" and attempt["exit_code"] == 0 and attempt["ended_at"], (
+        "receipt attempt is not a successful terminal attempt"
+    )
     metadata = attempt.get("runtime_meta") or {}
     browser = metadata.get("browser") or {}
     toolchains = metadata.get("toolchains") or {}
@@ -39,7 +47,8 @@ def main():
     assert hashlib.sha256(png).hexdigest() == receipt["screenshot_sha256"]
     assert browser.get("playwright") == receipt["playwright"]
     assert browser.get("chromium") == receipt["chromium"]
-    assert browser.get("box") == receipt["box"]
+    observed_box = browser.get("box") or {}
+    assert {axis: observed_box.get(axis) for axis in ("width", "height")} == receipt["box"]
     assert args.runtime_digest.startswith("sha256:")
 
     source = receipt["browser_source_image"]

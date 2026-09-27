@@ -13,12 +13,13 @@ export EVE_API_URL=http://api.eve.lvh.me
 eve system health --json
 eve auth status
 export ORG_ID=org_manualtestorg
-eve project ensure --org "$ORG_ID" --name browser-runtime-manual --slug browser-runtime-manual \
+eve project ensure --org "$ORG_ID" --name browser-runtime-manual --slug br57 \
   --repo-url https://github.com/eve-horizon/eve-horizon.git --branch main --force --json
 export PROJECT_ID=<id_from_output>
-export FIXTURE_DIR="$(pwd)/tests/manual/fixtures/browser-runtime"
-export MANUAL_REPO="$(mktemp -d /private/tmp/eve-browser-manual.XXXXXX)"
-git clone --shared /Users/adam/dev/eve-horizon/eve-horizon "$MANUAL_REPO"
+export SOURCE_REPO="$(git rev-parse --show-toplevel)"
+export FIXTURE_DIR="$SOURCE_REPO/tests/manual/fixtures/browser-runtime"
+export MANUAL_REPO="$(mktemp -d "${TMPDIR:-/tmp}/eve-browser-manual.XXXXXX")"
+git clone --shared "$SOURCE_REPO" "$MANUAL_REPO"
 python3 "$FIXTURE_DIR/generate_manifest.py" "$MANUAL_REPO"
 eve project sync --project "$PROJECT_ID" --dir "$MANUAL_REPO" --local --allow-dirty --json
 ```
@@ -50,8 +51,8 @@ export STEP_ID=<render_child_id>
 export RUNTIME_DIGEST=sha256:<observed_digest>
 eve job diagnose "$STEP_ID" --json > "$STEP_ID.diagnose.json"
 eve job logs "$STEP_ID" --summary
-eve job attachment "$STEP_ID" browser-runtime-receipt.json --out "$STEP_ID.receipt.json"
-eve job attachment "$STEP_ID" browser-runtime-screenshot.png.b64 --out "$STEP_ID.png.b64"
+eve job attachment "$STEP_ID" --name browser-runtime-receipt.json > "$STEP_ID.receipt.json"
+eve job attachment "$STEP_ID" --name browser-runtime-screenshot.png.b64 > "$STEP_ID.png.b64"
 python3 "$FIXTURE_DIR/verify_receipt.py" --receipt "$STEP_ID.receipt.json" \
   --screenshot-b64 "$STEP_ID.png.b64" --diagnose "$STEP_ID.diagnose.json" \
   --runtime-digest "$RUNTIME_DIGEST" --out "$STEP_ID.verified.json"
@@ -98,12 +99,22 @@ eve job attachments <override_child_id> --json
 
 Require nonzero result and `toolchain_unavailable` with rejected browser path;
 no receipt or screenshot attachment. Then set isolated runtimes'
-`EVE_TOOLCHAIN_IMAGE_TAG` to a unique nonexistent tag. Re-run script and agent;
-require image-specific setup error, no artifact, and no harness/script QA. In
-runner mode, require init image-pull failure rather than generic timeout.
+`EVE_TOOLCHAIN_IMAGE_TAG` to a unique tag with an unchanged Python image and
+no browser image. Re-run script and agent; require a browser-specific setup
+error, no artifact, and no harness/script QA. In runner mode, require browser
+init image-pull failure rather than generic timeout.
 Restore `local` after each check.
 
 ```sh
+docker save -o "$MANUAL_REPO/python.tar" eve-horizon/toolchain-python:local
+./bin/eh kubectl -n eve port-forward svc/eve-registry 5050:5000
+```
+
+In another shell, upload only the unchanged Python image for this missing
+browser tag, then set the isolated runtime configuration:
+
+```sh
+crane push --insecure "$MANUAL_REPO/python.tar" localhost:5050/eve-horizon/toolchain-python:missing-browser-57
 ./bin/eh kubectl -n eve set env deploy/eve-worker EVE_TOOLCHAIN_IMAGE_TAG=missing-browser-57
 ./bin/eh kubectl -n eve set env statefulset/eve-agent-runtime EVE_TOOLCHAIN_IMAGE_TAG=missing-browser-57
 # Run both workflows and save diagnosis/attachment lists, then restore:
@@ -137,14 +148,14 @@ docker buildx build --platform linux/amd64 -f "$MANUAL_REPO/Dockerfile.browser-b
   --build-arg BREAK=mismatch -t eve-horizon/toolchain-browser:badpair --load "$MANUAL_REPO"
 docker buildx build --platform linux/amd64 -f "$MANUAL_REPO/Dockerfile.browser-bad" \
   --build-arg BREAK=launch -t eve-horizon/toolchain-browser:badlaunch --load "$MANUAL_REPO"
-./bin/eh kubectl -n eve port-forward svc/eve-registry 5050:5000
 ```
 
-In another shell, use `docker save` and `crane push --insecure` as in
-`eh k8s-image publish-toolchains` to push each browser variant and the
-unchanged Python image under matching tags. Set `EVE_TOOLCHAIN_IMAGE_TAG` on
-both isolated runtimes for each run, then restore `local`. Save registry
-`crane digest --insecure` readbacks.
+With the registry port-forward running, use `docker save -o` and
+`crane push --insecure` as in `eh k8s-image publish-toolchains` to push each
+browser variant and the unchanged Python image under matching `badpair` and
+`badlaunch` tags. Set `EVE_TOOLCHAIN_IMAGE_TAG` on both isolated runtimes for
+each run, then restore `local`. Save registry `crane digest --insecure`
+readbacks.
 
 ## Warm cache after moved tag (BR-07)
 
