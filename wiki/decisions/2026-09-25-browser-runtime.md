@@ -100,8 +100,6 @@ Playwright package must be version matched.
   writable to the runtime user, so the source digest is provenance rather than
   tamper-proof attestation of extracted files.
 - Treat missing or incompatible browser runtime as setup failure.
-- Have the AWS registry owner provision a new browser repository through the
-  authoritative deployment instance Terraform; publishing workflows verify
-  repository existence without creating it.
+- Prepare canonical GHCR publishing workflows in U4 before any release tag.
 - Publish and roll out through the existing toolchain and deployment-instance
   contracts; make no direct AWS infrastructure changes.

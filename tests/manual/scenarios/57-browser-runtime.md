@@ -1,9 +1,7 @@
 # Scenario 57: Declared browser runtime
 
-**Time:** ~25 minutes plus builds. **Parallel safe:** No. **LLM:** real Codex OAuth.
-
-Use a disposable, operator-owned local k3d stack. These checks change service
-execution modes and toolchain tags; never run them on a shared cluster.
+Use an isolated operator-owned k3d stack and Codex OAuth. Runner modes and
+image tags change during this scenario.
 
 ## Prepare
 
@@ -24,12 +22,9 @@ python3 "$FIXTURE_DIR/generate_manifest.py" "$MANUAL_REPO"
 eve project sync --project "$PROJECT_ID" --dir "$MANUAL_REPO" --local --allow-dirty --json
 ```
 
-The generator embeds exact checked-in HTML and Python bytes into the synced
-workflow. Jobs may check out canonical `main` before U3 integrates. The cluster
-needs browser/Python toolchain images, this candidate's worker and agent-runtime,
-and a working Codex credential. Configure `EVE_RUNTIME_IMAGE_DIGEST` on both
-services from their **actual deployed image digests** and compare pod image IDs;
-do not supply a tag or guessed value.
+The generator embeds checked-in fixture bytes for pre-merge jobs. Deploy both
+service images and browser/Python images with Codex credentials. Set
+`EVE_RUNTIME_IMAGE_DIGEST` from each running pod imageID, never a tag.
 
 ## Script and agent (BR-03, BR-04, BR-07)
 
@@ -38,13 +33,9 @@ eve workflow run "$PROJECT_ID" browser-script --json
 eve workflow run "$PROJECT_ID" browser-agent --json
 eve job wait <script_root_id> --timeout 600
 eve job wait <agent_root_id> --timeout 900
-eve job tree <script_root_id>
-eve job tree <agent_root_id>
 ```
 
-For each `render` child, record diagnosis, logs, attachments, and verified
-receipt. Set `RUNTIME_DIGEST` to the exact running worker or agent-runtime
-image digest for that child:
+For each `render` child, set `RUNTIME_DIGEST` from its running service image:
 
 ```sh
 export STEP_ID=<render_child_id>
@@ -56,37 +47,26 @@ eve job attachment "$STEP_ID" --name browser-runtime-screenshot.png.b64 > "$STEP
 python3 "$FIXTURE_DIR/verify_receipt.py" --receipt "$STEP_ID.receipt.json" \
   --screenshot-b64 "$STEP_ID.png.b64" --diagnose "$STEP_ID.diagnose.json" \
   --runtime-digest "$RUNTIME_DIGEST" --out "$STEP_ID.verified.json"
-base64 -d < "$STEP_ID.png.b64" > "$STEP_ID.png"
 ```
 
-Require worker `execution_type=script` and agent-runtime `execution_type=agent`,
-with `hints.toolchains=[python,browser]`. The verifier checks text, 40 × 20 SVG
-box, PNG hash and size, UID/GID 1000, pinned versions, job/attempt IDs, cache
-source digest, and runtime digest against attempt metadata. The agent fixture
-reads `eve job diagnose --json` when its harness environment omits the runtime
-digest; absence fails before attaching success. The enriched verified JSON is
-machine evidence. Agent prose alone is insufficient.
+Require script/agent routing and `[python,browser]` hints. Verified JSON
+checks terminal attempt, geometry, PNG, UID/GID, versions, and provenance.
 
 ## Isolation and runner (BR-06, BR-09)
 
-Start two `browser-script` workflows without waiting between them. Verify both
-as above, require distinct profile paths and per-job attachments, and record
-pod memory/storage peaks against limits. PNG hashes may match deterministic
-pixels. Inspect UID/GID, seccomp, and privilege settings.
+Run two script workflows concurrently. Verify distinct profiles/attachments,
+UID/GID, seccomp, no escalation, and memory/storage against limits.
 
-On this isolated stack, have the owner set `EVE_SCRIPT_K8S_RUNNER=true` on the
-worker and `EVE_AGENT_RUNTIME_EXECUTION_MODE=runner` on agent-runtime. Re-run
-both workflows. Require pulled `runtime_meta.toolchains.image_ids.browser`.
-While each runner pod is live, capture it before cleanup:
+Set `EVE_SCRIPT_K8S_RUNNER=true` and
+`EVE_AGENT_RUNTIME_EXECUTION_MODE=runner`; re-run both workflows. Require pulled
+`runtime_meta.toolchains.image_ids.browser`. Capture each live pod:
 
 ```sh
 ./bin/eh kubectl -n eve get pod <runner_pod_name> -o json > "$STEP_ID.pod.json"
 ```
 
-Pass `--pod-json "$STEP_ID.pod.json"` to the verifier. It checks the observed
-main-container `imageID` against `RUNTIME_DIGEST`; the runner receipt uses the
-init container's imageID because no `.installed` cache marker exists. Restore
-inline mode after these checks.
+Pass `--pod-json` to the verifier for the main imageID. The runner source is
+the init imageID. Restore inline mode.
 
 ## Setup failures (BR-05, BR-09)
 
@@ -110,8 +90,7 @@ docker save -o "$MANUAL_REPO/python.tar" eve-horizon/toolchain-python:local
 ./bin/eh kubectl -n eve port-forward svc/eve-registry 5050:5000
 ```
 
-In another shell, upload only the unchanged Python image for this missing
-browser tag, then set the isolated runtime configuration:
+In another shell, upload Python and switch the tag:
 
 ```sh
 crane push --insecure "$MANUAL_REPO/python.tar" localhost:5050/eve-horizon/toolchain-python:missing-browser-57
@@ -122,15 +101,9 @@ crane push --insecure "$MANUAL_REPO/python.tar" localhost:5050/eve-horizon/toolc
 ./bin/eh kubectl -n eve set env statefulset/eve-agent-runtime EVE_TOOLCHAIN_IMAGE_TAG=local
 ```
 
-Publish disposable browser image variants, with an unchanged Python image
-under each matching tag: one changes bundled `browsers.json` headless-shell
-`browserVersion` to `0.0.0.0`; one removes `chrome-headless-shell`. Point only
-the isolated runtimes at each tag. Re-run both paths; require
-`toolchain_unavailable`, browser image/error diagnostics, and no QA attachments.
-Keep build/tag/digest logs; never mutate `local` in place. Restore `local` and
-re-run a happy path. These live negatives remain required beyond unit tests.
-For local image construction, derive each variant from
-`eve-horizon/toolchain-browser:local` using a disposable Dockerfile:
+Build disposable badpair and badlaunch browser variants from `local` as below.
+Retain Python for both tags. Each script/agent run must fail setup with
+browser diagnostics and no QA attachments. Record digests; restore `local`.
 
 ```dockerfile
 FROM eve-horizon/toolchain-browser:local
@@ -150,22 +123,13 @@ docker buildx build --platform linux/amd64 -f "$MANUAL_REPO/Dockerfile.browser-b
   --build-arg BREAK=launch -t eve-horizon/toolchain-browser:badlaunch --load "$MANUAL_REPO"
 ```
 
-With the registry port-forward running, use `docker save -o` and
-`crane push --insecure` as in `eh k8s-image publish-toolchains` to push each
-browser variant and the unchanged Python image under matching `badpair` and
-`badlaunch` tags. Set `EVE_TOOLCHAIN_IMAGE_TAG` on both isolated runtimes for
-each run, then restore `local`. Save registry `crane digest --insecure`
-readbacks.
+Push both variants and unchanged Python under matching tags with `docker save`
+and `crane push --insecure` (see `eh k8s-image publish-toolchains`). Set the
+tag on both runtimes for each run; record `crane digest` and restore `local`.
 
 ## Warm cache after moved tag (BR-07)
 
-On inline execution, record the source digest from a successful receipt.
-Publish a newly built compatible payload under the **same disposable tag**
-without clearing cache. Run again: receipt `.installed` and
-`runtime_meta.toolchains.browser_source_image_digest` must equal the new
-registry digest, differ from the first, and still launch. Keep both registry
-readbacks. This is source provenance, not writable cache attestation.
-
-Start diagnosis with `eve job follow`, `eve job logs`, and `eve job diagnose`.
-If CLI omits pod init status, the cluster owner may inspect it with
-`./bin/eh kubectl`; record the CLI gap.
+On inline execution, move a disposable tag to a compatible payload without
+clearing cache. Re-run: `.installed` and metadata source digest must match the
+new registry digest, differ from the old digest, and still launch. Keep both
+readbacks; this proves source provenance, not cache integrity.

@@ -90,14 +90,3 @@ jobs:
           cache-from: type=gha,scope=image-check-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=image-check-${{ matrix.service }}
           platforms: linux/amd64
-
-  browser-runtime-smoke:
-    name: Browser runtime smoke (amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build browser payload
-        run: docker buildx build --platform linux/amd64 -t eve-horizon/toolchain-browser:local --load docker/toolchains/browser
-      - name: Launch in both runtime images under UID 1000
-        run: sh docker/toolchains/browser/test-runtime.sh

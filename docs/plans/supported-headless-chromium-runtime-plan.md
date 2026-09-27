@@ -89,10 +89,6 @@ controller slot, Git base, and resource reservations are proven.
 | U3 — local scenarios and operator guide | U2 | `tests/manual/scenarios/`, `tests/manual/README.md`, `docs/system/worker-types.md`, manifest/job docs and matching public skillpack reference; local evidence | BR-03, BR-04, BR-06, BR-07, and BR-09 pass on the deployed local stack; scenarios and commands are reproducible. Run affected integration tests and local live jobs. This is the merge gate; hosted BR-08 is not required to integrate this unit. | Medium: real harness behavior and isolation. |
 | U4 — release and hosted verification | U3 | Release/deployment records and issue #6; no source-code paths or modifying worker lane | Publish the approved toolchain and service artifacts after release gates, then have the owning deployment instance roll them out. BR-08 passes on that deployment and its evidence is attached to #6 before issue closure. | High: external publication and deployment identity. |
 
-U3 also covers the browser fixture, script/runner follow-up, and build-only
-smoke. U4 owns the deferred `publish-images.yml` and `toolchain-images.yml`
-changes: restore and review canonical GHCR publishing before any tag.
-
 Reserve Docker Buildx capacity and image storage for U1/U2, the local k3d
 owner slot and a disposable project for U3, and the registry/deployment-owner
 release window for U4. Do not run another image or cluster mutation in those
@@ -109,12 +105,9 @@ its Beads unit before dispatch.
    existing toolchain matrix's ARM64 output as supported until the service
    images and hard-coded architecture-specific binaries are audited. Keep
    one authoritative Playwright/browser pin in the browser payload and its
-   test fixture. Before publishing a new `toolchain-browser` repository, its
-   AWS registry owner must provision it through the authoritative deployment
-   instance Terraform. Change `toolchain-images.yml` to verify repository
-   existence with a read-only call and fail clearly when absent; remove its
-   current `aws ecr-public create-repository` path. No workflow from this
-   source repo may create AWS infrastructure.
+   test fixture. U4 updates `toolchain-images.yml` for canonical GHCR
+   publication and removes its AWS repository creation path before tagging.
+   No workflow from this source repo may create AWS infrastructure.
 2. Have both inline paths pass the declared toolchain environment to the
    child process. Use the absolute wrapper for the supported browser client;
    it must also work when a login shell resets `PATH`. The wrapper must set
@@ -210,8 +203,7 @@ assertion across browser builds.
    Git/Beads remote readbacks before selecting the next unit.
 3. After U3 integrates and release gates pass, complete U4: publish the
    independently versioned browser toolchain image and platform service
-   images. The AWS registry owner first provisions the browser repository in
-   its authoritative deployment instance Terraform. The target deployment
+   images from canonical GHCR workflows. The target deployment
    instance owner updates and rolls out that instance using its own repository
    and operational procedures. Repeat BR-03, BR-04, BR-06, BR-07, BR-08, and
    BR-09 where runner mode is enabled on the deployed versions.
@@ -219,6 +211,13 @@ assertion across browser builds.
    output, and screenshot hashes to issue #6. Close it only after the hosted
    script and agent checks have passed and a missing capability still fails as
    setup. Do not infer hosted success from local Docker or source-level tests.
+
+## Scope update
+
+U3 also covers the browser fixture, script/runner follow-up, and build-only
+smoke. U4 owns the deferred `image-build-check.yml`, `publish-images.yml`, and
+`toolchain-images.yml` changes: restore build-only smoke and review canonical
+GHCR publishing before any tag.
 
 ## Controller preflight note
 
