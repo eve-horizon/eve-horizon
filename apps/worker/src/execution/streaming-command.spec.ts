@@ -88,6 +88,27 @@ describe('runStreamingCommand', () => {
     await expect(access(join(workspace, 'should-not-exist'))).rejects.toThrow();
   });
 
+  it('also stops descendants that detach into their own process group', async () => {
+    const workspace = await tempWorkspace();
+    const controller = new AbortController();
+    const descendant = `process.on('SIGTERM', () => {}); console.log('detached-ready'); setTimeout(() => { require('fs').writeFileSync('should-not-exist', 'escaped'); process.exit(0); }, 700);`;
+    const parent = `const {spawn} = require('child_process'); spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {detached:true, stdio:'inherit'}); setTimeout(() => {}, 2000);`;
+    const command = `${JSON.stringify(process.execPath)} -e '${parent.replaceAll("'", "'\\''")}'`;
+    let markReady: () => void = () => {};
+    const ready = new Promise<void>((resolve) => { markReady = resolve; });
+    const running = runStreamingCommand({ command, cwd: workspace, env: { PATH: process.env.PATH },
+      attemptId: 'att_detached', timeoutMs: 5_000, timeoutCode: 'script_timeout', killGraceMs: 50,
+      flushLineCount: 1,
+      signal: controller.signal, appendLog: async (_id, type, content) => {
+        if (type === 'output' && String(content.text).includes('detached-ready')) markReady();
+      } });
+    await Promise.race([ready, running.then(() => { throw new Error('Detached child never became ready'); })]);
+    controller.abort();
+    expect(await running).toMatchObject({ success: false, exitCode: 130 });
+    await delay(750);
+    await expect(access(join(workspace, 'should-not-exist'))).rejects.toThrow();
+  });
+
   it('truncates output above the cap with one warning per stream', async () => {
     const workspace = await tempWorkspace();
     const logs: Array<{ type: string; content: Record<string, unknown> }> = [];

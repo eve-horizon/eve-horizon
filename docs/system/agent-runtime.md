@@ -52,7 +52,9 @@ Agent and worker executors check cancellation before starting, poll job phase
 independently of harness output every two seconds, and check again before
 publishing results. Cancellation sends SIGTERM to the POSIX execution process
 group and escalates to SIGKILL after five seconds, including descendants that
-outlive their parent. A harness that exits zero while handling cancellation still
+outlive their parent or start a separate process group. Descendant process
+identities are retained through the grace period to avoid trusting recycled PIDs.
+A harness that exits zero while handling cancellation still
 returns `job_cancelled` with exit code 130. These timings assume job-state reads
 remain available; they are not a bound on a stalled database or cleanup request.
 
