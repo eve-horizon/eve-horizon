@@ -112,6 +112,7 @@ function createService(
       return Promise.resolve({ id: data.id, phase: 'ready' });
     }),
     addDependency: vi.fn().mockResolvedValue(undefined),
+    updatePhase: vi.fn().mockResolvedValue({ success: true }),
   };
   const agents = {
     listByProject: vi.fn().mockResolvedValue(options.agents ?? []),
@@ -214,6 +215,90 @@ workflows:
       const addDependency = (service as any).jobs.addDependency;
       expect(addDependency).toHaveBeenCalledWith(reviewJob?.id, setupJob?.id, 'blocks');
       expect(addDependency).toHaveBeenCalledWith(cleanupJob?.id, reviewJob?.id, 'blocks');
+    });
+
+    it('releases dependent steps only after their blocking relations exist', async () => {
+      const service = createService(`
+name: test
+services:
+  api:
+    image: test:latest
+workflows:
+  mixed:
+    steps:
+      - name: setup
+        run: "echo setup"
+      - name: review
+        depends_on: [setup]
+        agent:
+          prompt: "Review setup"
+      - name: cleanup
+        depends_on: [review]
+        script:
+          command: "echo cleanup"
+`);
+
+      await service.invoke('proj_test123', 'mixed');
+
+      const setupJob = allCreatedJobs.find((job) => job.step_name === 'setup');
+      const reviewJob = allCreatedJobs.find((job) => job.step_name === 'review');
+      const cleanupJob = allCreatedJobs.find((job) => job.step_name === 'cleanup');
+      expect(setupJob?.phase).toBe('backlog');
+      expect(reviewJob?.phase).toBe('backlog');
+      expect(cleanupJob?.phase).toBe('backlog');
+
+      const { addDependency, updatePhase } = (service as any).jobs;
+      expect(updatePhase).toHaveBeenCalledTimes(3);
+      expect(updatePhase).toHaveBeenCalledWith(setupJob?.id, 'ready', 'workflow');
+      expect(updatePhase).toHaveBeenCalledWith(reviewJob?.id, 'ready', 'workflow');
+      expect(updatePhase).toHaveBeenCalledWith(cleanupJob?.id, 'ready', 'workflow');
+      const lastWired = Math.max(...addDependency.mock.invocationCallOrder);
+      const firstReleased = Math.min(...updatePhase.mock.invocationCallOrder);
+      expect(firstReleased).toBeGreaterThan(lastWired);
+    });
+
+    it('does not release staged steps when dependency wiring fails', async () => {
+      const service = createService(`
+name: test
+services:
+  api:
+    image: test:latest
+workflows:
+  mixed:
+    steps:
+      - name: setup
+        run: "echo setup"
+      - name: review
+        depends_on: [setup]
+        run: "echo review"
+`);
+      const { addDependency, updatePhase } = (service as any).jobs;
+      addDependency.mockRejectedValueOnce(new Error('relation write failed'));
+
+      await expect(service.invoke('proj_test123', 'mixed')).rejects.toThrow('relation write failed');
+
+      expect(allCreatedJobs.filter((job) => job.step_name).every((job) => job.phase === 'backlog')).toBe(true);
+      expect(updatePhase).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed release rather than claiming workflow invocation succeeded', async () => {
+      const service = createService(`
+name: test
+services:
+  api:
+    image: test:latest
+workflows:
+  mixed:
+    steps:
+      - name: setup
+        run: "echo setup"
+      - name: review
+        depends_on: [setup]
+        run: "echo review"
+`);
+      (service as any).jobs.updatePhase.mockResolvedValueOnce({ success: false, error: 'cancelled' });
+
+      await expect(service.invoke('proj_test123', 'mixed')).rejects.toThrow('could not be released: cancelled');
     });
 
     it('persists script step token scope and permissions', async () => {

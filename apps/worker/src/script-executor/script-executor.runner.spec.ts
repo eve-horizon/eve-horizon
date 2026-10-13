@@ -36,7 +36,7 @@ describe('script runner dispatch', () => {
     const result = await service.execute('job_1', 'att_1');
     expect(runner.run).toHaveBeenCalledWith(expect.objectContaining({
       jobId: 'job_1', attemptId: 'att_1', projectId: 'proj_1', toolchains: ['python', 'browser'],
-    }), expect.any(Function), undefined, { submitPath: 'scripts/execute' });
+    }), expect.any(Function), undefined, { submitPath: 'scripts/execute', signal: expect.any(AbortSignal) });
     expect(result).toMatchObject({ success: true, stdout: 'done', runnerEventEmitted: true });
     runner.run.mockResolvedValueOnce({ success: false, exitCode: 1,
       error: 'toolchain_unavailable: browser init image pull failed' });

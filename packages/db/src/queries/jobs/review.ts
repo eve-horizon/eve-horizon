@@ -69,7 +69,7 @@ export function jobReviewQueries(db: Db) {
           status = 'succeeded',
           ended_at = NOW(),
           result_summary = ${summary}
-        WHERE id = ${activeAttempt.id}
+        WHERE id = ${activeAttempt.id} AND status IN ('running', 'succeeded')
       `;
 
       // 3. Update job phase to 'review'
@@ -79,9 +79,10 @@ export function jobReviewQueries(db: Db) {
           phase = 'review',
           review_status = 'pending',
           updated_at = NOW()
-        WHERE id = ${jobId}
+        WHERE id = ${jobId} AND phase = 'active'
         RETURNING *
       `;
+      if (!updatedJob) throw new Error(`Job ${jobId} changed phase during review submission`);
 
       // 4. Audit log the submission
       await db`

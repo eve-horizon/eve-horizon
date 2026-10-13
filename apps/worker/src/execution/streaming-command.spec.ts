@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -56,6 +56,36 @@ describe('runStreamingCommand', () => {
     const result = await promise;
     expect(result).toMatchObject({ success: true, exitCode: 0, timedOut: false });
     expect(result.stdout).toContain('second');
+  });
+
+  it('does not spawn a command whose cancellation signal is already aborted', async () => {
+    const workspace = await tempWorkspace();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runStreamingCommand({
+      command: 'touch should-not-exist', cwd: workspace, env: { PATH: process.env.PATH },
+      attemptId: 'att_cancelled', timeoutMs: 5_000, timeoutCode: 'script_timeout',
+      signal: controller.signal, appendLog: async () => {},
+    } as Parameters<typeof runStreamingCommand>[0] & { signal: AbortSignal });
+    expect(result).toMatchObject({ success: false, exitCode: 130, cancelled: true });
+    await expect(access(join(workspace, 'should-not-exist'))).rejects.toThrow();
+  });
+
+  it('cancels the shell and TERM-resistant descendants before they can continue work', async () => {
+    const workspace = await tempWorkspace();
+    const controller = new AbortController();
+    const resultPromise = runStreamingCommand({
+      command: "trap 'exit 0' TERM; bash -c 'trap \"\" TERM; sleep 0.7; touch should-not-exist' & wait",
+      cwd: workspace, env: { PATH: process.env.PATH }, attemptId: 'att_cancelled',
+      timeoutMs: 5_000, timeoutCode: 'script_timeout', killGraceMs: 50,
+      signal: controller.signal, appendLog: async () => {},
+    } as Parameters<typeof runStreamingCommand>[0] & { signal: AbortSignal });
+    await delay(100);
+    controller.abort();
+    const result = await resultPromise;
+    expect(result).toMatchObject({ success: false, exitCode: 130, cancelled: true });
+    await delay(750);
+    await expect(access(join(workspace, 'should-not-exist'))).rejects.toThrow();
   });
 
   it('truncates output above the cap with one warning per stream', async () => {

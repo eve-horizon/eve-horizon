@@ -1,3 +1,4 @@
+import { watchJobCancellation, JOB_CANCELLED, type JobCancellationMonitor } from '@eve/shared';
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -195,6 +196,20 @@ export class ScriptExecutorService {
    * @returns Execution result
    */
   async execute(jobId: string, attemptId: string): Promise<ScriptExecutionResult> {
+    const cancellation = await watchJobCancellation(async () => (await this.jobs.findById(jobId))?.phase);
+    try {
+      if (cancellation.signal.aborted) return { success: false, exitCode: 130, error: JOB_CANCELLED, errorCode: 'job_cancelled', durationMs: 0 };
+      const result = await this.executeCancellable(jobId, attemptId, cancellation);
+      await cancellation.check();
+      return cancellation.signal.aborted
+        ? { ...result, success: false, exitCode: 130, error: JOB_CANCELLED, errorCode: 'job_cancelled' }
+        : result;
+    } finally {
+      cancellation.stop();
+    }
+  }
+
+  private async executeCancellable(jobId: string, attemptId: string, cancellation: JobCancellationMonitor): Promise<ScriptExecutionResult> {
     const startTime = Date.now();
     let workspacePathForCleanup: string | null = null;
 
@@ -221,7 +236,7 @@ export class ScriptExecutorService {
           text: '', toolchains: getJobToolchains(job) } as HarnessInvocation;
         const result = await runInvocationInK8s(invocation,
           (runtimeMeta) => this.jobs.updateRuntimeMeta(attemptId, runtimeMeta).then(() => undefined),
-          undefined, { submitPath: 'scripts/execute' });
+          undefined, { submitPath: 'scripts/execute', signal: cancellation.signal });
         const data = result.resultJson as { stdout?: string; stderr?: string; error_code?: string } | undefined;
         return { success: result.success, exitCode: result.exitCode ?? (result.success ? 0 : 1),
           stdout: data?.stdout, stderr: data?.stderr, error: result.error,
@@ -343,6 +358,7 @@ export class ScriptExecutorService {
 
       // 4. Run the script command
       const result = await this.runScript(repoPath, scriptCommand, timeoutMs, {
+        signal: cancellation.signal,
         jobId,
         projectId: job.project_id,
         runId: (job as unknown as { run_id?: string }).run_id,
@@ -373,6 +389,9 @@ export class ScriptExecutorService {
           root: event.root,
         }),
       });
+
+      await cancellation.check();
+      cancellation.signal.throwIfAborted();
 
       if (gitWorkspace && gitConfig) {
         try {
@@ -739,6 +758,7 @@ export class ScriptExecutorService {
     command: string,
     timeoutMs: number,
     context: {
+      signal?: AbortSignal;
       jobId: string;
       projectId: string;
       runId?: string;
@@ -857,6 +877,7 @@ export class ScriptExecutorService {
       }
 
       const result = await runStreamingCommand({
+        signal: context.signal,
         command,
         cwd: repoPath,
         env,
@@ -872,7 +893,7 @@ export class ScriptExecutorService {
         stdout: result.stdout,
         stderr: result.stderr,
         error: result.error,
-        errorCode: result.timedOut ? 'script_timeout' : undefined,
+        errorCode: result.cancelled ? 'job_cancelled' : result.timedOut ? 'script_timeout' : undefined,
       };
     } catch (error) {
       if (isMissingSecretOverrideError(error) || error instanceof ToolchainProvisionError ||

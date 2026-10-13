@@ -225,10 +225,13 @@ export function jobCrudQueries(db: Db) {
           ready_at = ${newPhase === 'ready' ? db`NOW()` : db`ready_at`},
           updated_at = NOW(),
           closed_at = ${newPhase === 'done' || newPhase === 'cancelled' ? db`NOW()` : null}
-        WHERE id = ${jobId}
+        WHERE id = ${jobId} AND phase = ${currentPhase}
         RETURNING *
       `;
 
+      if (!updatedJob) {
+        return { success: false, error: `Job ${jobId} changed phase during transition from ${currentPhase} to ${newPhase}` };
+      }
       return {
         success: true,
         job: updatedJob,

@@ -175,3 +175,6 @@ export {
 
 export { rejectBrowserPathOverrides, probeBrowserRuntime, BROWSER_PATH_KEYS } from './browser-runtime.js';
 export type { BrowserProbeResult } from './browser-runtime.js';
+
+export { watchJobCancellation, bindProcessCancellation, JOB_CANCELLED, type JobCancellationMonitor } from './job-cancellation.js';
+export { cleanupAttemptWorkspace } from './workspace-cleanup.js';

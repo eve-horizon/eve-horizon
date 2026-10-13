@@ -1108,7 +1108,9 @@ export class WorkflowsService {
         description,
         issue_type: 'task',
         labels: [`workflow:${workflowName}`, `step:${stepName}`],
-        phase: 'ready',
+        // Stage every step until the graph exists. Even an independent step can
+        // finish before later children are created, causing premature root completion.
+        phase: 'backlog',
         priority: Math.min(index, 4),  // Clamp to valid range (0-4); step ordering uses depends_on
         assignee: agentConfig.agentId,
         review_required: 'none',
@@ -1193,6 +1195,14 @@ export class WorkflowsService {
           }
           await this.jobs.addDependency(jobId, depJobId, 'blocks');
         }
+      }
+    }
+
+    // 6b. Release steps only after the complete graph and blocking relations exist.
+    for (const stepJob of stepJobSummaries) {
+      const released = await this.jobs.updatePhase(stepJob.job_id, 'ready', 'workflow');
+      if (!released.success) {
+        throw new Error(`Workflow step ${stepJob.step_name} could not be released: ${released.error}`);
       }
     }
 

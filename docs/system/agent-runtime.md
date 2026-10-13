@@ -1,7 +1,7 @@
 # Agent Runtime (Current)
 
 > Status: Current
-> Last Updated: 2026-06-03
+> Last Updated: 2026-10-13
 > Purpose: Describe the org-scoped agent runtime service and warm pods.
 
 ## Overview
@@ -45,6 +45,29 @@ writable `/opt/eve/toolchains` cache.
 Runner-pod mode still uses per-toolchain init containers. Both inline and
 runner modes update `runtime_meta.toolchains` with `execution_mode`,
 `requested`, `resolved`, `missing`, and `source`.
+
+## Cancellation and workspace cleanup
+
+Agent and worker executors check cancellation before starting, poll job phase
+independently of harness output every two seconds, and check again before
+publishing results. Cancellation sends SIGTERM to the POSIX execution process
+group and escalates to SIGKILL after five seconds, including descendants that
+outlive their parent. A harness that exits zero while handling cancellation still
+returns `job_cancelled` with exit code 130. These timings assume job-state reads
+remain available; they are not a bound on a stalled database or cleanup request.
+
+Dedicated runners use the same cancellation signal during pod startup, HTTP
+submission, and completion polling. Cancellation requests pod deletion with a
+five-second termination grace period and deletes the attempt PVC. Cancelled
+attempts preserve refreshed Codex credentials but skip git publication and release
+hooks. Late completion cannot overwrite a concurrent terminal phase transition.
+
+Inline executors clean their own attempt workspace after finalization, honoring
+`EVE_CLEANUP_WORKSPACE_ON_SUCCESS` and `EVE_CLEANUP_WORKSPACE_ON_FAILURE`.
+Orchestrator cleanup alone cannot remove files on another pod's filesystem.
+Session workspaces, the configured root itself, paths outside that root, and
+symlink aliases are preserved. Operators must still size local storage for peak
+active attempts and shared toolchain caches.
 
 ## Data Model
 

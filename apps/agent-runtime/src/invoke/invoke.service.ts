@@ -1,3 +1,4 @@
+import { watchJobCancellation, bindProcessCancellation, cleanupAttemptWorkspace, JOB_CANCELLED, type JobCancellationMonitor } from '@eve/shared';
 import { Injectable, Inject } from '@nestjs/common';
 import { spawn } from 'child_process';
 import * as readline from 'readline';
@@ -923,6 +924,22 @@ export class InvokeService {
   // ---------------------------------------------------------------------------
 
   async execute(invocation: HarnessInvocation): Promise<HarnessResult> {
+    const cancellation = await watchJobCancellation(async () => (await this.jobs.findById(invocation.jobId))?.phase);
+    try {
+      if (cancellation.signal.aborted) return { attemptId: invocation.attemptId, success: false, exitCode: 130, error: JOB_CANCELLED };
+      const result = await this.executeCancellable(invocation, cancellation);
+      await cancellation.check();
+      return cancellation.signal.aborted
+        ? { ...result, success: false, exitCode: 130, error: JOB_CANCELLED }
+        : result;
+    } finally {
+      cancellation.stop();
+    }
+  }
+
+  private async executeCancellable(invocation: HarnessInvocation, cancellation: JobCancellationMonitor): Promise<HarnessResult> {
+    let inlineExecution = false;
+    let executionSucceeded = false;
     let requestedToolchains = invocation.toolchains ?? [];
     try {
       const effectiveInvocation = await this.applyManifestDefaults(invocation);
@@ -939,9 +956,10 @@ export class InvokeService {
       const executeStartTime = Date.now();
 
       if (this.shouldRunInK8sRunnerPod()) {
-        return await this.dispatchToRunner(effectiveInvocation);
+        return await this.dispatchToRunner(effectiveInvocation, cancellation.signal);
       }
 
+      inlineExecution = true;
       if (process.env.EVE_RUNTIME === 'k8s' && effectiveInvocation.attemptId) {
         try {
           await this.jobs.updateRuntimeMeta(effectiveInvocation.attemptId, this.currentRuntimeMeta());
@@ -1023,10 +1041,14 @@ export class InvokeService {
       const setup = await this.buildHarnessProcessEnv(ctx, plan, repoPath, env);
       const messageRelay = await this.createMessageRelay(ctx);
 
-      const result = await this.runHarness(ctx, plan, setup, messageRelay, repoPath);
+      const result = await this.runHarness(ctx, plan, setup, messageRelay, repoPath, cancellation);
 
-      await this.finalizeExecution(ctx, plan, result, prepared, env, secretsFilePath);
+      await cancellation.check();
+      if (cancellation.signal.aborted) Object.assign(result, { success: false, exitCode: 130, error: JOB_CANCELLED });
 
+      await this.finalizeExecution(ctx, plan, result, prepared, env, secretsFilePath, cancellation.signal);
+
+      executionSucceeded = result.success;
       return result;
     } catch (error) {
       const errMessage = error instanceof Error ? error.message : String(error);
@@ -1054,6 +1076,7 @@ export class InvokeService {
     } finally {
       // Phase 2 secret isolation: clean up per-job user home
       await cleanupJobUserHome(invocation.attemptId);
+      if (inlineExecution) await cleanupAttemptWorkspace(invocation, executionSucceeded, loadConfig());
     }
   }
 
@@ -1062,7 +1085,7 @@ export class InvokeService {
   // ---------------------------------------------------------------------------
 
   /** Dispatch the invocation to a dedicated k8s runner pod. */
-  private async dispatchToRunner(effectiveInvocation: HarnessInvocation): Promise<HarnessResult> {
+  private async dispatchToRunner(effectiveInvocation: HarnessInvocation, signal?: AbortSignal): Promise<HarnessResult> {
     const localRepoPath = effectiveInvocation.repoUrl ? getLocalRepoPath(effectiveInvocation.repoUrl) : null;
     if (localRepoPath) {
       throw new Error('file:// repo URLs are not supported in k8s runtime');
@@ -1094,7 +1117,8 @@ export class InvokeService {
             error: opts?.error,
           }
         );
-      }
+      },
+      signal,
     );
   }
 
@@ -1819,6 +1843,7 @@ export class InvokeService {
     setup: HarnessProcessSetup,
     messageRelay: EveMessageRelay,
     repoPath: string,
+    cancellation: JobCancellationMonitor,
   ): Promise<HarnessResult> {
     const { invocationWithOptions, lifecycleLogger } = ctx;
     const { isClaudeHarness, claudeAuthDecision, harnessOptionsResolved, harnessBinary, harnessArgs } = plan;
@@ -1858,12 +1883,16 @@ export class InvokeService {
     };
 
     let claudeAuthFailureMessage: string | undefined;
+    await cancellation.check();
+    cancellation.signal.throwIfAborted();
     return await new Promise<HarnessResult>((resolve) => {
       const child = spawn(harnessBinary.binary, [...harnessBinary.prefixArgs, ...harnessArgs], {
         cwd: repoPath,
         env: processEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
       });
+      const finishCancellation = bindProcessCancellation(child, cancellation.signal);
 
       // Emit periodic heartbeat lifecycle logs so `eve job diagnose` can detect stuck processes
       const harnessStartTime = Date.now();
@@ -1950,6 +1979,7 @@ export class InvokeService {
       });
 
       child.on('error', async (err) => {
+        await finishCancellation();
         const msg = err instanceof Error ? err.message : String(err);
         clearInterval(heartbeatInterval);
         budgetEnforcer?.stop();
@@ -1970,6 +2000,8 @@ export class InvokeService {
       });
 
       child.on('close', async (code) => {
+        await cancellation.check();
+        await finishCancellation();
         clearInterval(heartbeatInterval);
         budgetEnforcer?.stop();
         await stdoutClosed;
@@ -2004,6 +2036,8 @@ export class InvokeService {
           if (code === 0) code = 1;
         }
 
+        if (cancellation.signal.aborted) { errorMessage = JOB_CANCELLED; code = 130; }
+
         // Gap #7: Log harness end lifecycle event
         await logHarnessEnd(lifecycleLogger, invocationWithOptions.attemptId, {
           harness: harnessOptionsResolved.harness,
@@ -2035,6 +2069,7 @@ export class InvokeService {
     prepared: PreparedRepo,
     env: NodeJS.ProcessEnv,
     secretsFilePath: string | null,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { invocationWithOptions, gitConfig, lifecycleLogger } = ctx;
     const { originalCodexB64, codexScopeType, codexScopeId, harnessOptionsResolved } = plan;
@@ -2045,6 +2080,9 @@ export class InvokeService {
       const codexHome = harnessOptionsResolved.env?.CODEX_HOME;
       await writeBackCodexAuth(originalCodexB64, codexScopeType, codexScopeId, codexHome);
     }
+
+    // Preserve refreshed credentials on cancellation, but do not publish workspace changes.
+    if (signal?.aborted) return;
 
     // Git policies: auto-commit and push after harness execution
     if (gitWorkspace && gitConfig) {

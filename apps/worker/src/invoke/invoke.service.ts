@@ -1,3 +1,4 @@
+import { watchJobCancellation, bindProcessCancellation, cleanupAttemptWorkspace, JOB_CANCELLED, type JobCancellationMonitor } from '@eve/shared';
 import { Injectable, Inject } from '@nestjs/common';
 import { spawn, execFile } from 'child_process';
 import * as readline from 'readline';
@@ -1232,6 +1233,22 @@ export class InvokeService {
   }
 
   async execute(invocation: HarnessInvocation): Promise<HarnessResult> {
+    const cancellation = await watchJobCancellation(async () => (await this.jobs.findById(invocation.jobId))?.phase);
+    try {
+      if (cancellation.signal.aborted) return { attemptId: invocation.attemptId, success: false, exitCode: 130, error: JOB_CANCELLED };
+      const result = await this.executeCancellable(invocation, cancellation);
+      await cancellation.check();
+      return cancellation.signal.aborted
+        ? { ...result, success: false, exitCode: 130, error: JOB_CANCELLED }
+        : result;
+    } finally {
+      cancellation.stop();
+    }
+  }
+
+  private async executeCancellable(invocation: HarnessInvocation, cancellation: JobCancellationMonitor): Promise<HarnessResult> {
+    let inlineExecution = false;
+    let executionSucceeded = false;
     try {
       // Apply manifest defaults if env_name is not set
       // This handles cases where jobs were created without explicit env targeting
@@ -1285,10 +1302,11 @@ export class InvokeService {
           async (phase, action, meta, opts) => {
             await this.logLifecycleEvent(effectiveInvocation.attemptId, phase, action, meta, opts);
           },
-          runnerResources ? { resources: runnerResources } : undefined,
+          { resources: runnerResources, signal: cancellation.signal },
         );
       }
 
+      inlineExecution = true;
       // Mark the start of execution (distinct from claim time).
       // In k8s runtime, the outer worker only spawns the runner pod; the runner pod
       // runs this same codepath with EVE_RUNTIME unset, so we only mark here.
@@ -1562,6 +1580,7 @@ export class InvokeService {
           jobUserHome,
           claudeAuthDecision,
           (message) => { claudeAuthFailureMessage = message; },
+          cancellation,
         );
         if (claudeAuthFailureMessage && !result.success && !result.error?.includes(claudeAuthFailureMessage)) {
           result.error = result.error
@@ -1569,10 +1588,15 @@ export class InvokeService {
             : claudeAuthFailureMessage;
         }
 
+        await cancellation.check();
+        if (cancellation.signal.aborted) Object.assign(result, { success: false, exitCode: 130, error: JOB_CANCELLED });
+
         // Write back refreshed Codex auth.json if the token was refreshed during execution
         if (originalCodexB64 && codexScopeType && codexScopeId) {
           await this.writeBackCodexAuth(originalCodexB64, codexScopeType, codexScopeId);
         }
+
+        if (cancellation.signal.aborted) return result;
 
         // Git policies: auto-commit and push after harness execution
         if (gitWorkspace && gitConfig) {
@@ -1592,6 +1616,7 @@ export class InvokeService {
         // Run release hook after execution (success or failure)
         await runReleaseHook(repoPath, secretsContext.env, secretsContext.secretsFilePath, this.buildLifecycleLogger(), effectiveInvocation.attemptId);
 
+        executionSucceeded = result.success;
         return result;
       } finally {
         await serviceProvisioning.cleanup();
@@ -1625,6 +1650,8 @@ export class InvokeService {
         exitCode: 1,
         error: errMsg,
       };
+    } finally {
+      if (inlineExecution) await cleanupAttemptWorkspace(invocation, executionSucceeded, loadConfig());
     }
   }
 
@@ -2102,6 +2129,7 @@ export class InvokeService {
     jobUserHome?: string,
     claudeAuthDecision?: ClaudeAuthDecision | null,
     onClaudeAuthFailure?: (message: string) => void,
+    cancellation?: JobCancellationMonitor,
   ): Promise<HarnessResult> {
     const { binary, prefixArgs } = await this.resolveEveAgentCliCommand();
     const startTime = Date.now();
@@ -2277,6 +2305,8 @@ export class InvokeService {
         } });
       }
 
+      await cancellation?.check();
+      cancellation?.signal.throwIfAborted();
       return new Promise((resolve) => {
       const fullArgs = [...prefixArgs, ...args];
       console.log(`[harness] Executing: ${binary} ${fullArgs.join(' ')}`);
@@ -2286,7 +2316,9 @@ export class InvokeService {
         cwd: repoPath,
         env: processEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
       });
+      const finishCancellation = bindProcessCancellation(harnessProcess, cancellation?.signal);
 
       // Budget enforcement state (Phase 7): best-effort, fail-open on internal errors.
       const llmUsageAgg = new Map<string, {
@@ -2593,7 +2625,9 @@ export class InvokeService {
         });
       });
 
-      harnessProcess.on('exit', async (exitCode, signal) => {
+      harnessProcess.on('close', async (exitCode, signal) => {
+        await cancellation?.check();
+        await finishCancellation();
         if (budgetInterval) {
           clearInterval(budgetInterval);
           budgetInterval = null;
@@ -2674,6 +2708,8 @@ export class InvokeService {
           if (finalExitCode === 0) finalExitCode = 1;
         }
 
+        if (cancellation?.signal.aborted) { errorMessage = JOB_CANCELLED; finalExitCode = 130; }
+
         // Log harness lifecycle end
         await this.logLifecycleEvent(invocation.attemptId, 'harness', 'end', {
           harness: options.harness,
@@ -2703,6 +2739,7 @@ export class InvokeService {
       });
 
       harnessProcess.on('error', async (error) => {
+        await finishCancellation();
         if (budgetInterval) {
           clearInterval(budgetInterval);
           budgetInterval = null;

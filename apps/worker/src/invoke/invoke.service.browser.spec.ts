@@ -35,7 +35,7 @@ describe('worker runner browser preflight', () => {
     inner.logLifecycleEvent = vi.fn().mockResolvedValue(undefined);
     inner.buildCoordinationDb = vi.fn().mockReturnValue({});
     inner.buildCarryoverContextDb = vi.fn().mockReturnValue({});
-    (service as unknown as { jobs: unknown }).jobs = { updateRuntimeMeta: vi.fn().mockResolvedValue(undefined) };
+    (service as unknown as { jobs: unknown }).jobs = { findById: vi.fn().mockResolvedValue({ phase: 'active' }), updateRuntimeMeta: vi.fn().mockResolvedValue(undefined) };
     const invocation = { jobId: 'job-test', attemptId: '00000000-0000-0000-0000-000000000001',
       projectId: 'proj-test', text: 'test', toolchains: ['browser'] } as unknown as HarnessInvocation;
 
@@ -53,7 +53,7 @@ describe('worker runner browser preflight', () => {
     inner.applyManifestDefaults = vi.fn().mockRejectedValue(new ToolchainProvisionError(
       'Chromium cannot launch', 'browser', 'eve-horizon/toolchain-browser:local'));
     const updateRuntimeMeta = vi.fn().mockResolvedValue(undefined);
-    (service as unknown as { jobs: unknown }).jobs = { updateRuntimeMeta };
+    (service as unknown as { jobs: unknown }).jobs = { findById: vi.fn().mockResolvedValue({ phase: 'active' }), updateRuntimeMeta };
     const invocation = { jobId: 'job-test', attemptId: '00000000-0000-0000-0000-000000000001',
       projectId: 'proj-test', text: 'test', toolchains: ['browser'] } as unknown as HarnessInvocation;
 

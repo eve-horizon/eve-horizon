@@ -317,6 +317,11 @@ interface UpdateJobRequest {
 Dependencies are stored as relations between jobs (`blocks`, `conditional_blocks`, `waits_for`, etc.).
 The CLI uses `job dep add|remove|list` to manage these relations.
 
+Workflow invocation creates every step in `backlog`, wires all blocking
+relations, then releases the complete graph to `ready`. A wiring failure does
+not release any steps. Independent steps can then start while dependent steps
+wait for their blockers; roots cannot finish during partial graph creation.
+
 Jobs can have blocking dependencies:
 
 - `blocked_by[]`: Job IDs that must complete before this can start

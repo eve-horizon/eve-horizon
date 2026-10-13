@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { getCorrelationHeaders, loadConfig } from '@eve/shared';
@@ -31,6 +32,7 @@ async function pollForCompletion(
   attemptId: string,
   pollIntervalMs: number = 5000,
   timeoutMs: number = 1800000, // 30 min default
+  signal?: AbortSignal,
 ): Promise<HarnessResult> {
   const config = loadConfig();
   const startTime = Date.now();
@@ -45,9 +47,11 @@ async function pollForCompletion(
   console.log(`[k8s-poll] Has internal API key: ${!!config.EVE_INTERNAL_API_KEY}`);
 
   while (Date.now() - startTime < timeoutMs) {
+    signal?.throwIfAborted();
     pollCount++;
     try {
       const response = await fetch(url, {
+        signal,
         headers: {
           'x-eve-internal-token': config.EVE_INTERNAL_API_KEY!,
           ...getCorrelationHeaders(),
@@ -56,6 +60,7 @@ async function pollForCompletion(
 
       if (response.ok) {
         const json = await response.json();
+        signal?.throwIfAborted();
         const events = json.data || [];
 
         // Find event matching our attemptId
@@ -95,10 +100,11 @@ async function pollForCompletion(
         }
       }
     } catch (err) {
+      signal?.throwIfAborted();
       console.warn(`[k8s-poll] Poll #${pollCount} exception: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    await delay(pollIntervalMs, undefined, { signal });
   }
 
   // Timeout
@@ -111,9 +117,10 @@ async function pollForCompletion(
   };
 }
 
-function execKubectl(args: string[], input?: string): Promise<ExecResult> {
+function execKubectl(args: string[], input?: string, signal?: AbortSignal): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('kubectl', args, {
+    const child = spawn('kubectl', ['--request-timeout=10s', ...args], {
+      signal,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -416,14 +423,14 @@ export function readToolchainInitStatuses(
   return imageIds;
 }
 
-async function waitForPodReady(namespace: string, podName: string, toolchains: readonly string[]): Promise<Record<string, string>> {
+async function waitForPodReady(namespace: string, podName: string, toolchains: readonly string[], signal?: AbortSignal): Promise<Record<string, string>> {
   const timeout = optionalEnv('EVE_K8S_POD_READY_TIMEOUT', '60s');
   const duration = /^(\d+)(ms|s|m)$/.exec(timeout);
   if (!duration) throw new Error(`Invalid EVE_K8S_POD_READY_TIMEOUT: ${timeout}`);
   const timeoutMs = Number(duration[1]) * (duration[2] === 'm' ? 60_000 : duration[2] === 's' ? 1_000 : 1);
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const result = await execKubectl(['get', 'pod', podName, `--namespace=${namespace}`, '-o', 'json']);
+    const result = await execKubectl(['get', 'pod', podName, `--namespace=${namespace}`, '-o', 'json'], undefined, signal);
     if (result.exitCode !== 0) throw new Error(`Failed to inspect runner pod: ${result.stderr || result.stdout}`);
     const pod = JSON.parse(result.stdout) as {
       status?: {
@@ -437,12 +444,12 @@ async function waitForPodReady(namespace: string, podName: string, toolchains: r
       if (missingImageId) throw new Error(`toolchain_unavailable: ${missingImageId} init imageID is missing from ready pod ${podName}`);
       return imageIds;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await delay(1000, undefined, { signal });
   }
   throw new Error(`Runner pod ${podName} did not become ready within ${timeoutMs}ms`);
 }
 
-async function getPodIp(namespace: string, podName: string): Promise<string> {
+async function getPodIp(namespace: string, podName: string, signal?: AbortSignal): Promise<string> {
   const result = await execKubectl([
     'get',
     'pod',
@@ -450,7 +457,7 @@ async function getPodIp(namespace: string, podName: string): Promise<string> {
     `--namespace=${namespace}`,
     '-o',
     'jsonpath={.status.podIP}',
-  ]);
+  ], undefined, signal);
   if (result.exitCode !== 0) {
     throw new Error(`Failed to get runner pod IP: ${result.stderr || result.stdout}`);
   }
@@ -461,13 +468,13 @@ async function getPodIp(namespace: string, podName: string): Promise<string> {
   return ip;
 }
 
-async function waitForRunner(port: number, ip: string): Promise<void> {
+async function waitForRunner(port: number, ip: string, signal?: AbortSignal): Promise<void> {
   const attempts = parseInt(optionalEnv('EVE_K8S_RUNNER_RETRIES', '20'), 10);
   const delayMs = parseInt(optionalEnv('EVE_K8S_RUNNER_RETRY_DELAY_MS', '1000'), 10);
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetch(`http://${ip}:${port}/health`, { method: 'GET' });
+      const response = await fetch(`http://${ip}:${port}/health`, { method: 'GET', signal });
       if (response.ok) {
         return;
       }
@@ -475,15 +482,17 @@ async function waitForRunner(port: number, ip: string): Promise<void> {
       // ignore and retry
     }
 
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await delay(delayMs, undefined, { signal });
   }
 
   throw new Error(`Runner not ready after ${attempts} attempts`);
 }
 
-async function deleteResources(namespace: string, pvcName: string, podName: string): Promise<void> {
+async function deleteResources(namespace: string, pvcName: string, podName: string, cancelled = false): Promise<void> {
   try {
-    await execKubectl(['delete', 'pod', podName, `--namespace=${namespace}`, '--ignore-not-found=true', '--wait=false']);
+    const result = await execKubectl(['delete', 'pod', podName, `--namespace=${namespace}`, '--ignore-not-found=true', '--wait=false',
+      ...(cancelled ? ['--grace-period=5'] : [])]);
+    if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout);
   } catch (err) {
     console.error(`Failed to delete pod ${podName}: ${err instanceof Error ? err.message : err}`);
   }
@@ -504,8 +513,10 @@ type LifecycleLogger = (
 export async function runInvocationInK8s(
   invocation: HarnessInvocation,
   onPodCreated?: (runtimeMeta: { runtime: string; pod_name: string; namespace: string; toolchains?: ToolchainRuntimeMeta }) => Promise<void>,
-  logLifecycle?: LifecycleLogger
+  logLifecycle?: LifecycleLogger,
+  signal?: AbortSignal,
 ): Promise<HarnessResult> {
+  signal?.throwIfAborted();
   const namespace = optionalEnv('EVE_K8S_NAMESPACE', DEFAULT_NAMESPACE);
   const rawAttempt = normalizeNameRaw(invocation.attemptId);
   const attemptHash = shortHash(invocation.attemptId);
@@ -526,20 +537,11 @@ export async function runInvocationInK8s(
     await logLifecycle('runner', 'start', { pod_name: podName, namespace });
   }
 
-  const applyResult = await execKubectl(['apply', '-f', '-'], manifest);
-  if (applyResult.exitCode !== 0) {
-    await deleteResources(namespace, pvcName, podName);
-    if (logLifecycle) {
-      await logLifecycle('runner', 'end', { pod_name: podName, namespace }, {
-        duration_ms: Date.now() - startTime,
-        success: false,
-        error: `Failed to apply runner manifests: ${applyResult.stderr || applyResult.stdout}`,
-      });
-    }
-    throw new Error(`Failed to apply runner manifests: ${applyResult.stderr || applyResult.stdout}`);
-  }
-
   try {
+    const applyResult = await execKubectl(['apply', '-f', '-'], manifest, signal);
+    if (applyResult.exitCode !== 0) {
+      throw new Error(`Failed to apply runner manifests: ${applyResult.stderr || applyResult.stdout}`);
+    }
     // Notify caller about pod creation with runtime metadata
     if (onPodCreated) {
       await onPodCreated({
@@ -560,7 +562,7 @@ export async function runInvocationInK8s(
       });
     }
 
-    const pulledToolchainImages = await waitForPodReady(namespace, podName, toolchains);
+    const pulledToolchainImages = await waitForPodReady(namespace, podName, toolchains, signal);
     if (onPodCreated && toolchains.length > 0) {
       await onPodCreated({ runtime: 'k8s', pod_name: podName, namespace,
         toolchains: { ...buildToolchainRuntimeMeta({ executionMode: 'runner', requested: toolchains, resolved: toolchains }),
@@ -575,12 +577,13 @@ export async function runInvocationInK8s(
       });
     }
 
-    const podIp = await getPodIp(namespace, podName);
-    await waitForRunner(RUNNER_PORT, podIp);
+    const podIp = await getPodIp(namespace, podName, signal);
+    await waitForRunner(RUNNER_PORT, podIp, signal);
 
     // Submit job (returns 202 immediately)
     const submitResponse = await fetch(`http://${podIp}:${RUNNER_PORT}/invoke`, {
       method: 'POST',
+      signal,
       headers: {
         'Content-Type': 'application/json',
         ...getCorrelationHeaders(),
@@ -606,8 +609,10 @@ export async function runInvocationInK8s(
       invocation.attemptId,
       pollInterval,
       pollTimeout,
+      signal,
     );
   } catch (err) {
+    if (signal?.aborted) err = signal.reason;
     if (logLifecycle) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       await logLifecycle('runner', 'end', { pod_name: podName, namespace }, {
@@ -631,6 +636,6 @@ export async function runInvocationInK8s(
     }
     throw err;
   } finally {
-    await deleteResources(namespace, pvcName, podName);
+    await deleteResources(namespace, pvcName, podName, signal?.aborted);
   }
 }

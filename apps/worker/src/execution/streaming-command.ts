@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { bindProcessCancellation, JOB_CANCELLED } from '@eve/shared';
 
 type StreamName = 'stdout' | 'stderr';
 
@@ -9,10 +10,12 @@ export interface StreamingCommandResult {
   stderr: string;
   error?: string;
   timedOut: boolean;
+  cancelled?: boolean;
   durationMs: number;
 }
 
 export interface StreamingCommandOptions {
+  signal?: AbortSignal;
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -55,6 +58,10 @@ function trimToLastBytes(text: string, maxBytes: number): string {
 
 export async function runStreamingCommand(options: StreamingCommandOptions): Promise<StreamingCommandResult> {
   const startedAt = Date.now();
+  if (options.signal?.aborted) {
+    return { success: false, exitCode: 130, stdout: '', stderr: '', error: JOB_CANCELLED,
+      timedOut: false, cancelled: true, durationMs: 0 };
+  }
   const outputCapBytes =
     options.outputCapBytes ?? readPositiveInt(process.env.EVE_SCRIPT_OUTPUT_CAP_BYTES, 10 * 1024 * 1024);
   const tailBytes = options.tailBytes ?? 4 * 1024;
@@ -160,7 +167,9 @@ export async function runStreamingCommand(options: StreamingCommandOptions): Pro
     const child = spawn('bash', ['--noprofile', '--norc', '-c', options.command], {
       cwd: options.cwd,
       env: options.env,
+      detached: process.platform !== 'win32',
     });
+    const finishCancellation = bindProcessCancellation(child, options.signal, killGraceMs);
 
     const flushInterval = setInterval(flushPending, flushIntervalMs);
 
@@ -196,7 +205,8 @@ export async function runStreamingCommand(options: StreamingCommandOptions): Pro
         streams[stream].buffered = '';
       }
       flushPending();
-      void flushChain.finally(() => {
+      void flushChain.finally(async () => {
+        await finishCancellation();
         resolve({
           success: false,
           exitCode: 1,
@@ -220,9 +230,11 @@ export async function runStreamingCommand(options: StreamingCommandOptions): Pro
       }
       flushPending();
 
-      void flushChain.finally(() => {
-        const exitCode = timedOut ? 124 : code ?? (signal ? 1 : 0);
-        const success = !timedOut && exitCode === 0;
+      void flushChain.finally(async () => {
+        await finishCancellation();
+        const cancelled = options.signal?.aborted === true;
+        const exitCode = cancelled ? 130 : timedOut ? 124 : code ?? (signal ? 1 : 0);
+        const success = !cancelled && !timedOut && exitCode === 0;
         const timeoutError = `${options.timeoutCode}: Command timed out after ${timeoutSeconds}s`;
         const processError = `Command failed with exit code ${exitCode}`;
         resolve({
@@ -230,7 +242,8 @@ export async function runStreamingCommand(options: StreamingCommandOptions): Pro
           exitCode,
           stdout: streams.stdout.tail,
           stderr: streams.stderr.tail,
-          error: success ? undefined : timedOut ? timeoutError : processError,
+          error: cancelled ? JOB_CANCELLED : success ? undefined : timedOut ? timeoutError : processError,
+          cancelled,
           timedOut,
           durationMs: Date.now() - startedAt,
         });
