@@ -112,15 +112,18 @@ that never enabled runner mode see no change.
 
 ## Residual risk after phase 1
 
-1. **In-process scripts share the worker's UID and filesystem.** They can read
-   the worker's service account token at
-   `/var/run/secrets/kubernetes.io/serviceaccount/token`, credential files the
-   worker entrypoint writes under `$HOME`, and the environment of any worker
-   child that inherits the full env (for example `buildctl` during a
-   concurrent build). The worker process's own environment is covered by the
-   non-dumpable service process change (see
+1. **In-process execution is defence in depth only.** Scripts share the
+   worker's UID, filesystem and pod. They can read the worker's service account
+   token at `/var/run/secrets/kubernetes.io/serviceaccount/token` (cluster-wide
+   RBAC), reach the pod's cloud identity through the metadata server (GKE
+   Workload Identity, EKS IRSA or Pod Identity), and read credential files the
+   worker entrypoint writes under `$HOME`. The worker's own environment, its
+   helper children and the inspector are covered by the service process
+   hardening (see
    [harness-process-isolation-plan.md](./harness-process-isolation-plan.md)).
-   Only runner-pod mode removes the token.
+   Only runner-pod mode with a token-less, identity-free service account
+   removes the token and the cloud identity. Production should run scripts in
+   runner pods.
 2. **Runner pods still carry `DATABASE_URL` and `EVE_INTERNAL_API_KEY`.** The
    runner process writes execution logs and runner events and resolves project
    secrets with them. Job code in the pod runs under the same UID.

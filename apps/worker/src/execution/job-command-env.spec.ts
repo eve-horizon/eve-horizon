@@ -22,6 +22,8 @@ const WORKER_SECRETS: Record<string, string> = {
   CODEX_AUTH_JSON: 'codex-auth',
   GITHUB_TOKEN: 'gh-token',
   KUBERNETES_SERVICE_HOST: '10.0.0.1',
+  KUBERNETES_SERVICE_PORT: '443',
+  KUBERNETES_PORT: 'tcp://10.0.0.1:443',
 };
 
 describe('buildJobCommandEnv', () => {
@@ -43,6 +45,13 @@ describe('buildJobCommandEnv', () => {
       EVE_ATTEMPT_ID: 'att_1', EVE_RUN_ID: 'run_1', EVE_ENV_NAME: 'staging',
       EVE_ENV_NAMESPACE: 'eve-o-p-staging', EVE_JOB_TOKEN: 'job-token',
     });
+  });
+
+  it('keeps Kubernetes service discovery out, so tools do not pick up the worker identity', () => {
+    const env = buildJobCommandEnv({}, { PATH: '/usr/bin', KUBERNETES_SERVICE_HOST: '10.0.0.1', KUBERNETES_SERVICE_PORT: '443' });
+    expect(env).not.toHaveProperty('KUBERNETES_SERVICE_HOST');
+    expect(env).not.toHaveProperty('KUBERNETES_SERVICE_PORT');
+    expect(JOB_COMMAND_INHERITED_ENV_KEYS.filter((key) => key.startsWith('KUBERNETES'))).toEqual([]);
   });
 
   it('never allowlists a credential-bearing key', () => {

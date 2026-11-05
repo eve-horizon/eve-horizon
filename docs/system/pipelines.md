@@ -89,9 +89,14 @@ declared `env_overrides`. `DATABASE_URL`, `EVE_INTERNAL_API_KEY`,
 `KUBERNETES_*` never reach it. The same allowlist covers `action: { type: run }`
 commands and the legacy step-run `run` action.
 
-The allowlist does not make in-process execution a sandbox: the script shares
-the worker's UID, filesystem and service account token. **Production
-deployments should run scripts in runner pods**:
+In-process execution is defence in depth only, not a sandbox. The script
+shares the worker's UID, filesystem and pod: it can read the worker's service
+account token (`/var/run/secrets/kubernetes.io/serviceaccount/token`, which
+carries the worker's cluster-wide RBAC), reach the pod's cloud identity through
+the metadata server (GKE Workload Identity, EKS IRSA or Pod Identity), and
+write files in the worker's HOME. Keeping `KUBERNETES_SERVICE_HOST`/`_PORT`
+out of the allowlist only stops tools from picking that identity up by
+accident. **Production deployments should run scripts in runner pods**:
 
 ```yaml
 - name: EVE_SCRIPT_K8S_RUNNER
