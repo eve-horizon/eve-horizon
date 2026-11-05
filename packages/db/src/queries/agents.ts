@@ -60,7 +60,7 @@ export function agentQueries(db: Db) {
           a.gateway_clients
         FROM agents a
         JOIN projects p ON p.id = a.project_id
-        WHERE p.org_id = ${orgId}
+        WHERE p.org_id = ${orgId} AND p.deleted_at IS NULL
         ORDER BY p.slug ASC, a.slug NULLS LAST, a.id ASC
       `;
     },
@@ -109,12 +109,14 @@ export function agentQueries(db: Db) {
       return row;
     },
 
+    // Org-wide slug and alias lookups skip soft-deleted projects: their agents
+    // neither reserve org-unique names nor receive routed work.
     async findByOrgAndSlug(orgId: string, slug: string): Promise<Agent | null> {
       const [row] = await db<Agent[]>`
         SELECT a.*
         FROM agents a
         JOIN projects p ON p.id = a.project_id
-        WHERE p.org_id = ${orgId} AND a.slug = ${slug}
+        WHERE p.org_id = ${orgId} AND p.deleted_at IS NULL AND a.slug = ${slug}
         LIMIT 1
       `;
       return row ?? null;
@@ -129,6 +131,7 @@ export function agentQueries(db: Db) {
         FROM agents a
         JOIN projects p ON p.id = a.project_id
         WHERE p.org_id = ${orgId}
+          AND p.deleted_at IS NULL
           AND a.slug = ANY(${slugs})
       `;
     },
@@ -139,7 +142,7 @@ export function agentQueries(db: Db) {
         SELECT a.*
         FROM agents a
         JOIN projects p ON p.id = a.project_id
-        WHERE p.org_id = ${orgId} AND lower(a.alias) = ${normalizedAlias}
+        WHERE p.org_id = ${orgId} AND p.deleted_at IS NULL AND lower(a.alias) = ${normalizedAlias}
         LIMIT 1
       `;
       return row ?? null;
@@ -152,7 +155,7 @@ export function agentQueries(db: Db) {
         SELECT a.*
         FROM agents a
         JOIN projects p ON p.id = a.project_id
-        WHERE p.org_id = ${orgId} AND lower(a.alias) = ANY(${normalizedAliases})
+        WHERE p.org_id = ${orgId} AND p.deleted_at IS NULL AND lower(a.alias) = ANY(${normalizedAliases})
       `;
     },
 

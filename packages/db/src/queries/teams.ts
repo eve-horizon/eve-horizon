@@ -38,7 +38,7 @@ export function teamQueries(db: Db) {
         SELECT t.*
         FROM teams t
         JOIN projects p ON p.id = t.project_id
-        WHERE p.org_id = ${orgId} AND t.id = ${teamId}
+        WHERE p.org_id = ${orgId} AND p.deleted_at IS NULL AND t.id = ${teamId}
         LIMIT 1
       `;
       return row ?? null;

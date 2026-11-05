@@ -144,6 +144,19 @@ Resources support soft delete via a `deleted` boolean:
 - Include `?include_deleted=true` to show deleted items
 - `PATCH` supports `{ "deleted": true }` to mark deleted
 
+Projects also take `DELETE /projects/:id`, which tears down the
+project's deployments first. Without flags it soft-deletes. `?hard=true`
+removes the project and everything it owns (environments, jobs, events,
+builds, pipeline runs, agents, project-scoped webhook subscriptions) in one
+transaction; billing usage records and org documents are kept with their
+project reference cleared. A hard delete is refused with `409` while the
+project has a managed database that is not destroyed, because removing its
+record would orphan the database; `?force=true` deletes anyway and also
+continues past teardown failures. CLI: `eve project delete <project_id> [--hard] [--force]`.
+
+Agents of a soft-deleted project no longer reserve their org-wide slugs or
+aliases, and chat routing ignores them.
+
 ### 8. Timestamps
 
 All resources include timestamps:
