@@ -1,4 +1,5 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { internalTokenMatches } from '@eve/shared';
 
 /**
  * Guard to protect internal admin endpoints with EVE_INTERNAL_API_KEY.
@@ -48,27 +49,11 @@ export class InternalApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('Missing internal API key');
     }
 
-    // Constant-time comparison to prevent timing attacks
-    if (!this.secureCompare(providedKey, configuredKey)) {
+    // Constant-time comparison (shared helper; does not leak the key's length)
+    if (!internalTokenMatches(providedKey, configuredKey)) {
       throw new UnauthorizedException('Invalid internal API key');
     }
 
     return true;
-  }
-
-  /**
-   * Constant-time string comparison to prevent timing attacks.
-   */
-  private secureCompare(a: string, b: string): boolean {
-    if (a.length !== b.length) {
-      return false;
-    }
-
-    let result = 0;
-    for (let i = 0; i < a.length; i++) {
-      result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-    }
-
-    return result === 0;
   }
 }

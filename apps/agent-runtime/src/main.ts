@@ -3,7 +3,12 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { LoggerService } from '@nestjs/common';
-import { initServiceTelemetry, registerCorrelationIdHook } from '@eve/shared';
+import {
+  assertInternalApiKeyConfigured,
+  initServiceTelemetry,
+  registerCorrelationIdHook,
+  registerInternalAuthHook,
+} from '@eve/shared';
 import { AppModule } from './app.module';
 
 function resolvePort(): number {
@@ -15,6 +20,8 @@ async function bootstrap() {
   const port = resolvePort();
 
   const logger = (await initServiceTelemetry('agent-runtime')) as LoggerService;
+  // Every route except /health requires the internal key (fails closed).
+  assertInternalApiKeyConfigured(logger, 'AGENT_RUNTIME');
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -23,6 +30,7 @@ async function bootstrap() {
   );
 
   registerCorrelationIdHook(app.getHttpAdapter().getInstance());
+  registerInternalAuthHook(app.getHttpAdapter().getInstance());
 
   app.enableShutdownHooks();
   await app.listen(port, '0.0.0.0');

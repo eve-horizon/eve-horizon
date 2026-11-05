@@ -1,5 +1,5 @@
 import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { resolveWorkerUrl } from '../common/worker-url';
+import { resolveWorkerUrl, workerRequestHeaders } from '../common/worker-url';
 import type { Db } from '@eve/db';
 import {
   projectQueries,
@@ -850,7 +850,7 @@ export class ProjectsService {
     try {
       const response = await fetch(`${workerUrl}/environments/delete`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: workerRequestHeaders(),
         body: JSON.stringify({ env_id: envId }),
       });
 

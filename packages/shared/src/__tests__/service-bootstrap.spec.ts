@@ -1,11 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  assertInternalApiKeyConfigured,
   logStartupConfigWarnings,
   registerCorrelationIdHook,
+  registerInternalAuthHook,
   registerRawBodyJsonParser,
   type BootstrapFastifyInstance,
 } from '../service-bootstrap';
 import { CORRELATION_HEADER } from '../observability';
+import {
+  INTERNAL_TOKEN_HEADER,
+  internalAuthHeaders,
+  internalTokenMatches,
+} from '../api-client/internal-fetch';
 
 type Hook = (request: any, reply: any, done: () => void) => void;
 type Parser = (req: any, body: string, done: (err: Error | null, value?: any) => void) => void;
@@ -120,6 +127,135 @@ describe('service-bootstrap', () => {
         if (savedUrl !== undefined) process.env.EVE_API_URL = savedUrl;
         else delete process.env.EVE_API_URL;
       }
+    });
+  });
+
+  describe('internalTokenMatches', () => {
+    it('matches only the exact configured key', () => {
+      expect(internalTokenMatches('secret-key', 'secret-key')).toBe(true);
+      expect(internalTokenMatches('secret-kez', 'secret-key')).toBe(false);
+      expect(internalTokenMatches('secret-key-longer', 'secret-key')).toBe(false);
+      expect(internalTokenMatches('secret', 'secret-key')).toBe(false);
+    });
+
+    it('fails closed when the key is unset or the token is missing or not a string', () => {
+      expect(internalTokenMatches('anything', undefined)).toBe(false);
+      expect(internalTokenMatches('', '')).toBe(false);
+      expect(internalTokenMatches(undefined, 'secret-key')).toBe(false);
+      expect(internalTokenMatches('', 'secret-key')).toBe(false);
+      expect(internalTokenMatches(['secret-key'], 'secret-key')).toBe(false);
+    });
+  });
+
+  describe('internalAuthHeaders', () => {
+    it('sends the internal token header when a key is configured', () => {
+      expect(internalAuthHeaders('secret-key')).toEqual({ [INTERNAL_TOKEN_HEADER]: 'secret-key' });
+    });
+
+    it('sends nothing when no key is configured', () => {
+      expect(internalAuthHeaders('')).toEqual({});
+    });
+  });
+
+  describe('registerInternalAuthHook', () => {
+    function runHook(options: Parameters<typeof registerInternalAuthHook>[1], request: any) {
+      const { instance, hooks } = fakeFastify();
+      registerInternalAuthHook(instance, options);
+      expect(hooks).toHaveLength(1);
+      const reply = { code: vi.fn(), send: vi.fn() };
+      reply.code.mockReturnValue(reply);
+      const done = vi.fn();
+      hooks[0](request, reply, done);
+      return { reply, done };
+    }
+
+    it('refuses a request with no token', () => {
+      const { reply, done } = runHook({ key: 'secret-key' }, { url: '/invoke', headers: {} });
+      expect(done).not.toHaveBeenCalled();
+      expect(reply.code).toHaveBeenCalledWith(401);
+      expect(reply.send).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 401, message: 'Missing or invalid internal token' }),
+      );
+    });
+
+    it('refuses a request with the wrong token', () => {
+      const { reply, done } = runHook(
+        { key: 'secret-key' },
+        { url: '/deploy', headers: { [INTERNAL_TOKEN_HEADER]: 'wrong-key' } },
+      );
+      expect(done).not.toHaveBeenCalled();
+      expect(reply.code).toHaveBeenCalledWith(401);
+    });
+
+    it('passes a request with the right token', () => {
+      const { reply, done } = runHook(
+        { key: 'secret-key' },
+        { url: '/scripts/execute', headers: { [INTERNAL_TOKEN_HEADER]: 'secret-key' } },
+      );
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(reply.code).not.toHaveBeenCalled();
+    });
+
+    it('leaves the health probe open, with or without a query string', () => {
+      for (const url of ['/health', '/health?probe=readiness']) {
+        const { reply, done } = runHook({ key: 'secret-key' }, { url, headers: {} });
+        expect(done).toHaveBeenCalledTimes(1);
+        expect(reply.code).not.toHaveBeenCalled();
+      }
+    });
+
+    it('protects every other spelling of the health path', () => {
+      for (const url of ['/health/', '/healthz', '//health', '/health/../invoke', '/%68ealth']) {
+        const { reply, done } = runHook({ key: 'secret-key' }, { url, headers: {} });
+        expect(done).not.toHaveBeenCalled();
+        expect(reply.code).toHaveBeenCalledWith(401);
+      }
+    });
+
+    it('fails closed when no key is configured, but keeps the health probe open', () => {
+      const refused = runHook({ key: '' }, { url: '/invoke', headers: { [INTERNAL_TOKEN_HEADER]: '' } });
+      expect(refused.done).not.toHaveBeenCalled();
+      expect(refused.reply.send).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Internal API key not configured' }),
+      );
+
+      const health = runHook({ key: '' }, { url: '/health', headers: {} });
+      expect(health.done).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads EVE_INTERNAL_API_KEY when no key is passed', () => {
+      vi.stubEnv('EVE_INTERNAL_API_KEY', 'env-key');
+      try {
+        const { done } = runHook({}, { url: '/invoke', headers: { [INTERNAL_TOKEN_HEADER]: 'env-key' } });
+        expect(done).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
+  describe('assertInternalApiKeyConfigured', () => {
+    it('refuses to start in production without the key', () => {
+      const warn = vi.fn();
+      expect(() =>
+        assertInternalApiKeyConfigured({ warn }, 'WORKER', { NODE_ENV: 'production' }),
+      ).toThrow(/EVE_INTERNAL_API_KEY is not set.*Refusing to start/);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('warns outside production without the key', () => {
+      const warn = vi.fn();
+      assertInternalApiKeyConfigured({ warn }, 'AGENT_RUNTIME', { NODE_ENV: 'development' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('AGENT_RUNTIME: EVE_INTERNAL_API_KEY is not set'));
+    });
+
+    it('is silent when the key is set', () => {
+      const warn = vi.fn();
+      assertInternalApiKeyConfigured({ warn }, 'WORKER', {
+        NODE_ENV: 'production',
+        EVE_INTERNAL_API_KEY: 'secret-key',
+      });
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 });

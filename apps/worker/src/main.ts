@@ -4,9 +4,11 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { LoggerService } from '@nestjs/common';
 import {
+  assertInternalApiKeyConfigured,
   initServiceTelemetry,
   logStartupConfigWarnings,
   registerCorrelationIdHook,
+  registerInternalAuthHook,
 } from '@eve/shared';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './all-exceptions.filter';
@@ -20,6 +22,8 @@ async function bootstrap() {
 
   // Validate critical configuration at startup
   logStartupConfigWarnings(logger, 'WORKER');
+  // Every route except /health requires the internal key (fails closed).
+  assertInternalApiKeyConfigured(logger, 'WORKER');
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -33,6 +37,7 @@ async function bootstrap() {
   app.useGlobalFilters(new AllExceptionsFilter());
 
   registerCorrelationIdHook(app.getHttpAdapter().getInstance());
+  registerInternalAuthHook(app.getHttpAdapter().getInstance());
 
   // Set HTTP server timeout for long-running job requests (default 1 hour)
   const server = app.getHttpServer();

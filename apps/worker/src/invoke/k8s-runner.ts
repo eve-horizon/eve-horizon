@@ -1,3 +1,4 @@
+import { internalAuthHeaders } from '@eve/shared';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
@@ -588,6 +589,8 @@ export async function runInvocationInK8s(
       signal,
       headers: {
         'Content-Type': 'application/json',
+        // The runner pod serves the worker app, which requires the internal key.
+        ...internalAuthHeaders(),
         ...getCorrelationHeaders(),
       },
       body: JSON.stringify(submitPath === 'scripts/execute'

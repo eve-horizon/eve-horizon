@@ -1,5 +1,5 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, ConflictException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { resolveWorkerUrl } from '../common/worker-url';
+import { resolveWorkerUrl, workerRequestHeaders } from '../common/worker-url';
 import { randomBytes } from 'crypto';
 import type { Db } from '@eve/db';
 import { orgQueries, type Org, membershipQueries, userQueries, agentQueries, spendQueries, projectQueries, environmentQueries, orgInviteQueries } from '@eve/db';
@@ -596,7 +596,7 @@ export class OrgsService {
     try {
       const response = await fetch(`${workerUrl}/environments/delete`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: workerRequestHeaders(),
         body: JSON.stringify({ env_id: envId }),
       });
 
