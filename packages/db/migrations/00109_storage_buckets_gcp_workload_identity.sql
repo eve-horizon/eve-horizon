@@ -12,3 +12,9 @@ ALTER TABLE storage_buckets
   ADD CONSTRAINT storage_buckets_isolation_mode_check CHECK (
     isolation_mode IN ('irsa', 'shared', 'minio-static-key', 'gcp-workload-identity')
   );
+
+-- The IAM member Eve granted on the bucket (workload-identity mode). Kept so
+-- the grant can be revoked later whatever mode the env uses by then; a row is
+-- only dropped after its grant is revoked.
+ALTER TABLE storage_buckets
+  ADD COLUMN IF NOT EXISTS iam_member TEXT;

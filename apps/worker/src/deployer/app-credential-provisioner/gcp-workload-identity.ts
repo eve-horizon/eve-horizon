@@ -7,8 +7,6 @@ import type {
   AppObjectStoreScope,
 } from './types';
 
-const APP_SERVICE_ACCOUNT_NAME = 'eve-app';
-
 /** Object read/write/delete and list, plus multipart uploads; no bucket or IAM admin. */
 export const GCP_APP_BUCKET_ROLE = 'roles/storage.objectUser';
 
@@ -25,12 +23,14 @@ export interface BucketIamMembers {
 /**
  * Keyless app bucket access on GKE, the GCP counterpart of `irsa`.
  *
- * Each env's pods run as ServiceAccount/eve-app in the env namespace. With
- * Workload Identity Federation for GKE that Kubernetes service account is an
- * IAM principal in its own right, so the worker grants it
- * roles/storage.objectUser on the env's buckets only. No Google service
- * account or key is created: the worker needs nothing beyond the bucket IAM
- * permission it already uses for public buckets.
+ * Each env's pods run as ServiceAccount/eve-app-<env id> in the env
+ * namespace. With Workload Identity Federation for GKE that Kubernetes service
+ * account is an IAM principal in its own right, so the worker grants it
+ * roles/storage.objectUser on the env's buckets only. The env ID in the name
+ * means a later environment that reuses the same org, project and env names
+ * (and so the same namespace) is a different principal and inherits no grant.
+ * No Google service account or key is created: the worker needs nothing beyond
+ * the bucket IAM permission it already uses for public buckets.
  *
  * Apps authenticate with Application Default Credentials and must use the
  * Google Cloud Storage client libraries; S3 SDKs need HMAC keys (`shared`).
@@ -87,7 +87,7 @@ export class GcpWorkloadIdentityAppCredentialProvisioner implements AppCredentia
       throw new Error(`isolation mode 'workload-identity' not available on this cluster: ${availability.reason}`);
     }
 
-    const member = this.memberFor(scope.namespace);
+    const member = this.memberFor(scope);
     const sortedBuckets = [...new Set(physicalBucketNames)].sort();
     const envVars: AppObjectStoreEnvVar[] = [
       { name: 'STORAGE_ENDPOINT', value: resolveEndpoint() },
@@ -111,41 +111,41 @@ export class GcpWorkloadIdentityAppCredentialProvisioner implements AppCredentia
       iamRoleArn: null,
       iamRoleName: null,
       serviceAccount: {
-        name: APP_SERVICE_ACCOUNT_NAME,
+        name: serviceAccountName(scope),
         namespace: scope.namespace,
         annotations: {},
       },
+      bucketMember: member,
     };
   }
 
-  async grantBucketAccess(
-    scope: AppObjectStoreScope,
-    physicalBucketNames: string[],
-    droppedBucketNames: string[],
-  ): Promise<void> {
-    const member = this.memberFor(scope.namespace);
+  async grantBucketAccess(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<void> {
+    const member = this.memberFor(scope);
     for (const bucket of [...new Set(physicalBucketNames)].sort()) {
       await this.buckets.addBucketIamMember(bucket, GCP_APP_BUCKET_ROLE, member);
     }
-    for (const bucket of [...new Set(droppedBucketNames)].sort()) {
-      await this.buckets.removeBucketIamMember(bucket, GCP_APP_BUCKET_ROLE, member);
-    }
   }
 
-  async removeForEnv(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<void> {
-    if (physicalBucketNames.length === 0) return;
-    await this.grantBucketAccess(scope, [], physicalBucketNames);
+  /** Grants are revoked by the member recorded on each bucket row, not here. */
+  async removeForEnv(_scope: AppObjectStoreScope): Promise<void> {
+    return;
   }
 
-  /** IAM principal of ServiceAccount/eve-app in the env namespace. */
-  memberFor(namespace: string): string {
+  /** IAM principal of the env's Kubernetes service account. */
+  memberFor(scope: Pick<AppObjectStoreScope, 'envId' | 'namespace'>): string {
     const pool = process.env.EVE_GKE_WORKLOAD_IDENTITY_POOL!.trim();
-    return `principal://iam.googleapis.com/${pool}/subject/ns/${namespace}/sa/${APP_SERVICE_ACCOUNT_NAME}`;
+    return `principal://iam.googleapis.com/${pool}/subject/ns/${scope.namespace}/sa/${serviceAccountName(scope)}`;
   }
 
   private projectId(): string {
     return WORKLOAD_POOL_PATTERN.exec(process.env.EVE_GKE_WORKLOAD_IDENTITY_POOL!.trim())![2];
   }
+}
+
+/** `eve-app-<env id>`, a valid Kubernetes name unique to the environment. */
+export function serviceAccountName(scope: Pick<AppObjectStoreScope, 'envId'>): string {
+  const id = scope.envId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  return `eve-app-${id}`.slice(0, 63).replace(/-+$/, '');
 }
 
 function authModeSetting(): string | undefined {

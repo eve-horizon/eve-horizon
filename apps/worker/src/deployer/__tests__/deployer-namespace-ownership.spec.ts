@@ -143,6 +143,7 @@ describe('DeployerService namespace ownership', () => {
     };
     const deployer = deployerWith(k8sService);
     (deployer as any).objectStoreProvisioner.removeObjectStoreBinding = vi.fn().mockResolvedValue(undefined);
+    (deployer as any).objectStoreProvisioner.storageBuckets = { listByEnv: vi.fn().mockResolvedValue([]) };
     (deployer as any).storageBuckets = { deleteByEnv: vi.fn().mockResolvedValue(0) };
 
     await deployer.deleteEnvironment('env_b');
@@ -157,6 +158,7 @@ describe('DeployerService namespace ownership', () => {
     };
     const deployer = deployerWith(k8sService);
     (deployer as any).objectStoreProvisioner.removeObjectStoreBinding = vi.fn().mockResolvedValue(undefined);
+    (deployer as any).objectStoreProvisioner.storageBuckets = { listByEnv: vi.fn().mockResolvedValue([]) };
     (deployer as any).storageBuckets = { deleteByEnv: vi.fn().mockResolvedValue(0) };
 
     await deployer.deleteEnvironment('env_b');

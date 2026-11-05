@@ -792,11 +792,15 @@ service gets:
 - `STORAGE_REGION` when the worker sets one
 - `STORAGE_BUCKET_<NAME>`
 
-No key exists in this mode. Eve renders `ServiceAccount/eve-app` in the env
-namespace and runs bucket-declaring pods under it; with Workload Identity
-Federation for GKE that Kubernetes service account is itself an IAM
+No key exists in this mode. Eve renders `ServiceAccount/eve-app-<env id>` in
+the env namespace and runs bucket-declaring pods under it; with Workload
+Identity Federation for GKE that Kubernetes service account is itself an IAM
 principal, and the worker grants it `roles/storage.objectUser` on the env's
-buckets only (and revokes it from buckets the env drops). Apps must use the
+buckets only. Each bucket row records the granted member (`iam_member`), and
+Eve revokes it, before changing or dropping the row, when the env drops the
+bucket, switches mode or is deleted; a failed revocation fails the deploy or
+delete and is retried. The env ID in the name means a re-created env with the
+same names inherits nothing. Apps must use the
 Google Cloud Storage client libraries with Application Default Credentials:
 an S3 SDK cannot sign without an HMAC key, and app code cannot mint V4 signed
 URLs without a Google service account. For browser uploads, start a resumable

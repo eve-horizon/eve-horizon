@@ -3,6 +3,8 @@ export type AppObjectStoreCredentialMode = 'irsa' | 'shared' | 'minio-static-key
 export interface AppObjectStoreScope {
   orgId: string;
   projectId: string;
+  /** Environment ID; never reused, unlike org, project and env names. */
+  envId: string;
   envName: string;
   orgSlug: string;
   projectSlug: string;
@@ -38,6 +40,8 @@ export interface AppObjectStoreBinding {
   iamRoleArn?: string | null;
   iamRoleName?: string | null;
   serviceAccount?: AppServiceAccountBinding | null;
+  /** IAM member granted on each bucket (bucket-level modes); recorded per row so it can be revoked later. */
+  bucketMember?: string | null;
 }
 
 export interface AppCredentialProvisionerAvailability {
@@ -53,13 +57,9 @@ export interface AppCredentialProvisioner {
   ensureForEnv(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<AppObjectStoreBinding>;
   /**
    * For modes whose grants live on the buckets themselves: called once the
-   * env's buckets exist, with the env's buckets and those it no longer declares.
+   * env's buckets exist. Revocation is not the provisioner's job: the object
+   * store provisioner revokes the member recorded on each tracked row.
    */
-  grantBucketAccess?(
-    scope: AppObjectStoreScope,
-    physicalBucketNames: string[],
-    droppedBucketNames: string[],
-  ): Promise<void>;
-  /** `physicalBucketNames` are the env's tracked buckets, for modes that granted on them. */
-  removeForEnv(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<void>;
+  grantBucketAccess?(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<void>;
+  removeForEnv(scope: AppObjectStoreScope): Promise<void>;
 }

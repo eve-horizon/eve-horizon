@@ -10,11 +10,13 @@ import { DeployerService } from '../deployer.service.js';
 
 const POOL = 'projects/123456789012/locations/global/workloadIdentityPools/acme-eve-prod.svc.id.goog';
 const NAMESPACE = 'eve-acme-media-prod';
-const MEMBER = `principal://iam.googleapis.com/${POOL}/subject/ns/${NAMESPACE}/sa/eve-app`;
+const SERVICE_ACCOUNT = 'eve-app-env-01jabcdefghjkmnpqrstvwxyz0';
+const MEMBER = `principal://iam.googleapis.com/${POOL}/subject/ns/${NAMESPACE}/sa/${SERVICE_ACCOUNT}`;
 
 const scope = {
   orgId: 'org_123',
   projectId: 'proj_123',
+  envId: 'env_01jabcdefghjkmnpqrstvwxyz0',
   envName: 'prod',
   orgSlug: 'acme',
   projectSlug: 'media',
@@ -89,9 +91,17 @@ describe('GcpWorkloadIdentityAppCredentialProvisioner', () => {
       bindingHash: expect.stringMatching(/^[0-9a-f]{16}$/),
       iamRoleArn: null,
       iamRoleName: null,
-      serviceAccount: { name: 'eve-app', namespace: NAMESPACE, annotations: {} },
+      serviceAccount: { name: SERVICE_ACCOUNT, namespace: NAMESPACE, annotations: {} },
+      bucketMember: MEMBER,
     });
-    expect(provisioner.memberFor(NAMESPACE)).toBe(MEMBER);
+    expect(provisioner.memberFor(scope)).toBe(MEMBER);
+  });
+
+  it('gives a re-created env with the same names a different principal', () => {
+    const provisioner = new GcpWorkloadIdentityAppCredentialProvisioner(bucketIam());
+    const recreated = provisioner.memberFor({ namespace: NAMESPACE, envId: 'env_01jzzzzzzzzzzzzzzzzzzzzzzz' });
+    expect(recreated).not.toBe(MEMBER);
+    expect(recreated).toContain(`/subject/ns/${NAMESPACE}/sa/eve-app-env-01jzzzzzzzzzzzzzzzzzzzzzzz`);
   });
 
   it('changes the binding hash when the bucket set changes', async () => {
@@ -103,21 +113,19 @@ describe('GcpWorkloadIdentityAppCredentialProvisioner', () => {
     expect(two.bindingHash).not.toBe(one.bindingHash);
   });
 
-  it('grants the env principal on its buckets and revokes it from dropped ones', async () => {
+  it('grants the env principal on its buckets and leaves revocation to recorded rows', async () => {
     const iam = bucketIam();
     const provisioner = new GcpWorkloadIdentityAppCredentialProvisioner(iam);
 
-    await provisioner.grantBucketAccess(scope, ['eve-app-acme-media-prod-a'], ['eve-app-acme-media-prod-old']);
-    await provisioner.removeForEnv(scope, ['eve-app-acme-media-prod-a']);
+    await provisioner.grantBucketAccess(scope, ['eve-app-acme-media-prod-b', 'eve-app-acme-media-prod-a']);
+    await provisioner.removeForEnv(scope);
 
     expect(GCP_APP_BUCKET_ROLE).toBe('roles/storage.objectUser');
     expect(iam.addBucketIamMember.mock.calls).toEqual([
       ['eve-app-acme-media-prod-a', 'roles/storage.objectUser', MEMBER],
+      ['eve-app-acme-media-prod-b', 'roles/storage.objectUser', MEMBER],
     ]);
-    expect(iam.removeBucketIamMember.mock.calls).toEqual([
-      ['eve-app-acme-media-prod-old', 'roles/storage.objectUser', MEMBER],
-      ['eve-app-acme-media-prod-a', 'roles/storage.objectUser', MEMBER],
-    ]);
+    expect(iam.removeBucketIamMember).not.toHaveBeenCalled();
   });
 });
 
@@ -202,17 +210,18 @@ describe('DeployerService workload-identity object-store binding', () => {
     expect(k8s.deleteSecret).toHaveBeenCalledWith(NAMESPACE, 'eve-app-storage-credentials');
     expect(storageBuckets.upsert).toHaveBeenCalledWith(expect.objectContaining({
       isolation_mode: 'gcp-workload-identity',
-      service_account_name: 'eve-app',
+      service_account_name: SERVICE_ACCOUNT,
       service_account_namespace: NAMESPACE,
+      iam_member: MEMBER,
     }));
 
     const provisioner = (deployer as any).objectStoreProvisioner;
     expect(provisioner.buildObjectStoreServiceAccount(plan)).toEqual({
       apiVersion: 'v1',
       kind: 'ServiceAccount',
-      metadata: { name: 'eve-app', namespace: NAMESPACE },
+      metadata: { name: SERVICE_ACCOUNT, namespace: NAMESPACE },
     });
-    expect(provisioner.resolveObjectStoreServiceAccountName(plan, 'api')).toBe('eve-app');
+    expect(provisioner.resolveObjectStoreServiceAccountName(plan, 'api')).toBe(SERVICE_ACCOUNT);
     expect(provisioner.resolveObjectStoreServiceAccountName(plan, 'web')).toBeUndefined();
     const envVars = await provisioner.resolveObjectStoreBuckets(services.api, { envName: 'prod', componentName: 'api' }, plan);
     expect(envVars).toEqual([
@@ -226,21 +235,65 @@ describe('DeployerService workload-identity object-store binding', () => {
       .toEqual({ 'eve.app_bucket_binding_hash': plan.binding.bindingHash });
   });
 
-  it('revokes the principal from buckets the env no longer declares', async () => {
-    const { calls, prepare } = setup({
-      previous: [{
-        project_id: 'proj_123',
-        env_name: 'prod',
-        service_name: 'api',
-        name: 'old',
-        physical_name: 'eve-app-acme-media-prod-old',
-        visibility: 'private',
-      }],
-    });
+  const row = (name: string, extra: Record<string, unknown> = {}) => ({
+    project_id: 'proj_123',
+    env_name: 'prod',
+    service_name: 'api',
+    name,
+    physical_name: `eve-app-acme-media-prod-${name}`,
+    visibility: 'private',
+    iam_member: MEMBER,
+    ...extra,
+  });
+
+  it('revokes the recorded member from buckets the env no longer declares', async () => {
+    const { calls, prepare } = setup({ previous: [row('old'), row('uploads')] });
 
     await prepare({ api: api('workload-identity') });
 
-    expect(calls).toContain('removeBucketIamMember:eve-app-acme-media-prod-old');
+    expect(calls).toEqual([
+      'removeBucketIamMember:eve-app-acme-media-prod-old',
+      'ensureBucket:eve-app-acme-media-prod-uploads',
+      'addBucketIamMember:eve-app-acme-media-prod-uploads',
+    ]);
+  });
+
+  it('revokes recorded grants when the env switches to the shared key', async () => {
+    const { deployer, calls, storageBuckets, prepare } = setup({ previous: [row('uploads')] });
+
+    const plan = await prepare({ api: api('shared') });
+
+    expect(plan.binding.mode).toBe('shared');
+    expect(calls[0]).toBe('removeBucketIamMember:eve-app-acme-media-prod-uploads');
+    expect((deployer as any).objectStoreProvisioner.bucketProvisioner.removeBucketIamMember)
+      .toHaveBeenCalledWith('eve-app-acme-media-prod-uploads', 'roles/storage.objectUser', MEMBER);
+    expect(storageBuckets.upsert).toHaveBeenCalledWith(expect.objectContaining({ isolation_mode: 'shared', iam_member: null }));
+  });
+
+  it('replaces a grant recorded for another member', async () => {
+    const stale = MEMBER.replace(SERVICE_ACCOUNT, 'eve-app');
+    const { calls, prepare } = setup({ previous: [row('uploads', { iam_member: stale })] });
+
+    await prepare({ api: api('workload-identity') });
+
+    expect(calls).toEqual([
+      'removeBucketIamMember:eve-app-acme-media-prod-uploads',
+      'ensureBucket:eve-app-acme-media-prod-uploads',
+      'addBucketIamMember:eve-app-acme-media-prod-uploads',
+    ]);
+  });
+
+  it('keeps the rows and fails the deploy when a revocation fails, so the next deploy retries', async () => {
+    const { deployer, calls, storageBuckets, prepare } = setup({ previous: [row('old')] });
+    (deployer as any).objectStoreProvisioner.bucketProvisioner.removeBucketIamMember =
+      vi.fn().mockRejectedValue(new Error('HTTP 503'));
+
+    await expect(prepare({ api: api('workload-identity') })).rejects.toThrow(
+      'Failed to revoke object_store bucket access for env "prod": eve-app-acme-media-prod-old: HTTP 503',
+    );
+    expect(calls).toEqual([]);
+    expect(storageBuckets.upsert).not.toHaveBeenCalled();
+    expect(storageBuckets.deleteMissingForEnv).not.toHaveBeenCalled();
   });
 
   it('keeps auto on the shared key unless the operator opts the cluster in', async () => {
@@ -263,20 +316,37 @@ describe('DeployerService workload-identity object-store binding', () => {
     expect(calls).toEqual([]);
   });
 
-  it('revokes the principal from every tracked bucket when the binding is removed', async () => {
-    const { deployer, calls } = setup({
-      previous: [
-        { physical_name: 'eve-app-acme-media-prod-uploads' },
-        { physical_name: 'eve-app-acme-media-prod-media' },
-      ],
-    });
+  it('revokes every recorded grant on env deletion and fails it when one cannot be revoked', async () => {
+    const { deployer, calls } = setup({ previous: [row('uploads'), row('media'), row('plain', { iam_member: null })] });
 
-    await (deployer as any).objectStoreProvisioner.removeObjectStoreBinding(scope);
+    await (deployer as any).objectStoreProvisioner.revokeEnvGrants(scope);
 
     expect(calls).toEqual([
-      'removeBucketIamMember:eve-app-acme-media-prod-media',
       'removeBucketIamMember:eve-app-acme-media-prod-uploads',
+      'removeBucketIamMember:eve-app-acme-media-prod-media',
     ]);
+
+    (deployer as any).objectStoreProvisioner.bucketProvisioner.removeBucketIamMember =
+      vi.fn().mockRejectedValue(new Error('HTTP 403'));
+    await expect((deployer as any).objectStoreProvisioner.revokeEnvGrants(scope)).rejects.toThrow('HTTP 403');
+  });
+
+  it('revokes before the rows are dropped when an env removes all its buckets', async () => {
+    const { deployer, calls, storageBuckets } = setup({ previous: [row('uploads')] });
+    // Only the real-DB path prunes rows for an env with no bucket declarations.
+    Object.assign((deployer as any).objectStoreProvisioner, { db: () => undefined });
+    storageBuckets.deleteByEnv.mockImplementation(async () => {
+      calls.push('deleteByEnv');
+      return 1;
+    });
+
+    await (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
+      services: { web: { image: 'ghcr.io/example/web:latest' } },
+      envWorkers: [],
+      scope,
+    });
+
+    expect(calls).toEqual(['removeBucketIamMember:eve-app-acme-media-prod-uploads', 'deleteByEnv']);
   });
 });
 

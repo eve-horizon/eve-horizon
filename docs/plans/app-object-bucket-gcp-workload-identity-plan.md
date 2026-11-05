@@ -79,12 +79,18 @@ apps need to sign with their own identity.
 
 ### Identity and grants
 
-- Pods of services that declare buckets run as `ServiceAccount/eve-app` in the
-  env namespace (the same name `irsa` uses). Eve renders the ServiceAccount
-  without annotations.
+- Pods of services that declare buckets run as `ServiceAccount/eve-app-<env id>`
+  in the env namespace. Eve renders the ServiceAccount without annotations.
 - Its principal is
-  `principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog/subject/ns/<namespace>/sa/eve-app`,
-  unique per env namespace.
+  `principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog/subject/ns/<namespace>/sa/eve-app-<env id>`.
+  Namespaces are derived from org, project and env names, which can be
+  deleted and reused; the environment ID cannot, so a re-created environment
+  is a different principal and inherits no grant left behind.
+- The per-env boundary also needs each environment to stay out of other
+  environments' namespaces. The deployer refuses to deploy into a namespace
+  labelled for another environment, and the API keeps user-chosen namespaces
+  under the project's own prefix (the namespace-ownership fix this branch
+  builds on).
 - The worker grants that principal `roles/storage.objectUser` (objects
   get/create/update/delete/list and multipart uploads; no bucket or IAM admin)
   on each of the env's buckets, through the same storage client that creates
@@ -94,15 +100,21 @@ apps need to sign with their own identity.
 
 | Event | Action |
 | --- | --- |
-| Deploy | ensure buckets, then add the env principal on each (bucket IAM needs the bucket to exist); revoke it from buckets the env tracked but no longer declares |
-| All buckets removed | revoke on every tracked bucket, then drop the rows |
-| Env deleted | un-publish public buckets, revoke on every tracked bucket, drop rows; data stays |
-| Switch away from the mode | the grant stays on the env's own buckets until the env drops them or is deleted (same as an `irsa` role left behind) |
+| Deploy | revoke recorded grants the new binding does not keep, ensure buckets, then add the env principal on each (bucket IAM needs the bucket to exist) |
+| All buckets removed | revoke every recorded grant, then drop the rows |
+| Env deleted | un-publish public buckets, revoke every recorded grant, drop rows; data stays |
+| Switch to another mode, or member changes | the deploy revokes the recorded member from every bucket |
+
+Each `storage_buckets` row records the member granted on its bucket
+(`iam_member`). Revocation works from that record, whatever mode the env uses
+now and whether or not this mode is still configured, and always runs before
+the row is rewritten or dropped. If a revocation fails, the deploy or delete
+fails with the rows intact, so the next deploy or delete retries it.
 
 The binding hash (mode, principal, role, bucket set) is stamped on pod
 templates as `eve.app_bucket_binding_hash`, so a bucket-set change rolls pods.
 `storage_buckets.isolation_mode` records `gcp-workload-identity`; migration
-`00109` widens the column's CHECK constraint.
+`00109` widens the column's CHECK constraint and adds `iam_member`.
 
 ### Selection
 
@@ -176,9 +188,13 @@ plus documented paths:
 
 ## Rollout
 
+- **Land the bucket ownership check first.** Without it `ensureBucket`
+  adopts any existing bucket on a GCS 409, so a pre-created bucket in another
+  project would be adopted and the env principal granted on it. This branch
+  does not contain that fix.
 - No behaviour change for existing deployments: `auto` resolves as before and
   no manifest uses the new value yet. Migration `00109` only widens a CHECK
-  constraint.
+  constraint and adds a nullable column.
 - Template: set `EVE_GKE_WORKLOAD_IDENTITY_POOL` on the worker for GKE
   installs and keep bucket IAM on the app prefix in the storage role split.
 - Docs: `docs/system/object-store-and-org-filesystem.md`; the public agent
@@ -190,7 +206,9 @@ plus documented paths:
 Unit tests (offline, done): provisioner availability and reasons, binding
 shape, idempotent grants and revocations, selection (`auto` stays put unless
 opted in, explicit request fails fast), grant ordering after bucket creation,
-revocation on dropped buckets and binding removal, the ServiceAccount render,
+revocation by recorded member (dropped bucket, mode switch, changed member,
+all buckets removed, env deletion, failure keeps the rows), the env-scoped
+principal, the ServiceAccount render,
 GCS bucket IAM member edits, and the public-grant refusal messages.
 
 Live, on a GKE cluster with Workload Identity (not done):

@@ -17,6 +17,7 @@ import {
   type AppObjectStoreEnvVar,
   type AppObjectStoreScope,
 } from './app-credential-provisioner/factory';
+import { GCP_APP_BUCKET_ROLE } from './app-credential-provisioner/gcp-workload-identity';
 import type { BucketProvisioner } from './bucket-provisioner';
 import type { K8sService } from './k8s.service';
 
@@ -71,6 +72,7 @@ export class ObjectStoreProvisioner {
       if (typeof this.db === 'function') {
         const previous = await this.storageBuckets.listByEnv(params.scope.projectId, params.scope.envName);
         await this.unpublishBuckets(params.scope, previous, new Set());
+        await this.revokeRecordedGrants(params.scope, previous, () => false);
         await this.removeObjectStoreBinding(params.scope);
         await this.storageBuckets.deleteByEnv(params.scope.projectId, params.scope.envName);
       }
@@ -106,16 +108,21 @@ export class ObjectStoreProvisioner {
     const binding = await provisioner.ensureForEnv(params.scope, physicalBucketNames);
     await this.syncCredentialSecret(params.scope.namespace, binding);
 
+    // Revoke recorded grants the new binding does not keep (bucket dropped,
+    // mode switched, member changed) before the upserts below overwrite them.
+    await this.revokeRecordedGrants(
+      params.scope,
+      previous,
+      (row) => physicalBucketNames.includes(row.physical_name) && row.iam_member === (binding.bucketMember ?? null),
+    );
+
     for (const entry of desired) {
       await this.provisionObjectStoreBucket(entry, params.scope, binding);
     }
 
     if (provisioner.grantBucketAccess) {
-      const dropped = previous
-        .map((row) => row.physical_name)
-        .filter((name) => !physicalBucketNames.includes(name));
       try {
-        await provisioner.grantBucketAccess(params.scope, physicalBucketNames, dropped);
+        await provisioner.grantBucketAccess(params.scope, physicalBucketNames);
       } catch (error) {
         throw new Error(
           `Failed to grant ${binding.mode} access to the object_store buckets of env "${params.scope.envName}": ` +
@@ -232,6 +239,47 @@ export class ObjectStoreProvisioner {
         `${failures.join('; ')}`,
       );
     }
+  }
+
+  /**
+   * Revoke the bucket grants recorded on the env's rows, by recorded member
+   * and whatever mode the env uses now, unless `keep` holds. Fails with every
+   * error collected; callers revoke before rewriting or dropping rows, so a
+   * failed revocation stays tracked and the next deploy or delete retries it.
+   */
+  private async revokeRecordedGrants(
+    scope: AppObjectStoreScope,
+    rows: StorageBucket[],
+    keep: (row: StorageBucket) => boolean,
+  ): Promise<void> {
+    const grants = new Map<string, { bucket: string; member: string }>();
+    for (const row of rows) {
+      if (!row.iam_member || keep(row)) continue;
+      grants.set(`${row.physical_name} ${row.iam_member}`, { bucket: row.physical_name, member: row.iam_member });
+    }
+    const failures: string[] = [];
+    for (const { bucket, member } of grants.values()) {
+      try {
+        await this.bucketProvisioner.removeBucketIamMember(bucket, GCP_APP_BUCKET_ROLE, member);
+        this.logger.log(`Revoked ${member} from bucket ${bucket}`);
+      } catch (error) {
+        failures.push(`${bucket}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `Failed to revoke object_store bucket access for env "${scope.envName}": ${failures.join('; ')}`,
+      );
+    }
+  }
+
+  /**
+   * Env deletion: revoke every recorded grant of the env. Throws on failure so
+   * the delete can be retried with the rows still in place.
+   */
+  async revokeEnvGrants(scope: AppObjectStoreScope): Promise<void> {
+    const rows = await this.storageBuckets.listByEnv(scope.projectId, scope.envName);
+    await this.revokeRecordedGrants(scope, rows, () => false);
   }
 
   /** Best effort for env deletion: un-publish every public bucket of the env. */
@@ -396,6 +444,7 @@ export class ObjectStoreProvisioner {
         iam_role_name: binding.iamRoleName ?? null,
         service_account_name: binding.serviceAccount?.name ?? null,
         service_account_namespace: binding.serviceAccount?.namespace ?? null,
+        iam_member: binding.bucketMember ?? null,
       });
 
       this.logger.log(
@@ -487,23 +536,12 @@ export class ObjectStoreProvisioner {
         `${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    let trackedBuckets: string[] = [];
-    try {
-      trackedBuckets = [...new Set(
-        (await this.storageBuckets.listByEnv(scope.projectId, scope.envName)).map((row) => row.physical_name),
-      )];
-    } catch (error) {
-      this.logger.warn(
-        `Failed to list object-store buckets for ${scope.projectSlug}/${scope.envName}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
     for (const provisioner of this.appCredentialProvisioners) {
       if (!provisioner.availability().available) {
         continue;
       }
       try {
-        await provisioner.removeForEnv(scope, trackedBuckets);
+        await provisioner.removeForEnv(scope);
       } catch (error) {
         this.logger.warn(
           `Failed to remove ${provisioner.mode} object-store binding for ${scope.projectSlug}/${scope.envName}: ` +

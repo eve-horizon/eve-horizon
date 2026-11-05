@@ -747,6 +747,7 @@ export class DeployerService {
       scope: {
         orgId: project.org_id,
         projectId: params.projectId,
+        envId: environment.id,
         envName: params.envName,
         orgSlug: org.slug,
         projectSlug: project.slug,
@@ -940,13 +941,17 @@ export class DeployerService {
     const objectStoreScope = {
       orgId: project.org_id,
       projectId: project.id,
+      envId,
       envName: environment.name,
       orgSlug: org.slug,
       projectSlug: project.slug,
       namespace,
     };
-    // Buckets and their data outlive the env; their public grants do not.
+    // Buckets and their data outlive the env; their public grants and the
+    // env's access grants do not. A failed revocation fails the delete with
+    // the bucket rows kept, so a retry revokes again.
     await this.objectStoreProvisioner.unpublishEnvBuckets(objectStoreScope);
+    await this.objectStoreProvisioner.revokeEnvGrants(objectStoreScope);
     await this.objectStoreProvisioner.removeObjectStoreBinding(objectStoreScope);
     await this.storageBuckets.deleteByEnv(project.id, environment.name);
     // Delete only a namespace this env owns; a user-chosen namespace may
@@ -1018,6 +1023,7 @@ export class DeployerService {
       scope: {
         orgId: params.orgId,
         projectId: params.projectId,
+        envId: params.envId,
         envName: params.envName,
         orgSlug: params.orgSlug,
         projectSlug: params.projectSlug,
