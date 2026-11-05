@@ -29,6 +29,8 @@ import {
   getServicePermissions,
   DEFAULT_SERVICE_PERMISSIONS,
   isPlatformDomainHostname,
+  findReservedPlatformDomain,
+  getReservedPlatformDomains,
   generateCustomDomainId,
   getServiceObjectStoreBuckets,
   getServiceObjectStoreIsolation,
@@ -2217,6 +2219,7 @@ export class DeployerService {
 
     const config = loadConfig();
     const platformDomain = config.EVE_DEFAULT_DOMAIN ?? '';
+    const reservedDomains = getReservedPlatformDomains(config);
 
     return (ingress.domains as string[])
       .map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : ''))
@@ -2224,6 +2227,13 @@ export class DeployerService {
         if (!d) return false;
         if (platformDomain && isPlatformDomainHostname(d, platformDomain)) {
           this.logger.warn(`Skipping custom domain "${d}": use alias for platform subdomains`);
+          return false;
+        }
+        // Defence in depth: the API refuses these at sync and register, but a
+        // row claimed before the check existed must still never get an ingress.
+        const reservedDomain = findReservedPlatformDomain(d, reservedDomains);
+        if (reservedDomain) {
+          this.logger.warn(`Skipping custom domain "${d}": reserved for the platform (under "${reservedDomain}")`);
           return false;
         }
         return true;

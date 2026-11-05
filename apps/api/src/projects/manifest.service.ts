@@ -35,6 +35,10 @@ import {
   getManifestTcpIngressAliases,
   assertUniqueManifestIngressAliases,
   isReservedAlias,
+  loadConfig,
+  isPlatformDomainHostname,
+  findReservedPlatformDomain,
+  getReservedPlatformDomains,
   getManifestCustomDomainDeclarations,
   getManifestCustomDomainDesiredState,
   assertUniqueManifestCustomDomainDeclarations,
@@ -188,7 +192,22 @@ export class ManifestService {
         const message = error instanceof Error ? error.message : 'Duplicate custom domain hostnames in manifest';
         throw new BadRequestException(message);
       }
+      const config = loadConfig();
+      const platformDomain = config.EVE_DEFAULT_DOMAIN ?? '';
+      const reservedDomains = getReservedPlatformDomains(config);
       for (const declaration of customDomainDeclarations) {
+        // Hosts under EVE_DEFAULT_DOMAIN keep their existing handling: accepted
+        // here and skipped at deploy in favour of an ingress alias.
+        const underDefaultDomain = platformDomain !== '' && isPlatformDomainHostname(declaration.hostname, platformDomain);
+        const reservedDomain = underDefaultDomain
+          ? null
+          : findReservedPlatformDomain(declaration.hostname, reservedDomains);
+        if (reservedDomain) {
+          throw new BadRequestException(
+            `Custom domain "${declaration.hostname}" (${declaration.origin_path}) is reserved for the platform ` +
+            `(under "${reservedDomain}")`,
+          );
+        }
         const existingDomain = await this.customDomains.findByHostname(declaration.hostname);
         if (existingDomain && existingDomain.project_id !== projectId) {
           throw new ConflictException(`Custom domain "${declaration.hostname}" is already claimed by another project`);

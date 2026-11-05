@@ -134,6 +134,10 @@ export const configSchema = z.object({
   EVE_PLATFORM_INGRESS_IP: z.string().optional(), // Platform ingress IP for custom domain DNS verification
   EVE_PLATFORM_INGRESS_HOSTNAME: z.string().optional(), // Platform ingress hostname for CNAME verification
   EVE_MAX_CUSTOM_DOMAINS_PER_PROJECT: z.coerce.number().int().min(1).default(10), // Max custom domains per project
+  // Comma-separated domains no project may claim as a custom domain; each also reserves its
+  // subdomains. Set it to the platform's parent domain when DNS has an apex or wildcard record
+  // pointing at the platform ingress (e.g. example.com). The platform's own hosts are always reserved.
+  EVE_RESERVED_DOMAINS: z.string().optional(),
   EVE_REGISTRY_HOST: z.string().optional(), // Eve-native container registry host (e.g., registry.eve.example.com)
   EVE_REGISTRY_SIGNING_KEY: z.string().optional(), // RSA private key (PEM) for signing registry JWTs
   EVE_CORS_ORIGIN: z.string().default('*'), // CORS origin: '*' (any), 'true' (reflect), or specific URL

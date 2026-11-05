@@ -370,6 +370,65 @@ export function isPlatformDomainHostname(hostname: string, platformDomain: strin
   return normalized.endsWith(`.${pd}`) || normalized === pd;
 }
 
+/** The platform settings that name its own public hosts. */
+export interface PlatformHostConfig {
+  EVE_RESERVED_DOMAINS?: string;
+  EVE_API_URL?: string;
+  EVE_PUBLIC_API_URL?: string;
+  EVE_SSO_URL?: string;
+  SUPABASE_AUTH_EXTERNAL_URL?: string;
+  EVE_REGISTRY_HOST?: string;
+  EVE_PLATFORM_INGRESS_HOSTNAME?: string;
+}
+
+function hostOf(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  try {
+    const host = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname;
+    return host ? host.toLowerCase().replace(/\.$/, '') : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Domains no project may claim as a custom domain, each covering itself and
+ * all its subdomains: the explicit `EVE_RESERVED_DOMAINS` list plus the
+ * platform's own hosts (API, SSO, auth, registry and platform ingress).
+ * A tenant ingress on one of those hosts would capture platform traffic once
+ * DNS has an apex or wildcard record pointing at the shared ingress.
+ */
+export function getReservedPlatformDomains(config: PlatformHostConfig): string[] {
+  const reserved = new Set<string>();
+  for (const entry of (config.EVE_RESERVED_DOMAINS ?? '').split(',')) {
+    const host = hostOf(entry.trim().replace(/^\*\./, ''));
+    if (host) reserved.add(host);
+  }
+  for (const value of [
+    config.EVE_API_URL,
+    config.EVE_PUBLIC_API_URL,
+    config.EVE_SSO_URL,
+    config.SUPABASE_AUTH_EXTERNAL_URL,
+    config.EVE_REGISTRY_HOST,
+    config.EVE_PLATFORM_INGRESS_HOSTNAME,
+  ]) {
+    const host = hostOf(value);
+    if (host) reserved.add(host);
+  }
+  return [...reserved];
+}
+
+/**
+ * The reserved domain a hostname falls under (itself or a parent), or null
+ * when the hostname is free to claim.
+ */
+export function findReservedPlatformDomain(hostname: string, reserved: readonly string[]): string | null {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, '');
+  if (!normalized) return null;
+  return reserved.find((domain) => normalized === domain || normalized.endsWith(`.${domain}`)) ?? null;
+}
+
 export function isReservedAlias(alias: string): boolean {
   return RESERVED_ALIASES.has(alias.trim().toLowerCase());
 }
