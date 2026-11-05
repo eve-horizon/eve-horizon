@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PipelineRunnerService, buildPipelineRunEnv } from './pipeline-runner.service.js';
+import { PipelineRunnerService } from './pipeline-runner.service.js';
 
 const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
 vi.mock('child_process', async (importOriginal) => ({
@@ -17,36 +17,6 @@ const WORKER_CREDENTIALS = {
   AWS_SECRET_ACCESS_KEY: 'aws-secret',
   GOOGLE_APPLICATION_CREDENTIALS: '/var/run/secrets/gcp.json',
 };
-
-describe('buildPipelineRunEnv', () => {
-  it('keeps runtime basics and drops worker credentials', () => {
-    const env = buildPipelineRunEnv(
-      {
-        PATH: '/usr/bin',
-        HOME: '/home/worker',
-        EVE_API_URL: 'http://eve-api:4801',
-        KUBERNETES_SERVICE_HOST: '10.0.0.1',
-        ...WORKER_CREDENTIALS,
-      },
-      { envName: 'staging', envNamespace: 'eve-acme-web-staging' },
-    );
-
-    expect(env).toEqual({
-      PATH: '/usr/bin',
-      HOME: '/home/worker',
-      EVE_API_URL: 'http://eve-api:4801',
-      KUBERNETES_SERVICE_HOST: '10.0.0.1',
-      EVE_ENV_NAME: 'staging',
-      EVE_ENV_NAMESPACE: 'eve-acme-web-staging',
-    });
-  });
-
-  it('omits env context that is not set', () => {
-    expect(buildPipelineRunEnv({ PATH: '/usr/bin' }, { envName: null, envNamespace: null })).toEqual({
-      PATH: '/usr/bin',
-    });
-  });
-});
 
 describe('PipelineRunnerService run steps', () => {
   const originalEnv = { ...process.env };

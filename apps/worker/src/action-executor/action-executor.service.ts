@@ -53,6 +53,7 @@ import { classifyBuildError } from './error-classifier.js';
 import { K8sOperationError } from '../deployer/k8s-error.js';
 import { DeployFailureError, classifyFromSnapshot } from '../deployer/deploy-failure.js';
 import { runStreamingCommand } from '../execution/streaming-command.js';
+import { buildJobCommandEnv } from '../execution/job-command-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -2154,21 +2155,13 @@ export class ActionExecutorService {
     runHome: string;
     jobToken?: string;
   }): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: params.runHome,
-      TERM: process.env.TERM,
-      LANG: process.env.LANG,
-      USER: process.env.USER,
-      SHELL: process.env.SHELL,
-      EVE_JOB_ID: params.jobId,
-      EVE_PROJECT_ID: params.projectId,
-      EVE_ATTEMPT_ID: params.attemptId,
-    };
-    if (process.env.EVE_API_URL) env.EVE_API_URL = process.env.EVE_API_URL;
-    if (process.env.EVE_PUBLIC_API_URL) env.EVE_PUBLIC_API_URL = process.env.EVE_PUBLIC_API_URL;
-    if (params.jobToken) env.EVE_JOB_TOKEN = params.jobToken;
-    return env;
+    return buildJobCommandEnv({
+      home: params.runHome,
+      jobId: params.jobId,
+      projectId: params.projectId,
+      attemptId: params.attemptId,
+      jobToken: params.jobToken,
+    });
   }
 
   /**

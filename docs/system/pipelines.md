@@ -83,6 +83,83 @@ and org filesystem mount for orgfs/orgdocs/envdb/cloud_fs resources. See
 [workflows.md](./workflows.md#workflow-token-scope) for the scope grammar and
 merge semantics.
 
+#### Where script steps run, and what they can reach
+
+Script steps are repository code, so treat them as untrusted. There are two
+execution modes:
+
+| Mode | When | Process | Kubernetes API | Worker secrets |
+| --- | --- | --- | --- | --- |
+| In-process | Default; always outside Kubernetes | `bash` child of the worker, same UID | Worker service account token is readable on disk | Not in the env (allowlist) |
+| Runner pod | `EVE_RUNTIME=k8s` and `EVE_SCRIPT_K8S_RUNNER=true` | Ephemeral pod per attempt | No token mounted | Runner holds `DATABASE_URL` and the internal key (see below) |
+
+In both modes the command starts from an allowlisted environment
+(`apps/worker/src/execution/job-command-env.ts`): `PATH`, `HOME` (a
+workspace-scoped directory), locale, terminal, proxy and CA variables, `EVE_API_URL`,
+`EVE_PUBLIC_API_URL`, job identifiers, the job's own scoped `EVE_JOB_TOKEN`,
+`EVE_ENV_NAME`/`EVE_ENV_NAMESPACE`, toolchain paths, app-link variables and
+declared `env_overrides`. `DATABASE_URL`, `EVE_INTERNAL_API_KEY`,
+`EVE_SECRETS_MASTER_KEY`, signing keys, storage and cloud credentials, and
+`KUBERNETES_*` never reach it. The same allowlist covers `action: { type: run }`
+commands and the legacy step-run `run` action.
+
+In-process execution is defence in depth only, not a sandbox. The script
+shares the worker's UID, filesystem and pod: it can read the worker's service
+account token (`/var/run/secrets/kubernetes.io/serviceaccount/token`, which
+carries the worker's cluster-wide RBAC), reach the pod's cloud identity through
+the metadata server (GKE Workload Identity, EKS IRSA or Pod Identity), and
+write files in the worker's HOME. Keeping `KUBERNETES_SERVICE_HOST`/`_PORT`
+out of the allowlist only stops tools from picking that identity up by
+accident. **Production deployments should run scripts in runner pods**:
+
+```yaml
+- name: EVE_SCRIPT_K8S_RUNNER
+  value: "true"
+- name: EVE_RUNNER_SERVICE_ACCOUNT      # a service account with no RBAC
+  value: eve-runner
+- name: EVE_RUNNER_NODE_SELECTOR_KEY    # schedule job code with the agents pool,
+  value: pool                           # not on the platform's core nodes
+- name: EVE_RUNNER_NODE_SELECTOR_VALUE
+  value: agents
+- name: EVE_RUNNER_TAINT_KEY
+  value: pool
+- name: EVE_RUNNER_TAINT_VALUE
+  value: agents
+- name: EVE_RUNNER_TAINT_EFFECT
+  value: NoSchedule
+```
+
+Runner pods (worker and agent-runtime alike) always set
+`automountServiceAccountToken: false`, drop all Linux capabilities, run as UID
+1000 with `allowPrivilegeEscalation: false`, and run as the namespace default
+service account when `EVE_RUNNER_SERVICE_ACCOUNT` is unset. A platform account
+(`eve-worker`, `eve-agent-runtime`) logs a warning, because a cloud identity
+bound to it (GKE Workload Identity, EKS IRSA) still reaches job code without a
+token. `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN=true` restores the token for
+an install that knowingly gives job code API access. Placement must be set in
+pairs: a key without a value fails the job rather than scheduling job code on
+the wrong pool. The worker's runner mounts the org filesystem claim
+`eve-org-fs-org-default`. With a `ReadWriteOnce` claim the runner must land on
+the node that already holds it, or it hangs in `ContainerCreating` with a
+Multi-Attach error. Set pod affinity to the agent runtime for that case:
+
+```yaml
+- name: EVE_RUNNER_POD_AFFINITY_KEY     # required affinity, topologyKey
+  value: app.kubernetes.io/name         # kubernetes.io/hostname
+- name: EVE_RUNNER_POD_AFFINITY_VALUE
+  value: eve-agent-runtime
+```
+
+`ReadWriteMany` claims (Filestore, EFS) need no affinity.
+
+`EVE_SCRIPT_K8S_RUNNER` stays off by default in code because local
+docker-compose has no Kubernetes, the k3d stack has not been verified with
+runner-pod scripts, and on a `ReadWriteOnce` org filesystem a runner without
+pod affinity would hang. The production default belongs in the deployment manifests.
+See [job-execution-isolation-plan.md](../plans/job-execution-isolation-plan.md)
+for what remains (runner pods still carry `DATABASE_URL` and the internal key;
+the worker's own RBAC is cluster-wide).
+
 ### Job Graph Expansion
 
 The pipeline expander converts steps into a job graph using job-based execution:
