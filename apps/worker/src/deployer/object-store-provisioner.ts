@@ -9,13 +9,16 @@ import {
   getServiceObjectStoreIsolation,
   generateStorageBucketId,
 } from '@eve/shared';
-import type {
-  AppCredentialProvisioner,
-  AppObjectStoreBinding,
-  AppObjectStoreCredentialMode,
-  AppObjectStoreScope,
+import {
+  APP_STORAGE_CREDENTIALS_SECRET,
+  type AppCredentialProvisioner,
+  type AppObjectStoreBinding,
+  type AppObjectStoreCredentialMode,
+  type AppObjectStoreEnvVar,
+  type AppObjectStoreScope,
 } from './app-credential-provisioner/factory';
 import type { BucketProvisioner } from './bucket-provisioner';
+import type { K8sService } from './k8s.service';
 
 export interface ObjectStoreDesiredBucket {
   serviceName: string;
@@ -44,6 +47,7 @@ export class ObjectStoreProvisioner {
     private readonly db: Db,
     private readonly bucketProvisioner: BucketProvisioner,
     private readonly appCredentialProvisioners: AppCredentialProvisioner[],
+    private readonly k8s: Pick<K8sService, 'createSecret' | 'deleteSecret'>,
     private readonly logger: Logger,
     private readonly resolveXeve: (service: Service) => Record<string, unknown> | null,
   ) {
@@ -83,6 +87,7 @@ export class ObjectStoreProvisioner {
     const provisioner = this.selectObjectStoreCredentialProvisioner(requestedMode, desired);
     const physicalBucketNames = [...new Set(desired.map((entry) => entry.physicalName))].sort();
     const binding = await provisioner.ensureForEnv(params.scope, physicalBucketNames);
+    await this.syncCredentialSecret(params.scope.namespace, binding);
 
     for (const entry of desired) {
       await this.provisionObjectStoreBucket(entry, params.scope, binding);
@@ -297,7 +302,7 @@ export class ObjectStoreProvisioner {
       componentName: string;
     },
     objectStorePlan?: EnvObjectStorePlan,
-  ): Promise<Array<{ name: string; value: string }>> {
+  ): Promise<AppObjectStoreEnvVar[]> {
     const buckets = getServiceObjectStoreBuckets(service);
     if (buckets.length === 0) {
       return [];
@@ -349,7 +354,27 @@ export class ObjectStoreProvisioner {
     return objectStorePlan.binding.serviceAccount?.name;
   }
 
+  /**
+   * Keep the namespace credentials Secret equal to the binding: written (and
+   * so rotated) on every deploy for static-key modes, removed for keyless ones.
+   */
+  private async syncCredentialSecret(namespace: string, binding: AppObjectStoreBinding): Promise<void> {
+    if (binding.credentialSecret) {
+      await this.k8s.createSecret(namespace, binding.credentialSecret.name, binding.credentialSecret.stringData);
+    } else {
+      await this.k8s.deleteSecret(namespace, APP_STORAGE_CREDENTIALS_SECRET);
+    }
+  }
+
   async removeObjectStoreBinding(scope: AppObjectStoreScope): Promise<void> {
+    try {
+      await this.k8s.deleteSecret(scope.namespace, APP_STORAGE_CREDENTIALS_SECRET);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to remove object-store credentials Secret for ${scope.projectSlug}/${scope.envName}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     for (const provisioner of this.appCredentialProvisioners) {
       if (!provisioner.availability().available) {
         continue;

@@ -757,10 +757,17 @@ gets:
 
 - `STORAGE_ENDPOINT`
 - `STORAGE_REGION`
-- `STORAGE_ACCESS_KEY_ID`
-- `STORAGE_SECRET_ACCESS_KEY`
+- `STORAGE_ACCESS_KEY_ID` and `STORAGE_SECRET_ACCESS_KEY`, read through
+  `secretKeyRef` from the namespace Secret `eve-app-storage-credentials`
 - `STORAGE_BUCKET_<NAME>` (for example, `STORAGE_BUCKET_UPLOADS`)
 - `STORAGE_FORCE_PATH_STYLE=true` for MinIO
+
+The key pair never appears in the Deployment or Job spec. Each deploy rewrites
+the Secret from the worker's current `EVE_APP_STORAGE_*` (or local
+`EVE_STORAGE_*`) values and stamps a hash of the binding, credentials
+included, on the pod template as `eve.app_bucket_binding_hash`, so a rotated
+key rolls the env's pods on its next deploy. The Secret is deleted when the
+env stops declaring buckets or moves to a keyless mode.
 
 With AWS IRSA, the declaring service gets:
 

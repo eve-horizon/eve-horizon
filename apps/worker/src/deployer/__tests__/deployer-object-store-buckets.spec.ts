@@ -7,14 +7,25 @@ import { DeployerService } from '../deployer.service.js';
 describe('DeployerService object-store buckets', () => {
   const originalEnv = { ...process.env };
 
+  const secretRef = (key: string) => ({
+    name: key,
+    valueFrom: { secretKeyRef: { name: 'eve-app-storage-credentials', key } },
+  });
+
   function configureObjectStoreMocks(
     deployer: DeployerService,
     bucketProvisioner: Record<string, unknown>,
     storageBuckets: Record<string, unknown> = {},
+    k8s: Record<string, unknown> = {},
   ) {
     Object.assign((deployer as any).objectStoreProvisioner, {
       bucketProvisioner,
       appCredentialProvisioners: createAppCredentialProvisioners(bucketProvisioner as any),
+      k8s: {
+        createSecret: vi.fn().mockResolvedValue(undefined),
+        deleteSecret: vi.fn().mockResolvedValue(undefined),
+        ...k8s,
+      },
       storageBuckets: {
         upsert: vi.fn().mockResolvedValue(undefined),
         deleteMissingForEnv: vi.fn().mockResolvedValue(0),
@@ -141,8 +152,8 @@ describe('DeployerService object-store buckets', () => {
     expect(envVars).toEqual(expect.arrayContaining([
       { name: 'STORAGE_ENDPOINT', value: 'http://storage.eve.lvh.me' },
       { name: 'STORAGE_REGION', value: 'us-east-1' },
-      { name: 'STORAGE_ACCESS_KEY_ID', value: 'minio' },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: 'minio-secret' },
+      secretRef('STORAGE_ACCESS_KEY_ID'),
+      secretRef('STORAGE_SECRET_ACCESS_KEY'),
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'eve-org-acme-media-dev-uploads' },
     ]));
     expect(envVars).not.toContainEqual({ name: 'STORAGE_FORCE_PATH_STYLE', value: 'true' });
@@ -308,6 +319,7 @@ describe('DeployerService object-store buckets', () => {
     const deployer = new DeployerService(null as any, null as any);
     const ensureBucket = vi.fn().mockResolvedValue(undefined);
     const upsert = vi.fn().mockResolvedValue(undefined);
+    const createSecret = vi.fn().mockResolvedValue(undefined);
     configureObjectStoreMocks(deployer, {
       isConfigured: true,
       backend: 's3',
@@ -315,7 +327,7 @@ describe('DeployerService object-store buckets', () => {
       ensureBucket,
       setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
       setBucketCors: vi.fn().mockResolvedValue(undefined),
-    }, { upsert });
+    }, { upsert }, { createSecret });
 
     const envVars = await resolveObjectStoreForService(
       deployer,
@@ -343,11 +355,95 @@ describe('DeployerService object-store buckets', () => {
     expect(envVars).toEqual(expect.arrayContaining([
       { name: 'STORAGE_ENDPOINT', value: 'https://s3.eu-west-1.amazonaws.com' },
       { name: 'STORAGE_REGION', value: 'eu-west-1' },
-      { name: 'STORAGE_ACCESS_KEY_ID', value: 'app-access-key' },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: 'app-secret-key' },
+      secretRef('STORAGE_ACCESS_KEY_ID'),
+      secretRef('STORAGE_SECRET_ACCESS_KEY'),
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'demo-eve-app-acme-media-staging-uploads' },
     ]));
     expect(envVars).not.toContainEqual({ name: 'STORAGE_FORCE_PATH_STYLE', value: 'true' });
+    // The key pair is written to the namespace Secret and never into the pod spec.
+    expect(createSecret).toHaveBeenCalledWith('eve-acme-media-staging', 'eve-app-storage-credentials', {
+      STORAGE_ACCESS_KEY_ID: 'app-access-key',
+      STORAGE_SECRET_ACCESS_KEY: 'app-secret-key',
+    });
+    expect(JSON.stringify(envVars)).not.toContain('app-secret-key');
+    expect(JSON.stringify(envVars)).not.toContain('app-access-key');
+  });
+
+  it('rolls pods when the shared key is rotated', async () => {
+    process.env = {
+      ...originalEnv,
+      EVE_APP_STORAGE_PUBLIC_ENDPOINT: 'https://storage.googleapis.com',
+      EVE_APP_STORAGE_REGION: 'europe-west2',
+      EVE_APP_STORAGE_ACCESS_KEY_ID: 'old-access-key',
+      EVE_APP_STORAGE_SECRET_ACCESS_KEY: 'old-secret-key',
+    };
+    const deployer = new DeployerService(null as any, null as any);
+    const createSecret = vi.fn().mockResolvedValue(undefined);
+    configureObjectStoreMocks(deployer, {
+      isConfigured: true,
+      backend: 'gcs',
+      getAppBucketName: vi.fn().mockReturnValue('eve-app-acme-media-prod-uploads'),
+      ensureBucket: vi.fn().mockResolvedValue(undefined),
+      setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
+      setBucketCors: vi.fn().mockResolvedValue(undefined),
+    }, {}, { createSecret });
+
+    const services: Record<string, Service> = {
+      api: {
+        image: 'ghcr.io/example/api:latest',
+        'x-eve': { object_store: { buckets: [{ name: 'uploads' }] } },
+      },
+      web: { image: 'ghcr.io/example/web:latest' },
+    };
+    const prepare = () => (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
+      services,
+      envWorkers: [],
+      scope: {
+        orgId: 'org_123',
+        projectId: 'proj_123',
+        envName: 'prod',
+        orgSlug: 'acme',
+        projectSlug: 'media',
+        namespace: 'eve-acme-media-prod',
+      },
+    });
+    const annotations = (plan: unknown, serviceName: string) => (deployer as any).buildPodAnnotations({
+      objectStorePlan: plan,
+      serviceName,
+    });
+
+    const before = await prepare();
+    process.env.EVE_APP_STORAGE_ACCESS_KEY_ID = 'new-access-key';
+    process.env.EVE_APP_STORAGE_SECRET_ACCESS_KEY = 'new-secret-key';
+    const after = await prepare();
+
+    expect(createSecret).toHaveBeenLastCalledWith('eve-acme-media-prod', 'eve-app-storage-credentials', {
+      STORAGE_ACCESS_KEY_ID: 'new-access-key',
+      STORAGE_SECRET_ACCESS_KEY: 'new-secret-key',
+    });
+    const hashBefore = annotations(before, 'api')['eve.app_bucket_binding_hash'];
+    const hashAfter = annotations(after, 'api')['eve.app_bucket_binding_hash'];
+    expect(hashBefore).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashAfter).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashAfter).not.toBe(hashBefore);
+    expect(annotations(after, 'web')).toBeUndefined();
+  });
+
+  it('removes the credentials Secret when the env binding is removed', async () => {
+    const deployer = new DeployerService(null as any, null as any);
+    const deleteSecret = vi.fn().mockResolvedValue(undefined);
+    configureObjectStoreMocks(deployer, { isConfigured: true, backend: 's3' }, {}, { deleteSecret });
+
+    await (deployer as any).objectStoreProvisioner.removeObjectStoreBinding({
+      orgId: 'org_123',
+      projectId: 'proj_123',
+      envName: 'prod',
+      orgSlug: 'acme',
+      projectSlug: 'media',
+      namespace: 'eve-acme-media-prod',
+    });
+
+    expect(deleteSecret).toHaveBeenCalledWith('eve-acme-media-prod', 'eve-app-storage-credentials');
   });
 
   it('honors EVE_APP_BUCKET_AUTH_MODE=shared when auto isolation could use IRSA', async () => {
@@ -401,8 +497,8 @@ describe('DeployerService object-store buckets', () => {
       service_account_name: null,
     }));
     expect(envVars).toEqual(expect.arrayContaining([
-      { name: 'STORAGE_ACCESS_KEY_ID', value: 'app-access-key' },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: 'app-secret-key' },
+      secretRef('STORAGE_ACCESS_KEY_ID'),
+      secretRef('STORAGE_SECRET_ACCESS_KEY'),
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'demo-eve-app-acme-media-staging-uploads' },
     ]));
     expect(envVars.some((entry: { name: string }) => entry.name === 'STORAGE_AUTH_MODE')).toBe(false);
@@ -457,6 +553,8 @@ describe('DeployerService object-store buckets', () => {
     const deployer = new DeployerService(null as any, null as any);
     const upsert = vi.fn().mockResolvedValue(undefined);
     const deleteMissingForEnv = vi.fn().mockResolvedValue(0);
+    const createSecret = vi.fn().mockResolvedValue(undefined);
+    const deleteSecret = vi.fn().mockResolvedValue(undefined);
     configureObjectStoreMocks(deployer, {
       isConfigured: true,
       backend: 's3',
@@ -464,7 +562,7 @@ describe('DeployerService object-store buckets', () => {
       ensureBucket: vi.fn().mockResolvedValue(undefined),
       setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
       setBucketCors: vi.fn().mockResolvedValue(undefined),
-    }, { upsert, deleteMissingForEnv });
+    }, { upsert, deleteMissingForEnv }, { createSecret, deleteSecret });
 
     const ensureForEnv = vi.fn().mockResolvedValue({
       mode: 'irsa',
@@ -529,6 +627,9 @@ describe('DeployerService object-store buckets', () => {
     });
 
     expect(ensureForEnv).toHaveBeenCalledTimes(1);
+    // A keyless binding leaves no static credentials behind in the namespace.
+    expect(createSecret).not.toHaveBeenCalled();
+    expect(deleteSecret).toHaveBeenCalledWith('eve-acme-media-dev', 'eve-app-storage-credentials');
     expect(ensureForEnv).toHaveBeenCalledWith(
       expect.objectContaining({ namespace: 'eve-acme-media-dev' }),
       [
