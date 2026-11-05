@@ -53,8 +53,15 @@ Commands in script steps, `action: { type: run }` and legacy pipeline-run
 `run` steps start from an allowlisted environment (`PATH`, `HOME`, locale,
 proxy and CA settings, `EVE_API_URL`, job and env context), not the worker's
 own. Worker credentials such as `EVE_STORAGE_*` and `EVE_APP_STORAGE_*` keys,
-`EVE_INTERNAL_API_KEY` and database URLs are never inherited; use project
-secrets or `env_overrides` to give a command what it needs.
+`EVE_INTERNAL_API_KEY` and database URLs are not passed in the environment;
+use project secrets or `env_overrides` to give a command what it needs.
+
+This keeps credentials out of the environment; it is not isolation. A command
+that runs inside the worker pod (every pipeline-run step, and script or action
+steps unless they are sent to runner pods) can still read the worker's mounted
+Kubernetes service account token and, on GKE, ask the metadata server for the
+worker's Workload Identity credentials. Only running steps in separate runner
+pods removes the worker identity from their reach.
 
 Pipeline definitions and individual steps can declare `toolchains` with valid
 values `python`, `media`, `rust`, `java`, and `kotlin`. Script, shorthand
