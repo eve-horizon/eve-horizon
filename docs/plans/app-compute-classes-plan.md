@@ -1,7 +1,14 @@
 # App Compute Classes
 
-Status: Ready for implementation
-Last Updated: 2026-02-15
+Status: Placement contract (Phase 3, step 9) implemented; compute classes not yet
+Last Updated: 2026-11-05
+
+> Implementation note (2026-11-05): the placement contract below is live in the
+> worker (`apps/worker/src/deployer/app-placement.ts`) for app Deployments and
+> service Jobs, behind an extra `EVE_APP_PLACEMENT_ENABLED` flag (default off)
+> because the infra overlays already set the selector/taint variables. Without
+> the flag, upgrading would have moved existing apps onto the app pool. See
+> `docs/system/deployment.md` (App Node Placement).
 
 Inputs:
 - `../eve-horizon-infra/docs/plans/gcp-cloud-support.md` (App Compute Contract section)
