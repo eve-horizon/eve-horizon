@@ -135,7 +135,28 @@ List results are ordered by `created_at` descending (newest first).
 
 ### 6. Error Responses
 
-Errors currently use NestJS default error shapes. We may add a standardized error envelope later, but it is not enforced yet.
+Errors currently use NestJS default error shapes:
+`{ "statusCode": 404, "error": "Not Found", "message": "..." }`. We may add a
+standardized error envelope later, but it is not enforced yet.
+
+A request body that fails its Zod schema gets a `400` with the same fields plus
+one entry per failed check:
+
+```json
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "errors": [
+    { "path": "slug", "message": "Slug must be 2-12 lowercase alphanumeric characters starting with a letter", "code": "invalid_string" }
+  ]
+}
+```
+
+`path` is the dotted field path (`""` for the body itself) and `code` is the Zod
+issue code. The CLI prints each issue as `path: message` under the error line.
+Body validation goes through `ZodValidationPipe`; endpoints should use it rather
+than calling `Schema.parse()` themselves, which turns a bad request into a 500.
 
 ### 7. Soft Delete
 

@@ -22,6 +22,35 @@ function isZodError(error: unknown): error is { name: string; errors: ZodIssue[]
   );
 }
 
+/** One failed check in a validation error response. */
+export interface ValidationIssue {
+  /** Dotted path to the offending field, `''` for the body itself. */
+  path: string;
+  message: string;
+  /** Zod issue code, for example `too_big` or `invalid_type`. */
+  code: string;
+}
+
+/**
+ * The 400 a request gets when its body fails schema validation:
+ * `{ statusCode, error, message: 'Validation failed', errors: [{ path, message, code }] }`.
+ * `statusCode` and `error` match Nest's default error body; `message` and the
+ * `path`/`message` of each issue are the original contract and must not change.
+ */
+export function validationFailedException(issues: readonly ZodIssue[]): BadRequestException {
+  const errors: ValidationIssue[] = issues.map((issue) => ({
+    path: issue.path.join('.'),
+    message: issue.message,
+    code: issue.code,
+  }));
+  return new BadRequestException({
+    statusCode: 400,
+    error: 'Bad Request',
+    message: 'Validation failed',
+    errors,
+  });
+}
+
 @Injectable()
 export class ZodValidationPipe implements PipeTransform {
   constructor(private schema: ZodSchema) {}
@@ -41,13 +70,7 @@ export class ZodValidationPipe implements PipeTransform {
       return this.schema.parse(value);
     } catch (error) {
       if (isZodError(error)) {
-        throw new BadRequestException({
-          message: 'Validation failed',
-          errors: error.errors.map((e) => ({
-            path: e.path.join('.'),
-            message: e.message,
-          })),
-        });
+        throw validationFailedException(error.errors);
       }
       throw error;
     }

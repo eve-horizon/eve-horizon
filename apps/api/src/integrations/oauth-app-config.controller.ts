@@ -10,8 +10,10 @@ import {
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { IntegrationsService } from './integrations.service.js';
+import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import {
   CreateOAuthAppConfigRequestSchema,
+  type CreateOAuthAppConfigRequest,
   type OAuthAppConfigResponse,
   type ProviderSetupInfoResponse,
 } from '@eve/shared';
@@ -29,9 +31,8 @@ export class OAuthAppConfigController {
   async upsertConfig(
     @Param('org_id') orgId: string,
     @Param('provider') provider: string,
-    @Body() body: unknown,
+    @Body(new ZodValidationPipe(CreateOAuthAppConfigRequestSchema)) payload: CreateOAuthAppConfigRequest,
   ): Promise<OAuthAppConfigResponse> {
-    const payload = CreateOAuthAppConfigRequestSchema.parse(body);
     return this.integrationsService.upsertOAuthAppConfig(orgId, provider, payload);
   }
 
