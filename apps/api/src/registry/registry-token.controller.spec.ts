@@ -9,15 +9,21 @@ import {
 describe('registry signing key formats', () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+  // An internal caller never queries the database, so no DB client is needed.
+  const internalCaller = { kind: 'internal' } as const;
+  const noDb = (() => {
+    throw new Error('internal callers must not query the database');
+  }) as any;
 
   it.each([
     ['PEM', pem],
     ['\\n-escaped PEM', pem.trimEnd().replace(/\n/g, '\\n')],
     ['base64-encoded PEM', Buffer.from(pem).toString('base64')],
-  ])('issues a token signed with a %s', (_label, value) => {
-    const controller = new RegistryTokenController();
-    const response = (controller as any).buildScopedToken(
+  ])('issues a token signed with a %s', async (_label, value) => {
+    const controller = new RegistryTokenController(noDb);
+    const response = await (controller as any).buildScopedToken(
       { EVE_REGISTRY_SIGNING_KEY: value },
+      internalCaller,
       'repository:my-app:pull',
       'eve-registry',
     );
@@ -26,13 +32,14 @@ describe('registry signing key formats', () => {
     expect(kid).toBe(computeRfc7638ThumbprintFromPrivateKey(createPrivateKey(pem)));
   });
 
-  it('names the variable when the key cannot be read', () => {
-    const controller = new RegistryTokenController();
-    expect(() => (controller as any).buildScopedToken(
+  it('names the variable when the key cannot be read', async () => {
+    const controller = new RegistryTokenController(noDb);
+    await expect((controller as any).buildScopedToken(
       { EVE_REGISTRY_SIGNING_KEY: 'not-a-key' },
+      internalCaller,
       'repository:my-app:pull',
       'eve-registry',
-    )).toThrow(/EVE_REGISTRY_SIGNING_KEY is not a PEM key/);
+    )).rejects.toThrow(/EVE_REGISTRY_SIGNING_KEY is not a PEM key/);
   });
 });
 
