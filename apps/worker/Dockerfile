@@ -266,6 +266,19 @@ RUN mkdir -p \
     /home/node/.sdkman \
     && chown -R node:node /opt/eve /home/node
 
+# Root-owned guards in the service's HOME. Node looks for modules missing from
+# node_modules in ~/.node_modules and ~/.node_libraries, and the Kubernetes
+# client reads ~/.kube/config before in-cluster config. Job code runs as the
+# same UID and must not be able to create them; each holds a root-owned file so
+# it cannot be removed and recreated either.
+RUN for d in .node_modules .node_libraries .kube; do \
+      mkdir -p "/home/node/$d" \
+      && touch "/home/node/$d/.eve-root-owned" \
+      && chown -R root:root "/home/node/$d" \
+      && chmod 0755 "/home/node/$d" \
+      && chmod 0444 "/home/node/$d/.eve-root-owned"; \
+    done
+
 # Configure git identity for automated commits (eve-worker skills install)
 RUN git config --system user.email "eve-worker@eve-horizon.local" \
     && git config --system user.name "Eve Worker"
@@ -284,25 +297,26 @@ RUN chmod +x /usr/local/bin/eve-worker-entrypoint /usr/local/bin/eve-skills /usr
 # =============================================================================
 FROM runtime-setup AS base
 
-# Copy app code from build stage (--chown avoids extra layer from chown -R)
+# Copy app code from build stage. It stays root-owned: job code runs as `node`
+# and must not be able to modify the service it can later make restart.
 USER root
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/apps/worker/node_modules ./apps/worker/node_modules
-COPY --from=build --chown=node:node /app/apps/worker/dist ./apps/worker/dist
-COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build --chown=node:node /app/packages/shared/node_modules ./packages/shared/node_modules
-COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages/shared/
-COPY --from=build --chown=node:node /app/packages/db/dist ./packages/db/dist
-COPY --from=build --chown=node:node /app/packages/db/node_modules ./packages/db/node_modules
-COPY --from=build --chown=node:node /app/packages/db/package.json ./packages/db/
-COPY --from=build --chown=node:node /app/packages/db/migrations ./packages/db/migrations
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/dist ./packages/eve-agent-cli/dist
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/bin ./packages/eve-agent-cli/bin
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/node_modules ./packages/eve-agent-cli/node_modules
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/package.json ./packages/eve-agent-cli/
-COPY --from=build --chown=node:node /app/packages/cli/dist ./packages/cli/dist
-COPY --from=build --chown=node:node /app/packages/cli/bin ./packages/cli/bin
-COPY --from=build --chown=node:node /app/packages/cli/package.json ./packages/cli/
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/apps/worker/node_modules ./apps/worker/node_modules
+COPY --from=build /app/apps/worker/dist ./apps/worker/dist
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=build /app/packages/shared/package.json ./packages/shared/
+COPY --from=build /app/packages/db/dist ./packages/db/dist
+COPY --from=build /app/packages/db/node_modules ./packages/db/node_modules
+COPY --from=build /app/packages/db/package.json ./packages/db/
+COPY --from=build /app/packages/db/migrations ./packages/db/migrations
+COPY --from=build /app/packages/eve-agent-cli/dist ./packages/eve-agent-cli/dist
+COPY --from=build /app/packages/eve-agent-cli/bin ./packages/eve-agent-cli/bin
+COPY --from=build /app/packages/eve-agent-cli/node_modules ./packages/eve-agent-cli/node_modules
+COPY --from=build /app/packages/eve-agent-cli/package.json ./packages/eve-agent-cli/
+COPY --from=build /app/packages/cli/dist ./packages/cli/dist
+COPY --from=build /app/packages/cli/bin ./packages/cli/bin
+COPY --from=build /app/packages/cli/package.json ./packages/cli/
 
 # Link CLIs globally
 RUN ln -s /app/packages/cli/bin/eve.js /usr/local/bin/eve
@@ -311,8 +325,9 @@ WORKDIR /app/apps/worker
 USER node
 # Use tini as init system for proper zombie reaping and signal forwarding
 # This prevents orphaned processes from accumulating and exhausting resources
-ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "eve-worker-entrypoint"]
-CMD ["/usr/local/libexec/eve-node", "dist/main.js"]
+ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "/usr/local/bin/eve-worker-entrypoint"]
+# --disable-sigusr1: a same-UID job could otherwise open the inspector with SIGUSR1.
+CMD ["/usr/local/libexec/eve-node", "--disable-sigusr1", "dist/main.js"]
 
 # =============================================================================
 # Stage: media
@@ -447,8 +462,9 @@ ENV PATH="${KOTLIN_HOME}/bin:${PATH}"
 
 WORKDIR /app/apps/worker
 USER node
-ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "eve-worker-entrypoint"]
-CMD ["/usr/local/libexec/eve-node", "dist/main.js"]
+ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "/usr/local/bin/eve-worker-entrypoint"]
+# --disable-sigusr1: a same-UID job could otherwise open the inspector with SIGUSR1.
+CMD ["/usr/local/libexec/eve-node", "--disable-sigusr1", "dist/main.js"]
 
 # =============================================================================
 # Stage: full

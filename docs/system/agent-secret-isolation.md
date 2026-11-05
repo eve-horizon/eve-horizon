@@ -80,14 +80,37 @@ entries become root-owned and same-UID processes can no longer read its
 environment, file descriptors or memory. Harnesses and scripts keep the normal
 `/usr/local/bin/node`.
 
-- At boot the worker and agent runtime check the owner of
-  `/proc/self/environ` and log `process is non-dumpable`, or warn with the fix.
-  `EVE_REQUIRE_ENVIRON_PROTECTION=true` makes them refuse to start instead.
-- Helper children (git, crane, tar) start without `DATABASE_URL`, the internal
-  key, the secrets master key, signing keys or storage secrets
-  (`withoutPlatformSecrets()`), because a child's environ is readable while it
-  runs.
-- The worker's orphan reaper starts with `env -i`.
+Same-UID job code has three other routes, each closed in the image or code:
+
+- **Debugger.** SIGUSR1 opens Node's inspector on `127.0.0.1:9229`, and
+  `Runtime.evaluate("process.env")` then reads everything. Both services start
+  with `--disable-sigusr1`.
+- **Helper children.** A child's environ is readable while it runs. Every child
+  a service starts on its own behalf (git, kubectl, crane, tar, buildctl,
+  docker, pg_dump) gets an allowlisted environment with no credentials
+  (`serviceHelperEnv()`), plus only what that call needs (a `PGPASSWORD`, a
+  `GIT_SSH_COMMAND`, a `DOCKER_CONFIG` directory). A static test fails on any
+  service spawn that passes or inherits `process.env`.
+- **Planted programs and config.** Job code can write `~/.local/bin` (first on
+  the image PATH), `~/.gitconfig`, repository `.git/config` and hooks, and the
+  toolchain cache, and it can force a container restart. So helpers resolve
+  through a PATH of root-owned directories only; service git ignores global
+  config (`GIT_CONFIG_GLOBAL=/dev/null`) and runs no hooks or fsmonitor; the
+  worker entrypoint runs by absolute path with a root-owned PATH and sources
+  toolchain `env.sh` only in single-use runner pods; the worker's app code is
+  root-owned; and root-owned guards stop jobs creating `~/.node_modules`,
+  `~/.node_libraries` (Node's global module lookup) or `~/.kube` (read by the
+  Kubernetes client before in-cluster config). The orphan reaper protects
+  processes by PID, not by command line.
+
+At boot the worker and agent runtime log `process is non-dumpable with SIGUSR1
+disabled`, or warn with the fix. `EVE_REQUIRE_ENVIRON_PROTECTION=true` makes
+them refuse to start instead.
+
+This is defence in depth for code that shares the service's container. It does
+not remove the service account token or cloud identity of the pod; production
+should run pipeline scripts in runner pods and keep harness runtimes free of
+cluster RBAC.
 
 Concurrent jobs on one runtime still share a UID, so one job can read another
 job's workspace and harness environment. See

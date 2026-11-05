@@ -9,7 +9,7 @@ import type {
   ResolvedGitMetadata,
   GitCreateBranch,
 } from '../schemas/git-controls.js';
-import { withoutPlatformSecrets } from '../process-isolation.js';
+import { serviceGitEnv } from '../process-isolation.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -149,12 +149,11 @@ export class GitWorkspace {
     options?: { cwd?: string; env?: NodeJS.ProcessEnv },
   ): Promise<ExecResult> {
     const cwd = options?.cwd ?? this.repoPath;
-    // git never needs the service's own credentials; keep them out of its /proc environ.
-    const env = {
-      ...withoutPlatformSecrets(process.env),
+    // Allowlisted env (no service credentials), trusted PATH, no global config or hooks.
+    const env = serviceGitEnv({
       ...this.gitAuth?.env,
       ...options?.env,
-    };
+    });
 
     try {
       const result = await execFileAsync('git', args, { cwd, env });

@@ -73,12 +73,15 @@ active attempts and shared toolchain caches.
 
 ## Process isolation
 
-Inline harnesses run as the runtime's UID. The image starts the runtime from
-`/usr/local/libexec/eve-node`, an execute-only copy of node, so the kernel marks
-it non-dumpable and harnesses cannot read its environment (`DATABASE_URL`,
-`EVE_INTERNAL_API_KEY`) from `/proc/1/environ` or its memory. The boot log says
-`AGENT-RUNTIME: process is non-dumpable`; a warning means the pod is not
-protected (for example a `command:` override that runs plain `node`). Set
+Inline harnesses run as the runtime's UID. The image starts the runtime with
+`/usr/local/libexec/eve-node --disable-sigusr1 dist/main.js`: an execute-only
+copy of node, so the kernel marks it non-dumpable and harnesses cannot read its
+environment (`DATABASE_URL`, `EVE_INTERNAL_API_KEY`) from `/proc/1/environ` or
+its memory, and no SIGUSR1 inspector. Helpers it runs (git, crane, kubectl)
+get an allowlisted environment without credentials. The boot log says
+`AGENT-RUNTIME: process is non-dumpable with SIGUSR1 disabled`; a warning means
+the pod is not protected (for example a `command:` override that runs plain
+`node`). Set
 `EVE_REQUIRE_ENVIRON_PROTECTION=true` to refuse to start in that case. See
 [agent-secret-isolation.md](./agent-secret-isolation.md#layer-1b-the-runtimes-own-environment).
 

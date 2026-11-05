@@ -9,6 +9,7 @@ import {
   BuildServiceParams,
   BuildBackend,
 } from './image-builder.interface.js';
+import { serviceHelperEnv } from '@eve/shared';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
@@ -266,10 +267,8 @@ export class BuildKitBuilder implements BuildBackend {
       onLine?: (line: string) => void;
     },
   ): Promise<{ exitCode: number }> {
-    const env = {
-      ...process.env,
-      ...opts.env,
-    };
+    // Allowlisted env plus the per-build DOCKER_CONFIG; no service credentials.
+    const env = serviceHelperEnv(opts.env);
 
     const proc = spawn('buildctl', args, {
       cwd: opts.cwd,

@@ -49,18 +49,48 @@ in the worker's orphan reaper, a background bash loop started by the entrypoint.
    `/usr/local/bin/node`, so tools that read the node binary (SEA builds,
    `ldd`, packagers) are unaffected. Cost: one extra copy of node per image
    (about 110 MB uncompressed).
-2. **Startup self-check.** `checkEnvironProtection()` (shared) stats
-   `/proc/self/environ`: root-owned means non-dumpable. The worker and agent
-   runtime log the result at boot and warn with the fix when exposed (for
-   example a deployment that overrides `command: ["node", ...]`).
-   `EVE_REQUIRE_ENVIRON_PROTECTION=true` turns the warning into a refusal to
-   start; recommended for production once the new images are rolled out.
-3. **Helper children without platform credentials.** `withoutPlatformSecrets()`
-   removes `DATABASE_URL`, `EVE_INTERNAL_API_KEY`, `EVE_SECRETS_MASTER_KEY`,
-   signing keys and storage secrets from the env of git (`runGit`,
-   `GitWorkspace.runGit`), crane and tar.
-4. **Orphan reaper.** The worker entrypoint starts the reaper with `env -i`
-   and only its own settings.
+2. **No inspector.** Every service `CMD` passes `--disable-sigusr1`. Without
+   it, a same-UID process sends SIGUSR1, connects to `127.0.0.1:9229` and runs
+   `Runtime.evaluate("process.env.X")`, which non-dumpable does not stop.
+3. **Startup self-check.** `checkProcessIsolation()` (shared) stats
+   `/proc/self/environ` (root-owned means non-dumpable) and checks
+   `process.execArgv`/`NODE_OPTIONS` for `--disable-sigusr1`, no `--inspect*`,
+   and no open inspector. The worker and agent runtime log the result at boot
+   and warn with the fix when exposed (for example a deployment that overrides
+   `command: ["node", ...]`). `EVE_REQUIRE_ENVIRON_PROTECTION=true` turns the
+   warning into a refusal to start; recommended for production once the new
+   images are rolled out.
+4. **Helper children get an allowlist.** `serviceHelperEnv()` gives every child
+   a service runs on its own behalf (git, kubectl, crane, tar, buildctl,
+   docker, kaniko's git, pg_dump/psql/pg_restore) only locale, proxy, CA,
+   Kubernetes service discovery, registry config and cloud identity pointers
+   (role ARN, token file paths; never static keys), plus per-call extras. A
+   static test (`apps/worker/src/process-isolation.spawn-env.spec.ts`) fails
+   on any service spawn that passes or omits `env`.
+5. **No planted programs or config.** Helpers resolve through `trustedPath()`:
+   PATH entries whose every ancestor is root-owned and not group- or
+   world-writable (Linux only; local development keeps its PATH). Service git
+   gets `GIT_CONFIG_GLOBAL=/dev/null` and command-line-level
+   `core.hooksPath=/dev/null` and `core.fsmonitor=false`, so `~/.gitconfig`,
+   repository hooks and `core.hooksPath` written by a job are ignored.
+   `/etc/gitconfig` stays enabled: it is root-owned image content and holds the
+   worker's commit identity, so `GIT_CONFIG_NOSYSTEM` would add nothing but
+   break `git tag -a`. Toolchain `env.sh` (a job-writable cache) is sourced
+   with the helper env, never the service env.
+6. **Worker entrypoint and image.** `ENTRYPOINT` names the script by absolute
+   path (tini would otherwise search a PATH that starts with job-writable
+   `~/.local/bin`), the script is `#!/bin/bash`, runs its own commands with a
+   root-owned PATH, and sources `/opt/eve/toolchains/*/env.sh` only in runner
+   pods (single job, `restartPolicy: Never`, before any job code). The worker's
+   app code is copied root-owned (it was `node`-owned, so a job could edit the
+   service and force a restart). Both images add root-owned, non-removable
+   guards for `~/.node_modules` and `~/.node_libraries` (Node's global module
+   lookup) and `~/.kube` (read by the Kubernetes client before in-cluster
+   config).
+7. **Orphan reaper.** Starts with `env -i`, and protects PID 1, itself and the
+   service by PID. It used to spare any process whose arguments contained
+   `sleep`, `tini` or `node dist/main.js`, so a job's `/proc` poller lived
+   forever.
 
 ### Verified offline
 
@@ -87,8 +117,23 @@ with `DATABASE_URL` in its environment:
 | `process.execPath` child process | runs | runs |
 | `worker_threads` | run | run |
 
+SIGUSR1, same container, service from `eve-node` with `SECRET` in its env:
+
+| Service flags | After a same-UID `kill -USR1` | Attacker `Runtime.evaluate("process.env.SECRET")` |
+| --- | --- | --- |
+| none | inspector listening on 127.0.0.1:9229 | returned the secret |
+| `--disable-sigusr1` | port closed, service still running | not possible |
+
+Unit tests run real git with a planted `~/.gitconfig` (alias, identity) and
+planted repository hooks (`.git/hooks` and `core.hooksPath`): none is honoured;
+and real git children show no service credential in their environment. The
+reaper is exercised with a fake `ps` listing a poller whose arguments contain
+`sleep` and `node dist/main.js`: it is reaped, the service PID is not.
+
 Not verified offline: the full service images (not built), Kubernetes nodes'
-`fs.suid_dumpable`, and the harness CLIs end to end (live-test list below).
+`fs.suid_dumpable`, kubectl with a read-only `~/.kube` (its discovery cache
+cannot be written; expected to be non-fatal), and the harness CLIs end to end
+(live-test list below).
 
 Unit tests: `process-isolation.spec.ts` (exposure classification, strict mode,
 platform-secret stripping, real `git` children without the credentials), and
@@ -110,10 +155,15 @@ image guards in both apps (`process-isolation.image.spec.ts`).
   Kubernetes API in inline mode; deployments should set
   `automountServiceAccountToken: false` on it and bind no cloud identity to its
   account (the template's storage identity binding is tracked separately).
-- **Other children with the full environment.** Worker-only spawn sites still
-  pass `process.env`: `buildctl`, the managed-database snapshot tools
-  (`pg_dump`, `psql`) and the worker's legacy git helpers. They matter only for
-  in-process scripts running concurrently; runner-pod scripts avoid them.
+- **Job-writable shared state.** The toolchain cache (`/opt/eve/toolchains`),
+  cc-mirror variants in `~/.local/bin` and `~/.docker/config.json` are writable
+  by every job on the pod, so one job can tamper with what the next job runs.
+  The service no longer executes them with its credentials, but this is
+  job-to-job integrity, closed only by per-job UIDs or runner pods.
+- **Same container is defence in depth.** In-process scripts and inline
+  harnesses still reach the pod's service account token file and, on GKE or
+  EKS, any cloud identity bound to the pod. Production should run pipeline
+  scripts in runner pods with a token-less service account.
 - **Network.** A harness can call unauthenticated internal endpoints (worker
   and agent-runtime `/invoke`); tracked separately with NetworkPolicy and an
   internal-key check.
@@ -166,7 +216,12 @@ profile and a live-cluster test matrix across all harnesses.
 - [ ] Harness matrix (claude, mclaude, zai, codex, code, gemini, pi) completes
       a job with toolchains; `process.execPath` children and toolchain env
       sourcing work from `eve-node`.
-- [ ] Orphan reaper still lists and reaps orphans; `ps` shows `eve-node`.
+- [ ] `kill -USR1 1` (agent runtime) and `kill -USR1 <worker pid>` from a job
+      leave `127.0.0.1:9229` closed and the service running.
+- [ ] Orphan reaper reaps a detached job poller and never the service.
+- [ ] Runner-mode `kubectl apply` works with the root-owned `~/.kube`.
+- [ ] A worker restart after a job writes `~/.local/bin/git`,
+      `~/.gitconfig` and `/opt/eve/toolchains/x/env.sh` runs none of them.
 - [ ] `EVE_REQUIRE_ENVIRON_PROTECTION=true` with an image that runs plain
       `node` refuses to start; with the new image it starts.
 - [ ] `cat /proc/sys/fs/suid_dumpable` on each node pool is 0 or 2.

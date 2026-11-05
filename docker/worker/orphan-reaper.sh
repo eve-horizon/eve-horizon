@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Orphan Process Reaper for Eve Worker Container
 #
 # This script runs as a background daemon to periodically detect and kill
@@ -28,30 +28,12 @@ ORPHAN_AGE_THRESHOLD="${EVE_ORPHAN_AGE:-300}"       # Only kill processes older 
 REAPER_LOG="${EVE_REAPER_LOG:-/tmp/orphan-reaper.log}"
 REAPER_PID_FILE="/tmp/orphan-reaper.pid"
 
-# Essential processes to never kill (patterns)
-# Note: These match against full `ps -eo pid,ppid,etimes,comm,args` lines
-# which have leading whitespace, so don't use ^ anchors
-ESSENTIAL_PATTERNS=(
-  "tini"
-  "node dist/main.js"
-  "orphan-reaper"
-  "bash.*entrypoint"
-  "/usr/bin/dumb-init"
-  "sleep"              # Our own sleep calls
-)
-
-# Build grep pattern for essential processes
-build_essential_pattern() {
-  local pattern=""
-  for p in "${ESSENTIAL_PATTERNS[@]}"; do
-    if [[ -n "$pattern" ]]; then
-      pattern="$pattern|$p"
-    else
-      pattern="$p"
-    fi
-  done
-  echo "$pattern"
-}
+# Processes that are never reaped, by PID: PID 1 (tini), this reaper, and the
+# service the entrypoint exec'd into (EVE_REAPER_SERVICE_PID). Matching command
+# lines instead would let any job process that mentions "sleep" or
+# "node dist/main.js" in its arguments live forever.
+SERVICE_PID="${EVE_REAPER_SERVICE_PID:-}"
+REAPER_SELF_PID="$$"
 
 # Get current timestamp in seconds since epoch
 now_seconds() {
@@ -91,14 +73,13 @@ get_process_age() {
 
 # Find orphaned processes (PPID=1, excluding essentials)
 find_orphans() {
-  local essential_pattern
-  essential_pattern=$(build_essential_pattern)
+  local daemon_pid=""
+  [[ -f "$REAPER_PID_FILE" ]] && daemon_pid=$(cat "$REAPER_PID_FILE" 2>/dev/null || true)
 
-  # Find all processes with PPID=1 (orphaned/reparented to init)
-  # Exclude PID 1 itself and essential patterns
+  # Processes with PPID=1 (reparented to init), minus the protected PIDs.
   ps -eo pid,ppid,etimes,comm,args --no-headers 2>/dev/null | \
-    awk '$2 == 1 && $1 != 1' | \
-    grep -vE "$essential_pattern" || true
+    awk -v self="$REAPER_SELF_PID" -v service="$SERVICE_PID" -v daemon="$daemon_pid" \
+      '$2 == 1 && $1 != 1 && $1 != self && $1 != service && $1 != daemon' || true
 }
 
 # Count orphaned processes
@@ -129,6 +110,13 @@ kill_orphans() {
   local killed=0
   local skipped=0
 
+  # Without the service PID the service itself (PPID 1) looks like an orphan.
+  if [[ -z "$SERVICE_PID" ]]; then
+    echo "[$(date -Iseconds)] EVE_REAPER_SERVICE_PID is not set; not reaping" >> "$REAPER_LOG"
+    echo "killed=0 skipped=0"
+    return 0
+  fi
+
   find_orphans | while read -r pid ppid etimes comm args; do
     # Check age threshold (etimes is elapsed time in seconds)
     if [[ "$force" == "true" ]] || [[ "$etimes" -gt "$ORPHAN_AGE_THRESHOLD" ]]; then
@@ -145,6 +133,7 @@ kill_orphans() {
 
 # Reaper daemon loop
 run_daemon() {
+  REAPER_SELF_PID="$BASHPID"
   echo "[$(date -Iseconds)] Orphan reaper started (interval=${REAPER_INTERVAL}s, threshold=${ORPHAN_AGE_THRESHOLD}s)" >> "$REAPER_LOG"
 
   while true; do

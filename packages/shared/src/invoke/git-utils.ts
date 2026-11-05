@@ -10,7 +10,7 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import type { ResolvedGitMetadata } from '../schemas/git-controls.js';
 import type { UpdateAttemptGitMetaFn } from './types.js';
-import { withoutPlatformSecrets } from '../process-isolation.js';
+import { serviceGitEnv } from '../process-isolation.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +28,8 @@ export async function runGit(
   options?: { env?: NodeJS.ProcessEnv; cwd?: string },
 ): Promise<ExecResult> {
   return (await execFileAsync('git', args, {
-    env: options?.env ?? withoutPlatformSecrets(process.env),
+    // options.env carries per-call extras only (for example GIT_SSH_COMMAND).
+    env: serviceGitEnv(options?.env),
     cwd: options?.cwd,
   })) as ExecResult;
 }

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { serviceHelperEnv } from '../process-isolation.js';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import type { ObjectStorageClient } from '../storage/index.js';
@@ -52,7 +53,7 @@ export async function executeSnapshot(
   ];
 
   const child = spawn('pg_dump', args, {
-    env: { ...process.env, PGPASSWORD: dbConfig.password },
+    env: serviceHelperEnv({ PGPASSWORD: dbConfig.password }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -136,7 +137,7 @@ export async function executeRestore(
   ];
 
   const child = spawn('pg_restore', args, {
-    env: { ...process.env, PGPASSWORD: dbConfig.password },
+    env: serviceHelperEnv({ PGPASSWORD: dbConfig.password }),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -201,7 +202,7 @@ export async function terminateConnections(
     '--command', sql,
     adminConfig.database,
   ], {
-    env: { ...process.env, PGPASSWORD: adminConfig.password },
+    env: serviceHelperEnv({ PGPASSWORD: adminConfig.password }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -231,7 +232,7 @@ async function queryDbSize(config: SnapshotExecutorConfig): Promise<number> {
       '--command', sql,
       config.database,
     ], {
-      env: { ...process.env, PGPASSWORD: config.password },
+      env: serviceHelperEnv({ PGPASSWORD: config.password }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -257,7 +258,7 @@ async function queryPgVersion(config: SnapshotExecutorConfig): Promise<string> {
       '--command', 'SHOW server_version;',
       config.database,
     ], {
-      env: { ...process.env, PGPASSWORD: config.password },
+      env: serviceHelperEnv({ PGPASSWORD: config.password }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

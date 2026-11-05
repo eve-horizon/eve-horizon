@@ -139,6 +139,7 @@ import {
 } from './toolchains';
 import type { SecretResolveItem, EveAgentCliOptions } from '@eve/shared';
 import { selectedCodexAuth, type CodexAuthSelection } from '@eve/shared';
+import { serviceHelperEnv } from '@eve/shared';
 
 const DEFAULT_K8S_NAMESPACE = 'eve';
 
@@ -1169,7 +1170,8 @@ export class InvokeService {
       try {
         provisionedToolchains = await ensureToolchains({
           toolchains: requestedToolchains,
-          baseEnv: process.env,
+          // env.sh lives in a job-writable cache; source it without the runtime's credentials.
+          baseEnv: serviceHelperEnv(),
           logger: logToolchainEvent,
         });
         if (effectiveInvocation.attemptId) {

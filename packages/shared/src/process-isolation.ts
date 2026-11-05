@@ -1,17 +1,30 @@
 import { statSync } from 'node:fs';
+import * as inspector from 'node:inspector';
+import * as path from 'node:path';
 
-/**
- * Can a job process read this service's environment?
+/*
+ * Keeping job code away from the service's credentials.
  *
  * The agent runtime and the worker run job code (agent harnesses, pipeline
- * scripts) as child processes under their own UID. Linux lets any process with
- * the same UID read another's `/proc/<pid>/environ` and memory, unless the
- * target is non-dumpable. The service images start the service from an
- * execute-only copy of the interpreter (`/usr/local/libexec/eve-node`), and the
- * kernel marks a process non-dumpable when it executes a binary its user cannot
- * read. A non-dumpable process's `/proc/<pid>` files are owned by root, so the
- * owner of `/proc/self/environ` tells us which case we are in.
+ * scripts) as child processes under their own UID. A same-UID process can:
+ *
+ * 1. read another's `/proc/<pid>/environ` and memory, unless the target is
+ *    non-dumpable. The images start each service from an execute-only copy of
+ *    node (`/usr/local/libexec/eve-node`); the kernel marks a process that
+ *    executes a binary its user cannot read non-dumpable.
+ * 2. send it SIGUSR1, which opens the Node inspector on 127.0.0.1:9229 and lets
+ *    the sender evaluate code inside the service. The images pass
+ *    `--disable-sigusr1`.
+ * 3. plant files the service later executes or reads: binaries in a writable
+ *    PATH directory, `~/.gitconfig` hooks, toolchain `env.sh`. Service helpers
+ *    therefore run from a trusted PATH with an allowlisted environment that
+ *    holds no credentials, and service git ignores global config and hooks.
  */
+
+// ---------------------------------------------------------------------------
+// Environ exposure (non-dumpable check)
+// ---------------------------------------------------------------------------
+
 export type EnvironExposure =
   /** Non-dumpable: same-UID processes cannot read our environ or memory. */
   | { status: 'protected' }
@@ -47,70 +60,212 @@ export function inspectEnvironExposure(probe: EnvironExposureProbe = defaultProb
   return owner === uid ? { status: 'exposed', uid } : { status: 'protected' };
 }
 
-/**
- * Log whether job processes can read this service's environment, and refuse to
- * start when `EVE_REQUIRE_ENVIRON_PROTECTION=true` and they can.
- */
-export function checkEnvironProtection(
-  logger: { log: (message: string) => void; warn: (message: string) => void },
-  serviceLabel: string,
-  env: NodeJS.ProcessEnv = process.env,
-  probe?: EnvironExposureProbe,
-): EnvironExposure {
-  const exposure = inspectEnvironExposure(probe);
-  const required = env.EVE_REQUIRE_ENVIRON_PROTECTION?.trim().toLowerCase() === 'true';
-  switch (exposure.status) {
-    case 'protected':
-      logger.log(`${serviceLabel}: process is non-dumpable; job processes cannot read its environment`);
-      break;
-    case 'unsupported':
-      break;
-    case 'root':
-    case 'exposed': {
-      const why = exposure.status === 'root'
-        ? 'runs as root, so job processes it starts run as root too'
-        : `is dumpable, so any process running as UID ${exposure.uid} (including job processes) can read `
-          + 'its environment and memory through /proc';
-      const message = `${serviceLabel}: process ${why}. Start it from the image's execute-only interpreter `
-        + '(/usr/local/libexec/eve-node) as a non-root user.';
-      if (required) {
-        throw new Error(`${message} Refusing to start because EVE_REQUIRE_ENVIRON_PROTECTION=true.`);
-      }
-      logger.warn(message);
-      break;
-    }
+// ---------------------------------------------------------------------------
+// Inspector exposure (SIGUSR1, --inspect)
+// ---------------------------------------------------------------------------
+
+export interface InspectorProbe {
+  execArgv: readonly string[];
+  nodeOptions: string | undefined;
+  inspectorUrl: () => string | undefined;
+}
+
+const defaultInspectorProbe: InspectorProbe = {
+  execArgv: process.execArgv,
+  nodeOptions: process.env.NODE_OPTIONS,
+  inspectorUrl: () => inspector.url(),
+};
+
+/** Reasons a same-UID process could attach a debugger to this service. Empty means none. */
+export function inspectInspectorExposure(probe: InspectorProbe = defaultInspectorProbe): string[] {
+  const problems: string[] = [];
+  const flags = [...probe.execArgv, ...(probe.nodeOptions?.split(/\s+/) ?? [])];
+  if (!flags.includes('--disable-sigusr1')) {
+    problems.push('started without --disable-sigusr1, so SIGUSR1 opens the inspector');
   }
-  return exposure;
+  const inspectFlags = flags.filter((flag) => /^--inspect(-brk|-port|-wait|-publish-uid)?(=|$)/.test(flag));
+  if (inspectFlags.length > 0) problems.push(`started with ${inspectFlags.join(' ')}`);
+  if (probe.inspectorUrl()) problems.push('has an open inspector');
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
+// Startup check
+// ---------------------------------------------------------------------------
+
+export interface ProcessIsolationReport {
+  environ: EnvironExposure;
+  inspector: string[];
 }
 
 /**
- * Platform credentials that only Eve's own service processes use. Helper
- * children (git, crane, tar) never need them, and while one runs, a job process
- * with the same UID can read its `/proc/<pid>/environ`. This is a denylist on
- * purpose: helpers still need proxies, CA bundles, registry and cloud SDK
- * settings from the service environment.
+ * Log whether job processes can read this service's environment or attach a
+ * debugger to it, and refuse to start when `EVE_REQUIRE_ENVIRON_PROTECTION=true`
+ * and they can.
  */
-export const PLATFORM_SECRET_ENV_KEYS = [
-  'DATABASE_URL',
-  'EVE_INTERNAL_API_KEY',
-  'EVE_SECRETS_MASTER_KEY',
-  'EVE_AUTH_JWT_SECRET',
-  'EVE_AUTH_PRIVATE_KEY',
-  'EVE_AUTH_ADMIN_PASSWORD',
-  'EVE_BOOTSTRAP_TOKEN',
-  'EVE_GITHUB_WEBHOOK_SECRET',
-  'EVE_GITHUB_TOKEN',
-  'EVE_ORG_FS_LINK_TOKEN_SECRET',
-  'EVE_REGISTRY_SIGNING_KEY',
-  'EVE_STORAGE_SECRET_ACCESS_KEY',
-  'EVE_APP_STORAGE_SECRET_ACCESS_KEY',
-  'SUPABASE_JWT_SECRET',
-  'SUPABASE_AUTH_SERVICE_KEY',
+export function checkProcessIsolation(
+  logger: { log: (message: string) => void; warn: (message: string) => void },
+  serviceLabel: string,
+  env: NodeJS.ProcessEnv = process.env,
+  probes: { environ?: EnvironExposureProbe; inspector?: InspectorProbe } = {},
+): ProcessIsolationReport {
+  const environ = inspectEnvironExposure(probes.environ);
+  const inspectorProblems = environ.status === 'unsupported' ? [] : inspectInspectorExposure(probes.inspector);
+  const required = env.EVE_REQUIRE_ENVIRON_PROTECTION?.trim().toLowerCase() === 'true';
+
+  const problems: string[] = [];
+  if (environ.status === 'root') problems.push('runs as root, so job processes it starts run as root too');
+  if (environ.status === 'exposed') {
+    problems.push(`is dumpable, so any process running as UID ${environ.uid} (including job processes) can read `
+      + 'its environment and memory through /proc');
+  }
+  problems.push(...inspectorProblems);
+
+  if (problems.length === 0) {
+    if (environ.status === 'protected') {
+      logger.log(`${serviceLabel}: process is non-dumpable with SIGUSR1 disabled; job processes cannot read `
+        + 'its environment or attach to it');
+    }
+    return { environ, inspector: inspectorProblems };
+  }
+
+  const message = `${serviceLabel}: process ${problems.join('; ')}. Start it as a non-root user with `
+    + '`/usr/local/libexec/eve-node --disable-sigusr1 dist/main.js` (the image default).';
+  if (required) {
+    throw new Error(`${message} Refusing to start because EVE_REQUIRE_ENVIRON_PROTECTION=true.`);
+  }
+  logger.warn(message);
+  return { environ, inspector: inspectorProblems };
+}
+
+// ---------------------------------------------------------------------------
+// Helper child processes
+// ---------------------------------------------------------------------------
+
+export interface DirStat {
+  uid: number;
+  mode: number;
+}
+
+export interface TrustedPathOptions {
+  platform?: NodeJS.Platform;
+  statDir?: (dir: string) => DirStat | undefined;
+}
+
+function defaultStatDir(dir: string): DirStat | undefined {
+  try {
+    const stat = statSync(dir);
+    return stat.isDirectory() ? { uid: stat.uid, mode: stat.mode } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rootControlled(dir: string, statDir: (dir: string) => DirStat | undefined): boolean {
+  for (let current = dir; ; current = path.dirname(current)) {
+    const stat = statDir(current);
+    if (!stat || stat.uid !== 0 || (stat.mode & 0o022) !== 0) return false;
+    if (current === path.dirname(current)) return true;
+  }
+}
+
+/**
+ * The PATH a service uses for its own helpers: only directories that root alone
+ * can change, checked up to `/`. A job running as the service's UID cannot
+ * plant a `git` or `kubectl` there. Outside Linux (local development) the PATH
+ * is returned unchanged.
+ */
+export function trustedPath(pathValue: string | undefined, options: TrustedPathOptions = {}): string {
+  const entries = (pathValue ?? '').split(path.delimiter).filter(Boolean);
+  if ((options.platform ?? process.platform) !== 'linux') return entries.join(path.delimiter);
+  const statDir = options.statDir ?? defaultStatDir;
+  const trusted = entries.filter((dir) => path.isAbsolute(dir) && rootControlled(dir, statDir));
+  return [...new Set(trusted)].join(path.delimiter);
+}
+
+/**
+ * Service env keys a helper child (git, kubectl, crane, tar, buildctl, kaniko,
+ * pg_dump) may inherit. No credentials: helpers that need one (a PGPASSWORD,
+ * a GIT_SSH_COMMAND key path, a DOCKER_CONFIG directory) get it from the
+ * caller for that call only. Cloud identity is passed only as role and token
+ * file pointers (IRSA, EKS Pod Identity, Workload Identity), never static keys.
+ */
+export const SERVICE_HELPER_ENV_KEYS = [
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'TMPDIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  'GIT_SSL_CAINFO',
+  'KUBERNETES_SERVICE_HOST',
+  'KUBERNETES_SERVICE_PORT',
+  'KUBECONFIG',
+  'DOCKER_CONFIG',
+  'DOCKER_HOST',
+  'BUILDKIT_HOST',
+  'AWS_REGION',
+  'AWS_DEFAULT_REGION',
+  'AWS_ROLE_ARN',
+  'AWS_WEB_IDENTITY_TOKEN_FILE',
+  'AWS_STS_REGIONAL_ENDPOINTS',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+  'GOOGLE_APPLICATION_CREDENTIALS',
 ] as const;
 
-/** A copy of `env` without Eve's platform credentials, for helper child processes. */
-export function withoutPlatformSecrets(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const copy: NodeJS.ProcessEnv = { ...env };
-  for (const key of PLATFORM_SECRET_ENV_KEYS) delete copy[key];
-  return copy;
+/**
+ * Environment for a helper child the service runs on its own behalf. A running
+ * child's `/proc/<pid>/environ` is readable by same-UID job processes, so it
+ * gets an allowlist plus `extra`, and the trusted PATH.
+ */
+export function serviceHelperEnv(
+  extra: Record<string, string | undefined> = {},
+  source: NodeJS.ProcessEnv = process.env,
+  options: TrustedPathOptions = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: trustedPath(source.PATH, options) };
+  for (const key of SERVICE_HELPER_ENV_KEYS) {
+    const value = source[key];
+    if (value !== undefined) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+/**
+ * Environment for git run by the service. Global config (`~/.gitconfig`, which a
+ * job can write) is ignored, and hooks and fsmonitor are disabled at
+ * command-line precedence, so repository config written by a job cannot make
+ * the service run a command. System config (`/etc/gitconfig`) stays: it is part
+ * of the root-owned image and carries the worker's commit identity.
+ */
+export function serviceGitEnv(
+  extra: Record<string, string | undefined> = {},
+  source: NodeJS.ProcessEnv = process.env,
+  options: TrustedPathOptions = {},
+): NodeJS.ProcessEnv {
+  return serviceHelperEnv({
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: '/dev/null',
+    GIT_CONFIG_KEY_1: 'core.fsmonitor',
+    GIT_CONFIG_VALUE_1: 'false',
+    ...extra,
+  }, source, options);
 }

@@ -9,7 +9,7 @@ import {
   registerCorrelationIdHook,
 } from '@eve/shared';
 import { AppModule } from './app.module';
-import { checkEnvironProtection } from '@eve/shared';
+import { checkProcessIsolation } from '@eve/shared';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
 async function bootstrap() {
@@ -21,7 +21,7 @@ async function bootstrap() {
 
   // In-process script steps run as this process's UID; they must not be able to
   // read its environment (DATABASE_URL, EVE_INTERNAL_API_KEY) through /proc.
-  checkEnvironProtection(logger, 'WORKER');
+  checkProcessIsolation(logger, 'WORKER');
 
   // Validate critical configuration at startup
   logStartupConfigWarnings(logger, 'WORKER');

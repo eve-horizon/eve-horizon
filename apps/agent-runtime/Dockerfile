@@ -119,10 +119,23 @@ RUN ln -sf /app/packages/cli/bin/eve.js /usr/local/bin/eve
 # (same UID) cannot read the runtime's environment from /proc/<pid>/environ or
 # its memory. Harnesses keep the ordinary, readable /usr/local/bin/node.
 RUN install -D -o root -g root -m 0711 /usr/local/bin/node /usr/local/libexec/eve-node
+# Root-owned guards in the service's HOME. Node looks for modules missing from
+# node_modules in ~/.node_modules and ~/.node_libraries, and the Kubernetes
+# client reads ~/.kube/config before in-cluster config. Job code runs as the
+# same UID and must not be able to create them; each holds a root-owned file so
+# it cannot be removed and recreated either.
+RUN for d in .node_modules .node_libraries .kube; do \
+      mkdir -p "/home/node/$d" \
+      && touch "/home/node/$d/.eve-root-owned" \
+      && chown -R root:root "/home/node/$d" \
+      && chmod 0755 "/home/node/$d" \
+      && chmod 0444 "/home/node/$d/.eve-root-owned"; \
+    done
 ENV PATH="/home/node/.local/bin:/app/packages/eve-agent-cli/bin:${PATH}"
 WORKDIR /app/apps/agent-runtime
 USER node
-CMD ["/usr/local/libexec/eve-node", "dist/main.js"]
+# --disable-sigusr1: a harness (same UID) could otherwise open the inspector with SIGUSR1.
+CMD ["/usr/local/libexec/eve-node", "--disable-sigusr1", "dist/main.js"]
 
 FROM dependencies AS development
 COPY . .

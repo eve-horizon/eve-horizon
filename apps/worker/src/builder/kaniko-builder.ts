@@ -11,6 +11,7 @@ import {
   BuildBackend,
 } from './image-builder.interface.js';
 import { K8sService } from '../deployer/k8s.service.js';
+import { serviceGitEnv } from '@eve/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -266,7 +267,7 @@ export class KanikoBuilder implements BuildBackend {
       'remote',
       'get-url',
       'origin',
-    ]);
+    ], { env: serviceGitEnv() });
     return stdout.trim();
   }
 
