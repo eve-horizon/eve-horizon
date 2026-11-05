@@ -172,11 +172,30 @@ ensure_variant() {
 # image, or zai once Z_AI_API_KEY is provided) is installed in the background:
 # a network install must not hold up the service, its probes or a runner pod.
 # The double fork hands the installer to tini (PID 1), which reaps it.
+#
+# The installer then keeps running next to jobs as an ordinary (dumpable)
+# process with the worker's UID, so job code could read its
+# /proc/<pid>/environ. Like the orphan reaper, it starts under `env -i`: this
+# script's trusted PATH (SERVICE_JOB_PATH only for the existence check), HOME,
+# locale, proxy and CA settings, npm config, the setup timeout and the zai key.
+# Never DATABASE_URL, the internal key or other worker secrets.
 install_missing_variants_in_background() {
-  ( {
-      ensure_variant "mclaude" "mirror" ""
-      ensure_variant "zai" "zai" "${Z_AI_API_KEY:-}"
-    } & )
+  local name
+  local passthrough=()
+  for name in $(compgen -e); do
+    case "$name" in
+      LANG|LC_ALL|TMPDIR|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|\
+      NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|\
+      EVE_CC_MIRROR_SETUP_TIMEOUT|Z_AI_API_KEY|NPM_CONFIG_*|npm_config_*)
+        passthrough+=("$name=${!name}")
+        ;;
+    esac
+  done
+  # shellcheck disable=SC2016 # the installer shell expands its own variables
+  ( env -i PATH="$PATH" HOME="$HOME" SERVICE_JOB_PATH="$SERVICE_JOB_PATH" "${passthrough[@]}" \
+      "$BASH" -c "$(declare -f ensure_variant)"'
+        ensure_variant "mclaude" "mirror" ""
+        ensure_variant "zai" "zai" "${Z_AI_API_KEY:-}"' & )
 }
 
 # docker/worker/entrypoint.test.sh sources this file for its functions only.

@@ -48,6 +48,21 @@ describe('worker entrypoint', () => {
     expect(entrypoint.indexOf('. "${tc_dir}env.sh"')).toBeGreaterThan(gate);
   });
 
+  it('starts the background variant installer without secrets, on the trusted PATH', () => {
+    // The installer keeps running next to jobs, so like the reaper it must be
+    // re-executed under a minimal env before any install, and started while
+    // PATH is still the root-owned one (before the job PATH is restored).
+    const start = entrypoint.indexOf('install_missing_variants_in_background() {');
+    expect(start).toBeGreaterThan(-1);
+    const body = entrypoint.slice(start, entrypoint.indexOf('\n}\n', start));
+    const reexec = body.indexOf('env -i PATH="$PATH" HOME="$HOME"');
+    expect(reexec).toBeGreaterThan(-1);
+    expect(body.indexOf('ensure_variant')).toBeGreaterThan(reexec);
+    const call = entrypoint.indexOf('\ninstall_missing_variants_in_background\n');
+    expect(call).toBeGreaterThan(entrypoint.indexOf('export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'));
+    expect(call).toBeLessThan(entrypoint.indexOf('export PATH="$SERVICE_JOB_PATH"'));
+  });
+
   it('starts the orphan reaper without secrets and tells it the service PID', () => {
     expect(entrypoint).toMatch(/env -i PATH="\$PATH" HOME="\$HOME" EVE_REAPER_SERVICE_PID="\$\$" \\\n(?:[^\n]*\\\n)*\s+\/usr\/local\/bin\/orphan-reaper start >&2/);
   });
