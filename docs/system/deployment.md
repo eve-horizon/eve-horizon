@@ -1,7 +1,7 @@
 # Deployment
 
 > Status: Current
-> Last Updated: 2026-08-25
+> Last Updated: 2026-11-05
 
 ## Purpose
 
@@ -175,6 +175,44 @@ tenant tuning logs a warning. Confirm the live values with:
 eve env diagnose <project> <env>
 eve env diagnose <project> <env> --json | jq '.http_ingress'
 ```
+
+### Internal API Port (optional)
+
+The API's `/internal/*` routes are for platform services, authenticated by
+`EVE_INTERNAL_API_KEY`. By default they share the public port with every other
+route, so the ingress exposes them. Set `EVE_API_INTERNAL_PORT` on `eve-api` to
+take them off the public port:
+
+- The API also listens on `EVE_API_INTERNAL_PORT` (for example `4791`). That
+  port serves every route, `/internal/*` included.
+- On the public port (`API_PORT`), `/internal/*` answers `404`, the same as a
+  route that does not exist. The check uses the route the request resolved to
+  and the port the connection arrived on, so encoded paths and forged headers
+  do not get round it.
+- `/internal/registry/token` stays on the public port: it is the registry's
+  token realm, which BuildKit and kubelet on every node follow.
+
+Turning it on is one change across several workloads; do it in a single
+rollout, or in-cluster calls to `/internal/*` fail:
+
+1. `eve-api`: set `EVE_API_INTERNAL_PORT` and add the port to the `eve-api`
+   Service (not to the Ingress).
+2. Point `EVE_API_URL` at the internal port on the platform services that
+   call `/internal/*`: `eve-orchestrator`, `eve-worker`, `eve-agent-runtime`,
+   `eve-gateway` and `eve-sso` (for example
+   `http://eve-api.eve.svc.cluster.local:4791`). Runner pods and app
+   deployments inherit the worker's value, so they use the internal port too
+   (its `/internal/*` routes still require the internal key).
+3. Leave `eve-dashboard` on the public port. Its server proxies browser
+   requests under `/api/*` to `EVE_API_URL`, so pointing it at the internal
+   port would publish `/internal/*` through the dashboard host. (For the same
+   reason, an ingress rule that blocks `/internal` on the API host alone does
+   not cover the dashboard host; this port split does.)
+4. Allow the internal port wherever NetworkPolicies restrict traffic to
+   `eve-api`, including from app namespaces.
+
+Unset (the default), nothing changes. Local stacks (`./bin/eh`, docker
+compose, `eve local`) leave it unset.
 
 ### Ingress TLS (Apps)
 
