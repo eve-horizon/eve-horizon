@@ -333,19 +333,41 @@ function formatErrorMessage(response: { data: unknown; text: string }): string {
       error?: unknown;
       detail?: unknown;
       statusCode?: unknown;
+      errors?: unknown;
     };
 
-    return (
-      [payload.message, payload.error, payload.detail, response.text]
+    const message = Array.isArray(payload.message)
+      ? payload.message.filter((entry) => typeof entry === 'string').join('; ')
+      : payload.message;
+    const summary =
+      [message, payload.error, payload.detail, response.text]
         .map((entry) => {
           if (typeof entry === 'string' && entry.trim()) return entry;
           return '';
         })
-        .find((entry) => entry.length > 0) ?? response.text
-    );
+        .find((entry) => entry.length > 0) ?? response.text;
+
+    const issues = formatValidationIssues(payload.errors);
+    return issues.length > 0 ? `${summary}\n${issues.map((issue) => `  - ${issue}`).join('\n')}` : summary;
   }
 
   return response.text;
+}
+
+/**
+ * Render the API's validation issues (`errors: [{ path, message }]`, or plain
+ * strings) as `path: message` lines. Anything else yields no lines.
+ */
+function formatValidationIssues(errors: unknown): string[] {
+  if (!Array.isArray(errors)) return [];
+  return errors.flatMap((issue): string[] => {
+    if (typeof issue === 'string') return issue.trim() ? [issue] : [];
+    if (!issue || typeof issue !== 'object') return [];
+    const { path, message } = issue as { path?: unknown; message?: unknown };
+    if (typeof message !== 'string' || !message.trim()) return [];
+    const where = Array.isArray(path) ? path.join('.') : typeof path === 'string' ? path : '';
+    return [where ? `${where}: ${message}` : message];
+  });
 }
 
 async function attemptRefresh(context: ResolvedContext): Promise<TokenEntry | undefined> {
