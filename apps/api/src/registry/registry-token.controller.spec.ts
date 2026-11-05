@@ -3,7 +3,38 @@ import { describe, expect, it } from 'vitest';
 import {
   computeRfc7638ThumbprintFromPrivateKey,
   parseScopes,
+  RegistryTokenController,
 } from './registry-token.controller.js';
+
+describe('registry signing key formats', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+
+  it.each([
+    ['PEM', pem],
+    ['\\n-escaped PEM', pem.trimEnd().replace(/\n/g, '\\n')],
+    ['base64-encoded PEM', Buffer.from(pem).toString('base64')],
+  ])('issues a token signed with a %s', (_label, value) => {
+    const controller = new RegistryTokenController();
+    const response = (controller as any).buildScopedToken(
+      { EVE_REGISTRY_SIGNING_KEY: value },
+      'repository:my-app:pull',
+      'eve-registry',
+    );
+    const [header] = response.token.split('.');
+    const { kid } = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
+    expect(kid).toBe(computeRfc7638ThumbprintFromPrivateKey(createPrivateKey(pem)));
+  });
+
+  it('names the variable when the key cannot be read', () => {
+    const controller = new RegistryTokenController();
+    expect(() => (controller as any).buildScopedToken(
+      { EVE_REGISTRY_SIGNING_KEY: 'not-a-key' },
+      'repository:my-app:pull',
+      'eve-registry',
+    )).toThrow(/EVE_REGISTRY_SIGNING_KEY is not a PEM key/);
+  });
+});
 
 describe('registry token thumbprint', () => {
   it('computes a stable RFC7638 thumbprint for RSA signing keys', () => {

@@ -42,7 +42,7 @@ internal API and uses it for push/pull.
 
 Required system configuration:
 - `EVE_REGISTRY_HOST` — registry hostname (e.g., `registry.eve.example.com`)
-- `EVE_REGISTRY_SIGNING_KEY` — RSA private key (PEM or file path)
+- `EVE_REGISTRY_SIGNING_KEY` — RSA private key (PEM, `\n`-escaped PEM, base64-encoded PEM, or file path; same loader as `EVE_AUTH_PRIVATE_KEY`, see [auth.md](./auth.md))
 - `EVE_BUILDKIT_INSECURE_REGISTRIES` (optional) — comma-separated registry hosts to use with BuildKit insecure/plain-HTTP transport (useful for local in-cluster registries)
 - `EVE_BUILDKIT_INSECURE_ALL` (optional) — set to `true` only for local troubleshooting to force insecure transport for all BuildKit registry operations
 
