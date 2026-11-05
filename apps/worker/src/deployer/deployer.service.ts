@@ -58,6 +58,7 @@ import {
 } from './managed-db-provisioner';
 import { BucketProvisioner } from './bucket-provisioner';
 import { ObjectStoreProvisioner, type EnvObjectStorePlan } from './object-store-provisioner';
+import { applyAppPlacement, resolveAppPlacement, type AppPlacement } from './app-placement';
 import {
   createAppCredentialProvisioners,
   type AppCredentialProvisioner,
@@ -871,6 +872,8 @@ export class DeployerService {
       },
     };
 
+    applyAppPlacement(jobSpec.spec!.template.spec!, this.resolveAppPlacementWithWarnings(loadConfig()));
+
     const result = await this.k8sService.runJob(namespace, jobSpec, (params.timeoutSeconds ?? 300) * 1000);
 
     // Clean up ConfigMaps created for x-eve.files
@@ -1012,6 +1015,7 @@ export class DeployerService {
     });
     const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const config = loadConfig();
+    const appPlacement = this.resolveAppPlacementWithWarnings(config);
     const hasTcpIngress = Object.values(deployableServices).some((service) => this.resolveTcpIngressConfig(service));
     if (hasTcpIngress) {
       await this.assertTcpIngressProviderReady(config.EVE_TCP_INGRESS_PROVIDER);
@@ -1259,6 +1263,11 @@ export class DeployerService {
         };
         const existingTolerations = Array.isArray(podSpec.tolerations) ? podSpec.tolerations : [];
         podSpec.tolerations = [...existingTolerations, ...stableEgressPlan.tolerations];
+      } else {
+        // App node pool placement. Stable-egress services are pinned to the
+        // egress pool instead; requiring both pools' labels would leave them
+        // unschedulable.
+        applyAppPlacement(deployment.spec.template.spec as k8s.V1PodSpec, appPlacement);
       }
 
       documents.push(yaml.stringify(deployment));
@@ -2024,6 +2033,15 @@ export class DeployerService {
   private resolveXeve(service: Service): Record<string, unknown> | null {
     const xeve = (service as Record<string, unknown>)['x-eve'] ?? (service as Record<string, unknown>).x_eve;
     return xeve && typeof xeve === 'object' ? xeve as Record<string, unknown> : null;
+  }
+
+  /** Resolve app pod placement for one render or job run, logging any setting it cannot honour. */
+  private resolveAppPlacementWithWarnings(config: ReturnType<typeof loadConfig>): AppPlacement | null {
+    const { placement, warnings } = resolveAppPlacement(config);
+    for (const warning of warnings) {
+      this.logger.warn(warning);
+    }
+    return placement;
   }
 
   /**

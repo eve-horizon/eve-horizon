@@ -168,6 +168,17 @@ export const configSchema = z.object({
   // Compute model for the cluster the deployer is targeting. Drives compute-class
   // and stable-egress branching. The worker overlay sets this for managed clusters.
   EVE_COMPUTE_MODEL: z.enum(['k3s', 'gke', 'eks', 'aks', 'ecs']).default('k3s'),
+
+  // App pod placement (docs/plans/app-compute-classes-plan.md): pins app Deployments and
+  // service Jobs to a dedicated node pool on gke/eks/aks. Off unless enabled, so clusters that
+  // already carry the selector/taint variables keep scheduling apps where they do today.
+  EVE_APP_PLACEMENT_ENABLED: booleanFromEnv.default(false),
+  EVE_APP_NODE_SELECTOR_KEY: z.string().optional(),
+  EVE_APP_NODE_SELECTOR_VALUE: z.string().optional(),
+  EVE_APP_TAINT_KEY: z.string().optional(),
+  EVE_APP_TAINT_VALUE: z.string().optional(),
+  // NoSchedule | PreferNoSchedule | NoExecute; validated by the deployer, default NoSchedule.
+  EVE_APP_TAINT_EFFECT: z.string().optional(),
   EVE_TCP_INGRESS_PROVIDER: z.enum(['none', 'aws-nlb', 'klipper']).default('none'),
   EVE_TCP_INGRESS_HOSTED_ZONE: z.string().optional(),
 

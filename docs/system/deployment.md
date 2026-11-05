@@ -193,6 +193,29 @@ and cert-manager annotations so certificates are issued per host.
 If you provide a wildcard cert, the worker will reference that secret name in every
 app ingress. Ensure the secret exists in each app namespace.
 
+### App Node Placement
+
+On managed Kubernetes the worker can pin every app pod it creates (service
+Deployments and `x-eve.role: job` service Jobs) to a dedicated node pool. Set
+on the worker:
+
+| Variable | Meaning |
+| --- | --- |
+| `EVE_APP_PLACEMENT_ENABLED` | `true` to apply placement. Off by default. |
+| `EVE_COMPUTE_MODEL` | Placement applies only for `gke`, `eks` and `aks`. |
+| `EVE_APP_NODE_SELECTOR_KEY` / `_VALUE` | Node label the pods must match (`nodeSelector`). |
+| `EVE_APP_TAINT_KEY` / `_VALUE` | Taint on the pool; pods get a matching toleration (`Exists` when no value). |
+| `EVE_APP_TAINT_EFFECT` | `NoSchedule` (default), `PreferNoSchedule` or `NoExecute`. |
+
+Placement is opt-in because infrastructure templates set the selector and taint
+variables before anything read them: turning it on moves running apps onto the
+app pool (often spot capacity) at their next deploy, so make sure the pool
+exists and can scale first. Settings that cannot be honoured (placement enabled
+on `k3s`, an incomplete selector, an unknown taint effect) are logged as worker
+warnings at each deploy. Services with `x-eve.networking.egress: stable` keep
+their egress-pool placement instead. Pipeline and agent runner pods are not
+app workloads and are not affected.
+
 ### Manifest Variable Interpolation
 
 Environment values in manifests support variable interpolation:
