@@ -169,6 +169,12 @@ export class S3StorageClient implements ObjectStorageClient {
     });
   }
 
+  /**
+   * Create a bucket, or adopt it when the backend says we already own it.
+   * `BucketAlreadyExists` (and GCS's `BucketNameUnavailable`) mean another
+   * account holds the name in a global namespace; adopting that bucket would
+   * send app data to someone else, so it fails instead.
+   */
   async ensureBucket(name: string): Promise<void> {
     try {
       const client = await this.getClient();
@@ -176,7 +182,12 @@ export class S3StorageClient implements ObjectStorageClient {
       await client.send(new CreateBucketCommand({ Bucket: name }));
     } catch (err: unknown) {
       const code = (err as { name?: string })?.name;
-      if (code === 'BucketAlreadyOwnedByYou' || code === 'BucketAlreadyExists') return;
+      if (code === 'BucketAlreadyOwnedByYou') return;
+      if (code === 'BucketAlreadyExists' || code === 'BucketNameUnavailable') {
+        throw new Error(
+          `Bucket name "${name}" is already owned by another account (${code}). Refusing to use it.`,
+        );
+      }
       throw err;
     }
   }

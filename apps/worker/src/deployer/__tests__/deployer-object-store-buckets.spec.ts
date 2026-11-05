@@ -294,6 +294,43 @@ describe('DeployerService object-store buckets', () => {
     )).rejects.toThrow('Eve object storage is not configured');
   });
 
+  it('fails the deploy and records nothing when the bucket name belongs to another project', async () => {
+    const deployer = new DeployerService(null as any, null as any);
+    const upsert = vi.fn().mockResolvedValue(undefined);
+    const setBucketPublicReadPolicy = vi.fn().mockResolvedValue(undefined);
+    configureObjectStoreMocks(deployer, {
+      isConfigured: true,
+      backend: 'gcs',
+      getAppBucketName: vi.fn().mockReturnValue('eve-app-acme-media-prod-uploads'),
+      ensureBucket: vi.fn().mockRejectedValue(new Error(
+        'Bucket "eve-app-acme-media-prod-uploads" already exists in another Google Cloud project ' +
+        '(project number 999, expected 111). Refusing to use it.',
+      )),
+      setBucketPublicReadPolicy,
+      setBucketCors: vi.fn().mockResolvedValue(undefined),
+    }, { upsert });
+
+    await expect(resolveObjectStoreForService(
+      deployer,
+      {
+        image: 'ghcr.io/example/api:latest',
+        'x-eve': { object_store: { buckets: [{ name: 'uploads', visibility: 'public' }] } },
+      },
+      {
+        orgId: 'org_123',
+        projectId: 'proj_123',
+        orgSlug: 'acme',
+        projectSlug: 'media',
+        envName: 'prod',
+        componentName: 'api',
+      },
+    )).rejects.toThrow(
+      /Failed to provision object_store bucket "uploads" for service "api": .*another Google Cloud project/,
+    );
+    expect(setBucketPublicReadPolicy).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it('injects EVE_APP_STORAGE credentials while leaving provisioner credentials unset', async () => {
     process.env = {
       ...originalEnv,

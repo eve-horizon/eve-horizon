@@ -67,6 +67,7 @@ EVE_STORAGE_ACCESS_KEY_ID=<access-key>
 EVE_STORAGE_SECRET_ACCESS_KEY=<secret-key>
 EVE_STORAGE_ORG_BUCKET_PREFIX=eve-org           # Default: eve-org
 EVE_STORAGE_INTERNAL_BUCKET=eve-internal        # Default: eve-internal
+EVE_STORAGE_GCP_PROJECT_NUMBER=123456789012     # Native GCS only; default: metadata server
 ```
 
 **Dual S3 clients:** The service initializes two clients — an **internal client** (cluster endpoint, for server-side operations like `getObject`) and a **presign client** (public endpoint, for generating URLs that external clients can reach).
@@ -80,9 +81,17 @@ EVE_STORAGE_INTERNAL_BUCKET=eve-internal        # Default: eve-internal
 | `getObject(bucket, key)` | Read object content server-side (cluster-internal) |
 | `getObjectMetadata(bucket, key)` | HEAD request for content type, size, etag |
 | `deleteObject(bucket, key)` | Delete single object |
-| `ensureBucket(name)` | Create bucket if not exists (idempotent) |
+| `ensureBucket(name)` | Create bucket if not exists; adopt an existing one only if the platform owns it |
 | `setBucketCors(name, rules)` | Apply CORS configuration |
 | `setBucketPublicReadPolicy(name)` | Allow anonymous reads on entire bucket |
+
+**Bucket ownership:** bucket names are global on S3 and GCS, so a predictable
+name can be pre-created by someone else. `ensureBucket` therefore adopts an
+existing bucket only when the backend confirms the platform owns it: S3 and
+MinIO `BucketAlreadyOwnedByYou`, or, for native GCS, a bucket whose
+`projectNumber` matches the platform project (`EVE_STORAGE_GCP_PROJECT_NUMBER`,
+else the GKE/GCE metadata server). Any other existing bucket fails the call
+(and so the org setup or app deploy) with a message naming the conflict.
 
 **Bucket layout:**
 
