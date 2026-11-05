@@ -55,6 +55,15 @@ export class BucketProvisioner {
   }
 
   /**
+   * Remove anonymous read grants from a bucket that Eve made public.
+   * Used when a bucket turns private or leaves the manifest.
+   */
+  async removeBucketPublicReadPolicy(name: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.removeBucketPublicReadPolicy(name);
+  }
+
+  /**
    * Configure CORS rules on a bucket.
    */
   async setBucketCors(name: string, rules: BucketCorsRule[]): Promise<void> {

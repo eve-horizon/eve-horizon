@@ -77,4 +77,7 @@ export interface ObjectStorageClient {
 
   /** Make a bucket publicly readable. */
   setBucketPublicReadPolicy(name: string): Promise<void>;
+
+  /** Undo setBucketPublicReadPolicy: remove anonymous read grants. Idempotent. */
+  removeBucketPublicReadPolicy(name: string): Promise<void>;
 }

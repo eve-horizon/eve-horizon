@@ -1,5 +1,5 @@
 import type { Logger } from '@nestjs/common';
-import type { Db } from '@eve/db';
+import type { Db, StorageBucket } from '@eve/db';
 import { storageBucketQueries } from '@eve/db';
 import {
   type ObjectStoreBucket,
@@ -65,6 +65,8 @@ export class ObjectStoreProvisioner {
 
     if (desired.length === 0) {
       if (typeof this.db === 'function') {
+        const previous = await this.storageBuckets.listByEnv(params.scope.projectId, params.scope.envName);
+        await this.unpublishBuckets(params.scope, previous, new Set());
         await this.removeObjectStoreBinding(params.scope);
         await this.storageBuckets.deleteByEnv(params.scope.projectId, params.scope.envName);
       }
@@ -78,6 +80,21 @@ export class ObjectStoreProvisioner {
         `Set EVE_STORAGE_BACKEND and storage connection env vars on the worker, or remove the bucket declarations.`,
       );
     }
+
+    // Before any credential grant: a colliding name would hand this env
+    // another env's bucket.
+    await this.assertPhysicalNamesUnclaimed(params.scope, desired);
+
+    // Read what was published before the upserts below overwrite it. A
+    // bucket that turned private or left the manifest loses its public
+    // grant first, so a failure leaves its row in place for the next deploy.
+    const previous = await this.storageBuckets.listByEnv(params.scope.projectId, params.scope.envName);
+    const stillPublic = new Set(
+      desired
+        .filter((entry) => (entry.bucket.visibility ?? 'private') === 'public')
+        .map((entry) => entry.physicalName),
+    );
+    await this.unpublishBuckets(params.scope, previous, stillPublic);
 
     const requestedMode = this.resolveRequestedObjectStoreIsolation(desired, params.scope.envName);
     const provisioner = this.selectObjectStoreCredentialProvisioner(requestedMode, desired);
@@ -131,6 +148,81 @@ export class ObjectStoreProvisioner {
       }
     }
     return desired;
+  }
+
+  /**
+   * Physical names join org, project, env and bucket with hyphens, which env
+   * and bucket names may also contain (env "test" + bucket "a-x" and env
+   * "test-a" + bucket "x" give the same name). Existing names cannot change
+   * without orphaning data, so a name already tracked for another env or
+   * project is refused instead.
+   */
+  private async assertPhysicalNamesUnclaimed(
+    scope: AppObjectStoreScope,
+    desired: ObjectStoreDesiredBucket[],
+  ): Promise<void> {
+    const claims = await this.storageBuckets.listByPhysicalNames(
+      [...new Set(desired.map((entry) => entry.physicalName))],
+    );
+    const conflicts = new Map<string, string>();
+    for (const claim of claims) {
+      if (claim.project_id === scope.projectId && claim.env_name === scope.envName) continue;
+      const entry = desired.find((candidate) => candidate.physicalName === claim.physical_name);
+      if (!entry || conflicts.has(claim.physical_name)) continue;
+      const owner = claim.project_id === scope.projectId
+        ? `env "${claim.env_name}" (bucket "${claim.name}")`
+        : 'another project';
+      conflicts.set(
+        claim.physical_name,
+        `bucket "${entry.bucket.name}" maps to "${claim.physical_name}", which ${owner} already uses`,
+      );
+    }
+    if (conflicts.size === 0) return;
+    throw new Error(
+      `Object-store bucket name collision in env "${scope.envName}": ${[...conflicts.values()].join('; ')}. ` +
+      'Rename the bucket or the environment.',
+    );
+  }
+
+  /**
+   * Remove the public grant from buckets Eve published for this env that
+   * are no longer declared public. Data is never deleted.
+   */
+  private async unpublishBuckets(
+    scope: AppObjectStoreScope,
+    previous: StorageBucket[],
+    stillPublic: Set<string>,
+  ): Promise<void> {
+    const names = [...new Set(
+      previous
+        .filter((row) => row.visibility === 'public' && !stillPublic.has(row.physical_name))
+        .map((row) => row.physical_name),
+    )].sort();
+    const failures: string[] = [];
+    for (const name of names) {
+      try {
+        await this.bucketProvisioner.removeBucketPublicReadPolicy(name);
+        this.logger.log(`Removed public read access from bucket ${name} (no longer declared public)`);
+      } catch (error) {
+        failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `Failed to remove public read access from bucket(s) no longer declared public in env "${scope.envName}": ` +
+        `${failures.join('; ')}`,
+      );
+    }
+  }
+
+  /** Best effort for env deletion: un-publish every public bucket of the env. */
+  async unpublishEnvBuckets(scope: AppObjectStoreScope): Promise<void> {
+    try {
+      const previous = await this.storageBuckets.listByEnv(scope.projectId, scope.envName);
+      await this.unpublishBuckets(scope, previous, new Set());
+    } catch (error) {
+      this.logger.warn(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private shouldReconcileObjectStoreService(

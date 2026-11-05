@@ -146,6 +146,32 @@ export class GcsStorageClient implements ObjectStorageClient {
     );
   }
 
+  async removeBucketPublicReadPolicy(name: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    let policy: any;
+    try {
+      [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 404) return; // bucket gone: nothing is public
+      throw err;
+    }
+    const bindings: Array<{ role: string; members?: string[] }> = policy.bindings || [];
+    let changed = false;
+    const kept: Array<{ role: string; members?: string[] }> = [];
+    for (const binding of bindings) {
+      const members = binding.members ?? [];
+      const privateMembers = members.filter((member) => member !== 'allUsers' && member !== 'allAuthenticatedUsers');
+      if (privateMembers.length !== members.length) changed = true;
+      if (privateMembers.length > 0 || members.length === 0) {
+        kept.push({ ...binding, members: privateMembers });
+      }
+    }
+    if (!changed) return;
+    policy.bindings = kept;
+    await bucket.iam.setPolicy(policy);
+  }
+
   async setBucketPublicReadPolicy(name: string): Promise<void> {
     const storage = await this.getStorage();
     const bucket = storage.bucket(name);

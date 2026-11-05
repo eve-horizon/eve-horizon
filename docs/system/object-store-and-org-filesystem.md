@@ -83,6 +83,7 @@ EVE_STORAGE_INTERNAL_BUCKET=eve-internal        # Default: eve-internal
 | `ensureBucket(name)` | Create bucket if not exists (idempotent) |
 | `setBucketCors(name, rules)` | Apply CORS configuration |
 | `setBucketPublicReadPolicy(name)` | Allow anonymous reads on entire bucket |
+| `removeBucketPublicReadPolicy(name)` | Remove anonymous read grants (worker, app buckets) |
 
 **Bucket layout:**
 
@@ -780,6 +781,22 @@ Provisioned buckets are tracked in the `storage_buckets` table and shown by
 when present. Removing a bucket from the manifest prunes the stale
 `storage_buckets` row on the next deploy without deleting the physical bucket.
 Removing all bucket declarations removes the env binding and rows.
+
+Visibility is reconciled both ways. When a bucket Eve made public is declared
+`private` again, or leaves the manifest, the next deploy removes its anonymous
+read grant before updating or pruning its row: GCS drops `allUsers` and
+`allAuthenticatedUsers` from the bucket IAM policy; S3 turns Block Public
+Access back on and removes the public-read statement. If that fails, the
+deploy fails and the next one retries. Deleting an environment un-publishes
+its public buckets best effort. Bucket data is never deleted, and grants added
+outside Eve to buckets Eve never published are left alone.
+
+Physical names are `{prefix}-{orgSlug}-{projectSlug}-{envName}-{bucketName}`.
+Env and bucket names can both contain hyphens, so two environments of one
+project can map to the same name (env `test` with bucket `ab-cd`, env
+`test-ab` with bucket `cd`). A deploy whose physical bucket name is already
+tracked for another environment or project fails before any credentials are
+granted; rename the bucket or the environment.
 
 If the target platform has no configured object storage, if explicit
 `isolation: irsa` is requested on a cluster without IRSA configuration, or if

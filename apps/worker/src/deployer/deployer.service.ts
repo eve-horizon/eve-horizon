@@ -935,14 +935,17 @@ export class DeployerService {
   async deleteEnvironment(envId: string): Promise<void> {
     this.logger.log(`Deleting environment ${envId}`);
     const { namespace, environment, project, org } = await this.resolveEnvironmentScope(envId);
-    await this.objectStoreProvisioner.removeObjectStoreBinding({
+    const objectStoreScope = {
       orgId: project.org_id,
       projectId: project.id,
       envName: environment.name,
       orgSlug: org.slug,
       projectSlug: project.slug,
       namespace,
-    });
+    };
+    // Buckets and their data outlive the env; their public grants do not.
+    await this.objectStoreProvisioner.unpublishEnvBuckets(objectStoreScope);
+    await this.objectStoreProvisioner.removeObjectStoreBinding(objectStoreScope);
     await this.storageBuckets.deleteByEnv(project.id, environment.name);
     await this.k8sService.deleteNamespace(namespace);
   }

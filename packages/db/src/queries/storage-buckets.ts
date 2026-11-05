@@ -101,6 +101,14 @@ export function storageBucketQueries(db: Db) {
       `;
     },
 
+    async listByPhysicalNames(physicalNames: string[]): Promise<StorageBucket[]> {
+      if (physicalNames.length === 0) return [];
+      return db<StorageBucket[]>`
+        SELECT * FROM storage_buckets
+        WHERE physical_name = ANY(${physicalNames}::text[])
+      `;
+    },
+
     async findByEnvAndName(
       projectId: string,
       envName: string,

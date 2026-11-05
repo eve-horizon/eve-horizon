@@ -19,6 +19,8 @@ describe('DeployerService object-store buckets', () => {
         upsert: vi.fn().mockResolvedValue(undefined),
         deleteMissingForEnv: vi.fn().mockResolvedValue(0),
         deleteByEnv: vi.fn().mockResolvedValue(0),
+        listByEnv: vi.fn().mockResolvedValue([]),
+        listByPhysicalNames: vi.fn().mockResolvedValue([]),
         ...storageBuckets,
       },
     });
@@ -607,6 +609,191 @@ describe('DeployerService object-store buckets', () => {
         componentName: 'api',
       },
     )).rejects.toThrow("isolation mode 'irsa' is not available");
+  });
+});
+
+describe('DeployerService object-store bucket lifecycle', () => {
+  const originalEnv = { ...process.env };
+  const scope = {
+    orgId: 'org_123',
+    projectId: 'proj_123',
+    envName: 'prod',
+    orgSlug: 'acme',
+    projectSlug: 'media',
+    namespace: 'eve-acme-media-prod',
+  };
+
+  function row(name: string, visibility: 'public' | 'private', extra: Record<string, unknown> = {}) {
+    return {
+      project_id: 'proj_123',
+      env_name: 'prod',
+      service_name: 'api',
+      name,
+      physical_name: `eve-app-acme-media-prod-${name}`,
+      visibility,
+      ...extra,
+    };
+  }
+
+  function setup(options: {
+    previous?: unknown[];
+    claims?: unknown[];
+    removeBucketPublicReadPolicy?: ReturnType<typeof vi.fn>;
+  } = {}) {
+    const deployer = new DeployerService(null as any, null as any);
+    const calls: string[] = [];
+    const track = (name: string, impl?: (...args: any[]) => unknown) =>
+      vi.fn(async (...args: any[]) => {
+        calls.push(`${name}:${args[0] ?? ''}`);
+        return impl?.(...args);
+      });
+    const bucketProvisioner = {
+      isConfigured: true,
+      backend: 's3',
+      getAppBucketName: vi.fn((_o, _p, env, bucket) => `eve-app-acme-media-${env}-${bucket}`),
+      ensureBucket: track('ensureBucket'),
+      setBucketPublicReadPolicy: track('setBucketPublicReadPolicy'),
+      removeBucketPublicReadPolicy: options.removeBucketPublicReadPolicy ?? track('removeBucketPublicReadPolicy'),
+      setBucketCors: track('setBucketCors'),
+    };
+    const storageBuckets = {
+      upsert: track('upsert', (input: any) => input),
+      deleteMissingForEnv: track('deleteMissingForEnv', () => 0),
+      deleteByEnv: track('deleteByEnv', () => 0),
+      listByEnv: vi.fn().mockResolvedValue(options.previous ?? []),
+      listByPhysicalNames: vi.fn().mockResolvedValue(options.claims ?? []),
+    };
+    const ensureForEnv = vi.fn(async () => {
+      calls.push('ensureForEnv');
+      return { mode: 'shared', envVars: [], bindingHash: 'h', iamRoleArn: null, iamRoleName: null, serviceAccount: null };
+    });
+    Object.assign((deployer as any).objectStoreProvisioner, {
+      bucketProvisioner,
+      storageBuckets,
+      k8s: { createSecret: vi.fn(), deleteSecret: vi.fn() },
+      appCredentialProvisioners: [{
+        mode: 'shared',
+        availability: () => ({ available: true }),
+        ensureForEnv,
+        removeForEnv: vi.fn().mockResolvedValue(undefined),
+      }],
+    });
+    const prepare = (buckets: Array<Record<string, unknown>>, envName = 'prod') =>
+      (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
+        services: {
+          api: { image: 'ghcr.io/example/api:latest', 'x-eve': { object_store: { buckets } } },
+        },
+        envWorkers: [],
+        scope: { ...scope, envName, namespace: `eve-acme-media-${envName}` },
+      });
+    return { deployer, calls, bucketProvisioner, storageBuckets, ensureForEnv, prepare };
+  }
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('removes the public grant when a public bucket turns private', async () => {
+    const { calls, prepare } = setup({ previous: [row('assets', 'public')] });
+
+    await prepare([{ name: 'assets', visibility: 'private' }]);
+
+    expect(calls).toContain('removeBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    expect(calls).not.toContain('setBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    // Un-published before the row is rewritten as private, so a failure can be retried.
+    expect(calls.indexOf('removeBucketPublicReadPolicy:eve-app-acme-media-prod-assets'))
+      .toBeLessThan(calls.findIndex((call) => call.startsWith('upsert')));
+  });
+
+  it('keeps the grant on a bucket that stays public', async () => {
+    const { calls, prepare } = setup({ previous: [row('assets', 'public')] });
+
+    await prepare([{ name: 'assets', visibility: 'public' }]);
+
+    expect(calls).toContain('setBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    expect(calls.some((call) => call.startsWith('removeBucketPublicReadPolicy'))).toBe(false);
+  });
+
+  it('un-publishes a public bucket removed from the manifest but keeps its data', async () => {
+    const { calls, storageBuckets, prepare } = setup({
+      previous: [row('assets', 'public'), row('uploads', 'private')],
+    });
+
+    await prepare([{ name: 'uploads' }]);
+
+    expect(calls).toContain('removeBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    expect(calls.filter((call) => call.startsWith('removeBucketPublicReadPolicy'))).toHaveLength(1);
+    expect(storageBuckets.deleteMissingForEnv).toHaveBeenCalledWith('proj_123', 'prod', [
+      { service_name: 'api', name: 'uploads' },
+    ]);
+  });
+
+  it('fails the deploy and keeps the rows when un-publishing fails', async () => {
+    const { calls, storageBuckets, prepare } = setup({
+      previous: [row('assets', 'public')],
+      removeBucketPublicReadPolicy: vi.fn().mockRejectedValue(new Error('AccessDenied')),
+    });
+
+    await expect(prepare([{ name: 'uploads' }])).rejects.toThrow(
+      /Failed to remove public read access .* env "prod": eve-app-acme-media-prod-assets: AccessDenied/,
+    );
+    expect(storageBuckets.deleteMissingForEnv).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.startsWith('upsert'))).toBe(false);
+  });
+
+  it('refuses a physical name another env of the project already uses', async () => {
+    // env "test" + bucket "ab-cd" and env "test-ab" + bucket "cd" share one name.
+    const { calls, ensureForEnv, prepare } = setup({
+      claims: [row('ab-cd', 'private', { env_name: 'test', physical_name: 'eve-app-acme-media-test-ab-cd' })],
+    });
+
+    await expect(prepare([{ name: 'cd' }], 'test-ab')).rejects.toThrow(
+      'Object-store bucket name collision in env "test-ab": bucket "cd" maps to "eve-app-acme-media-test-ab-cd", ' +
+      'which env "test" (bucket "ab-cd") already uses. Rename the bucket or the environment.',
+    );
+    expect(ensureForEnv).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('does not name another project that holds the physical name', async () => {
+    const { prepare } = setup({
+      claims: [row('cd', 'private', { project_id: 'proj_other', env_name: 'test-ab', physical_name: 'eve-app-acme-media-test-ab-cd' })],
+    });
+
+    await expect(prepare([{ name: 'cd' }], 'test-ab')).rejects.toThrow(
+      'bucket "cd" maps to "eve-app-acme-media-test-ab-cd", which another project already uses',
+    );
+  });
+
+  it('accepts a physical name this env already tracks', async () => {
+    const { calls, prepare } = setup({ claims: [row('uploads', 'private')] });
+
+    await prepare([{ name: 'uploads' }]);
+
+    expect(calls).toContain('ensureBucket:eve-app-acme-media-prod-uploads');
+  });
+
+  it('un-publishes the env buckets on env deletion without failing it', async () => {
+    const removeBucketPublicReadPolicy = vi.fn()
+      .mockRejectedValueOnce(new Error('AccessDenied'))
+      .mockResolvedValue(undefined);
+    const { deployer } = setup({
+      previous: [row('assets', 'public'), row('media', 'public'), row('uploads', 'private')],
+      removeBucketPublicReadPolicy,
+    });
+    const warn = vi.spyOn((deployer as any).objectStoreProvisioner.logger, 'warn').mockImplementation(() => undefined);
+
+    await (deployer as any).objectStoreProvisioner.unpublishEnvBuckets(scope);
+
+    expect(removeBucketPublicReadPolicy.mock.calls.map(([name]) => name)).toEqual([
+      'eve-app-acme-media-prod-assets',
+      'eve-app-acme-media-prod-media',
+    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('eve-app-acme-media-prod-assets: AccessDenied'));
   });
 });
 
