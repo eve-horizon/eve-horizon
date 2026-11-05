@@ -214,9 +214,14 @@ RUN set -eu; \
 # cc-mirror creates isolated Claude Code variants with custom commands
 # Note: This runs as root but creates files in /home/node/.cc-mirror and /home/node/.local/bin
 # API keys are stripped from settings.json after creation - they're passed via env at runtime
+# mclaude must exist in the image: if it does not, the entrypoint installs it
+# over the network on every container start (worker and every runner pod).
+# A failed variant build is reported here and falls back to a claude shim, as
+# in the agent-runtime image.
 RUN if command -v cc-mirror >/dev/null 2>&1; then \
       # Create mclaude variant (mirror provider - direct Anthropic API)
-      HOME=/home/node cc-mirror quick --provider mirror --name mclaude --yes --no-shell-env 2>/dev/null || true && \
+      HOME=/home/node cc-mirror quick --provider mirror --name mclaude --yes --no-shell-env \
+        || echo "WARNING: cc-mirror could not create the mclaude variant; using the claude shim" >&2; \
       # Create zai variant (Z.ai provider - GLM models)
       # Use placeholder API key to complete setup, then strip it from settings.json
       # (cc-mirror requires an API key to create the variant, but we want runtime env to take precedence)
@@ -228,6 +233,9 @@ RUN if command -v cc-mirror >/dev/null 2>&1; then \
       fi && \
       # Fix ownership of created files
       chown -R node:node /home/node/.cc-mirror /home/node/.local 2>/dev/null || true; \
+    fi \
+    && if [ ! -x /home/node/.local/bin/mclaude ] && command -v claude >/dev/null 2>&1; then \
+      printf '#!/bin/sh\nexec claude "$@"\n' > /usr/local/bin/mclaude && chmod +x /usr/local/bin/mclaude; \
     fi
 
 # Pre-create ALL directories node user might write to (see directory list above)
