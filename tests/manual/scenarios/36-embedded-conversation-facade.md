@@ -8,7 +8,7 @@ Validates `/projects/:project_id/conversations` against local k3d.
    ```bash
    ./bin/eh status
    export EVE_API_URL=http://api.eve.lvh.me
-   eve org ensure manual-test-org --slug manual-test-org --json
+   eve org ensure manual-test-org --slug mto --json
    TOKEN=$(eve auth token --raw)
    ```
 2. Create or reuse a project with a routable app agent (`gateway.policy: routable`, `gateway.clients: [app]`) and sync agents.

@@ -221,7 +221,7 @@ Read `tests/manual/README.md` first. Required workflow:
 ```bash
 ./bin/eh status                    # Stack must be "running"
 eve system health --json           # Must return {"status":"ok"}
-eve org ensure "manual-test-org" --slug manual-test-org --json
+eve org ensure "manual-test-org" --slug mto --json
 eve secrets import --org org_manualtestorg --file manual-tests.secrets
 # Run scenarios in tests/manual/scenarios/
 eve job list --all --phase active

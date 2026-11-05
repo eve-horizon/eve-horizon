@@ -26,6 +26,9 @@ eve auth login
 # Ensure stable test org exists (used by all scenarios)
 eve org ensure "manual-test-org" --slug mto --json
 # Returns: org_manualtestorg
+# The name is positional. Org slugs are 2-12 lowercase letters/digits starting
+# with a letter (no hyphens), so use a short slug such as `mto`; a longer one
+# such as `manualtestorg` fails with a bare "Validation failed".
 
 # Import secrets to the test org (REQUIRED for job execution and deploys)
 # Run from repo root where manual-tests.secrets lives
@@ -106,6 +109,27 @@ This ensures:
 # Set the org for all commands
 export ORG_ID=org_manualtestorg
 ```
+
+## Shared example project
+
+Agents and packs declared by `eve-horizon-fullstack-example` claim agent slugs that are
+unique per org. Only one project in the org can sync that repo, so scenarios 03 (pipelines)
+and 05 (deploy) share a single project, slug `fstest`, and must not delete it between runs.
+A second project syncing the same repo fails with
+`Agent slug <slug> already used by <project>:<agent>`. Deleting a project does not currently
+release its agent slugs (EVE-027), so do not use delete-and-recreate to work around it.
+Other scenarios that sync this repo into their own project in the same org can hit the
+same conflict; prefer reusing `fstest`.
+
+Scenario 05's vanity-alias check needs the alias committed in the repo (the worker rejects a
+manifest that differs from the cloned ref), so it uses the example repo's `manual-test-alias`
+branch and is skipped when that branch is absent.
+
+## Harness
+
+Scenarios assume the `zai` harness (`Z_AI_API_KEY`). On a cluster with only an Anthropic
+key, use `claude` instead (set `harness: claude` / profile entries accordingly); it works
+for the LLM scenarios.
 
 ## Test Scenarios
 
