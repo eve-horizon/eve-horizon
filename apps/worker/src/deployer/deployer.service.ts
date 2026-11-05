@@ -255,6 +255,7 @@ export class DeployerService {
       db,
       this.bucketProvisioner,
       this.appCredentialProvisioners,
+      k8sService,
       this.logger,
       (service) => this.resolveXeve(service),
     );
@@ -2285,11 +2286,11 @@ export class DeployerService {
       managedValues?: Map<string, string>;
     },
     objectStorePlan?: EnvObjectStorePlan,
-  ): Promise<Array<{ name: string; value: string }>> {
+  ): Promise<k8s.V1EnvVar[]> {
     const config = loadConfig();
 
     // Platform-injected env vars (can be overridden by user-defined vars)
-    const platformEnvVars: Array<{ name: string; value: string }> = [
+    const platformEnvVars: k8s.V1EnvVar[] = [
       { name: 'EVE_API_URL', value: this.resolveServiceEveApiUrl(config.EVE_API_URL) },
       ...(config.EVE_PUBLIC_API_URL ? [{ name: 'EVE_PUBLIC_API_URL', value: config.EVE_PUBLIC_API_URL }] : []),
       ...(config.EVE_SSO_URL ? [{ name: 'EVE_SSO_URL', value: config.EVE_SSO_URL }] : []),
@@ -2337,15 +2338,12 @@ export class DeployerService {
       : [];
 
     // Merge: platform vars first, then user vars (user can override platform vars)
-    const envMap = new Map<string, string>();
-    for (const entry of platformEnvVars) {
-      envMap.set(entry.name, entry.value);
-    }
-    for (const entry of userEnvVars) {
-      envMap.set(entry.name, entry.value);
+    const envMap = new Map<string, k8s.V1EnvVar>();
+    for (const entry of [...platformEnvVars, ...userEnvVars]) {
+      envMap.set(entry.name, entry);
     }
 
-    return Array.from(envMap.entries()).map(([name, value]) => ({ name, value }));
+    return Array.from(envMap.values());
   }
 
   private async resolveAppLinkEnvVars(context: {
@@ -2454,9 +2452,10 @@ export class DeployerService {
     if (params.managedDbTrustHash) {
       annotations['eve.managed_db_trust_hash'] = params.managedDbTrustHash;
     }
+    // Roll pods when the binding changes: an IRSA role, or a rotated static
+    // key that pods read from the namespace Secret at container start.
     if (
-      params.objectStorePlan.binding?.mode === 'irsa' &&
-      params.objectStorePlan.binding.bindingHash &&
+      params.objectStorePlan.binding?.bindingHash &&
       params.objectStorePlan.bucketsByService.has(params.serviceName)
     ) {
       annotations['eve.app_bucket_binding_hash'] = params.objectStorePlan.binding.bindingHash;

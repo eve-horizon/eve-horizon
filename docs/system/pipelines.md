@@ -49,6 +49,13 @@ attempt logs. Script steps use the persisted `script_timeout_seconds`; action
 run steps use `action.timeout_seconds` or `action.timeout` before falling back
 to job hints.
 
+Commands in script steps, `action: { type: run }` and legacy pipeline-run
+`run` steps start from an allowlisted environment (`PATH`, `HOME`, locale,
+proxy and CA settings, `EVE_API_URL`, job and env context), not the worker's
+own. Worker credentials such as `EVE_STORAGE_*` and `EVE_APP_STORAGE_*` keys,
+`EVE_INTERNAL_API_KEY` and database URLs are never inherited; use project
+secrets or `env_overrides` to give a command what it needs.
+
 Pipeline definitions and individual steps can declare `toolchains` with valid
 values `python`, `media`, `rust`, `java`, and `kotlin`. Script, shorthand
 `run`, agent, and `action: { type: run }` steps resolve `step.toolchains >
