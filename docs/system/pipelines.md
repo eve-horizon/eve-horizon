@@ -100,14 +100,23 @@ token. `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN=true` restores the token for
 an install that knowingly gives job code API access. Placement must be set in
 pairs: a key without a value fails the job rather than scheduling job code on
 the wrong pool. The worker's runner mounts the org filesystem claim
-`eve-org-fs-org-default`; with a `ReadWriteOnce` claim the runner must land on
-the node that already holds it, which the selector and toleration above
-achieve when the agents pool is one node (use a `ReadWriteMany` claim or pod
-affinity otherwise).
+`eve-org-fs-org-default`. With a `ReadWriteOnce` claim the runner must land on
+the node that already holds it, or it hangs in `ContainerCreating` with a
+Multi-Attach error. Set pod affinity to the agent runtime for that case:
+
+```yaml
+- name: EVE_RUNNER_POD_AFFINITY_KEY     # required affinity, topologyKey
+  value: app.kubernetes.io/name         # kubernetes.io/hostname
+- name: EVE_RUNNER_POD_AFFINITY_VALUE
+  value: eve-agent-runtime
+```
+
+`ReadWriteMany` claims (Filestore, EFS) need no affinity.
 
 `EVE_SCRIPT_K8S_RUNNER` stays off by default in code because local
-docker-compose has no Kubernetes and the k3d stack has not been verified with
-runner-pod scripts. The production default belongs in the deployment manifests.
+docker-compose has no Kubernetes, the k3d stack has not been verified with
+runner-pod scripts, and on a `ReadWriteOnce` org filesystem a runner without
+pod affinity would hang. The production default belongs in the deployment manifests.
 See [job-execution-isolation-plan.md](../plans/job-execution-isolation-plan.md)
 for what remains (runner pods still carry `DATABASE_URL` and the internal key;
 the worker's own RBAC is cluster-wide).

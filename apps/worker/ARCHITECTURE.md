@@ -46,6 +46,7 @@ executes against env namespaces but does not live inside them.
 | `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN` | `true` mounts the API token into runner pods | `false` |
 | `EVE_RUNNER_NODE_SELECTOR_KEY` / `_VALUE` | Node label runner pods must land on (set both) | - |
 | `EVE_RUNNER_TAINT_KEY` / `_VALUE` / `_EFFECT` | Taint runner pods tolerate | - |
+| `EVE_RUNNER_POD_AFFINITY_KEY` / `_VALUE` | Run runner pods on the node of a pod with this label (needed with a `ReadWriteOnce` org filesystem claim) | - |
 | `EVE_SCRIPT_K8S_RUNNER` | `true` runs script steps in runner pods instead of the worker process (recommended in production) | `false` |
 | `EVE_BUILD_BACKEND` | Image build backend (`buildkit`/`buildx`) | buildkit in K8s |
 

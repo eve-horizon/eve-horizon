@@ -5,7 +5,8 @@ import { buildRunnerManifests } from './k8s-runner.js';
 const KEYS = [
   'EVE_RUNNER_IMAGE', 'DATABASE_URL', 'EVE_RUNNER_SERVICE_ACCOUNT', 'EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN',
   'EVE_RUNNER_NODE_SELECTOR_KEY', 'EVE_RUNNER_NODE_SELECTOR_VALUE',
-  'EVE_RUNNER_TAINT_KEY', 'EVE_RUNNER_TAINT_VALUE', 'EVE_RUNNER_TAINT_EFFECT', 'EVE_SECRETS_MASTER_KEY', 'EVE_INTERNAL_API_KEY',
+  'EVE_RUNNER_TAINT_KEY', 'EVE_RUNNER_TAINT_VALUE', 'EVE_RUNNER_TAINT_EFFECT',
+  'EVE_RUNNER_POD_AFFINITY_KEY', 'EVE_RUNNER_POD_AFFINITY_VALUE', 'EVE_SECRETS_MASTER_KEY', 'EVE_INTERNAL_API_KEY',
 ] as const;
 const previous = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
 
@@ -60,6 +61,16 @@ describe('agent-runtime runner pod isolation', () => {
     const spec = podSpec();
     expect(spec.nodeSelector).toEqual({ pool: 'agents' });
     expect(spec.tolerations).toEqual([{ key: 'pool', operator: 'Equal', value: 'agents', effect: 'NoSchedule' }]);
+    expect(spec).not.toHaveProperty('affinity');
+  });
+
+  it('follows the node holding a ReadWriteOnce org filesystem when pod affinity is set', () => {
+    process.env.EVE_RUNNER_POD_AFFINITY_KEY = 'app.kubernetes.io/name';
+    process.env.EVE_RUNNER_POD_AFFINITY_VALUE = 'eve-agent-runtime';
+    expect(podSpec().affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution).toEqual([{
+      labelSelector: { matchLabels: { 'app.kubernetes.io/name': 'eve-agent-runtime' } },
+      topologyKey: 'kubernetes.io/hostname',
+    }]);
   });
 
   it('does not hand the secrets master key to job code', () => {

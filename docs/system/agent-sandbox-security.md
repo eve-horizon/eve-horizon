@@ -64,8 +64,9 @@ For production deployments using Kubernetes runner pods:
 - No service account token is mounted (`automountServiceAccountToken: false`);
   set `EVE_RUNNER_SERVICE_ACCOUNT` to an account with no RBAC or cloud identity
 - All Linux capabilities dropped, UID 1000, no privilege escalation
-- Placement on the job pool via `EVE_RUNNER_NODE_SELECTOR_*` and
-  `EVE_RUNNER_TAINT_*`, away from the platform's own nodes
+- Placement on the job pool via `EVE_RUNNER_NODE_SELECTOR_*`,
+  `EVE_RUNNER_TAINT_*` and optional `EVE_RUNNER_POD_AFFINITY_*`, away from the
+  platform's own nodes
 - Network policies restrict pod communication
 - Resource limits prevent DoS attacks
 - Ephemeral storage destroyed after job completion

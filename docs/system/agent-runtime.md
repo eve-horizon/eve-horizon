@@ -53,8 +53,9 @@ runner settings: no service account token (`automountServiceAccountToken:
 false`), all capabilities dropped, the service account named by
 `EVE_RUNNER_SERVICE_ACCOUNT` (namespace default when unset), and placement
 from `EVE_RUNNER_NODE_SELECTOR_KEY`/`_VALUE` and
-`EVE_RUNNER_TAINT_KEY`/`_VALUE`/`_EFFECT`. Set the placement to the pool the
-agent runtime itself runs on. `EVE_SECRETS_MASTER_KEY` is not forwarded to
+`EVE_RUNNER_TAINT_KEY`/`_VALUE`/`_EFFECT`, plus optional pod affinity
+(`EVE_RUNNER_POD_AFFINITY_KEY`/`_VALUE`) to the node of a labelled pod. Set the
+placement to the pool the agent runtime itself runs on. `EVE_SECRETS_MASTER_KEY` is not forwarded to
 runner pods; only the API decrypts secrets. See
 [pipelines.md](./pipelines.md#where-script-steps-run-and-what-they-can-reach)
 for the full variable list.

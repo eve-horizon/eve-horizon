@@ -183,6 +183,7 @@ export { cleanupAttemptWorkspace } from './workspace-cleanup.js';
 export {
   resolveRunnerPodIsolation,
   runnerUsesPlatformServiceAccount,
+  type RunnerPodAffinity,
   type RunnerPodIsolation,
   type RunnerToleration,
 } from './runner-pod.js';

@@ -37,6 +37,7 @@ Before this change:
 | Runner pods set `automountServiceAccountToken: false` unless `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN=true` | `packages/shared/src/invoke/runner-pod.ts`, both `k8s-runner.ts` |
 | Unset `EVE_RUNNER_SERVICE_ACCOUNT` means the namespace default account, never a platform one; naming a platform account logs a warning | same |
 | `EVE_RUNNER_NODE_SELECTOR_KEY`/`_VALUE` and `EVE_RUNNER_TAINT_KEY`/`_VALUE`/`_EFFECT` place runner pods; half-set pairs fail the job | same |
+| Optional `EVE_RUNNER_POD_AFFINITY_KEY`/`_VALUE` adds required pod affinity (`topologyKey: kubernetes.io/hostname`) so a runner follows the node holding a `ReadWriteOnce` org filesystem claim | same |
 | Runner containers drop all capabilities | both `k8s-runner.ts` |
 | Agent-runtime runner no longer receives `EVE_SECRETS_MASTER_KEY` | `apps/agent-runtime/src/invoke/k8s-runner.ts` |
 | One allowlisted env for in-process job commands, now also used by the legacy `run` action | `apps/worker/src/execution/job-command-env.ts` |
@@ -55,7 +56,9 @@ poisoned worker env).
 Flipping the code default would change every Kubernetes install at once:
 script steps would start paying pod start-up (image pull, PVC bind, readiness),
 need `EVE_RUNNER_IMAGE`, the `eve-org-fs-org-default` claim and a schedulable
-pool. Docker-compose is unaffected (no Kubernetes), but the local k3d stack has
+pool. On a `ReadWriteOnce` org filesystem claim a runner without pod affinity
+hangs in `ContainerCreating` (Multi-Attach), so the default must not flip
+until the deployment manifests carry the affinity for that storage profile. Docker-compose is unaffected (no Kubernetes), but the local k3d stack has
 not been exercised with runner-pod scripts. So the production default lives in
 the deployment manifests, and the code default can flip once k3d is verified
 (checklist below).
@@ -79,6 +82,11 @@ Worker (and agent-runtime when it uses runner mode):
   value: agents
 - name: EVE_RUNNER_TAINT_EFFECT
   value: NoSchedule
+# Only when the org filesystem claim is ReadWriteOnce (one disk, one node):
+- name: EVE_RUNNER_POD_AFFINITY_KEY
+  value: app.kubernetes.io/name
+- name: EVE_RUNNER_POD_AFFINITY_VALUE
+  value: eve-agent-runtime
 ```
 
 plus a token-less service account with no RBAC and no cloud identity binding:
@@ -144,9 +152,8 @@ upsert path needs today.
 
 Once phase 2 lands and k3d is verified, flip `EVE_SCRIPT_K8S_RUNNER` on for
 `EVE_RUNTIME=k8s` and require an explicit `EVE_SCRIPT_ALLOW_IN_PROCESS=true`
-to run job code inside the worker. Optionally add pod affinity to co-locate
-runner pods with the pod holding a `ReadWriteOnce` org filesystem claim when
-the agents pool has more than one node.
+to run job code inside the worker. Consider deriving the runner's affinity
+from the org filesystem claim's access mode instead of configuration.
 
 ## Live-cluster verification (not run offline)
 
@@ -155,8 +162,11 @@ the agents pool has more than one node.
 - [ ] In that pod: no file under `/var/run/secrets/kubernetes.io/`;
       `kubectl auth can-i --list` fails; on GKE the metadata server returns no
       token for the runner's KSA.
-- [ ] A runner pod mounting a `ReadWriteOnce` org filesystem claim starts on
-      the agents node (no `Multi-Attach` event).
+- [ ] With a `ReadWriteOnce` org filesystem claim and
+      `EVE_RUNNER_POD_AFFINITY_KEY=app.kubernetes.io/name`,
+      `_VALUE=eve-agent-runtime`, a runner pod starts on the agent runtime's
+      node (no `Multi-Attach` event); without the affinity on a multi-node
+      pool it can hang, which confirms the setting is needed.
 - [ ] With `EVE_RUNNER_NODE_SELECTOR_KEY` set and the value missing, the job
       fails with the configuration error rather than scheduling.
 - [ ] k3d: `./bin/eh k8s deploy` with `EVE_SCRIPT_K8S_RUNNER=true`, then a

@@ -14,6 +14,13 @@
  * | `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN` | `true` mounts the API token (off by default). |
  * | `EVE_RUNNER_NODE_SELECTOR_KEY` / `_VALUE` | Node label the pod must land on (both or neither). |
  * | `EVE_RUNNER_TAINT_KEY` / `_VALUE` / `_EFFECT` | Taint the pod tolerates (value and effect optional). |
+ * | `EVE_RUNNER_POD_AFFINITY_KEY` / `_VALUE` | Run on the same node as a pod with this label (both or neither). |
+ *
+ * Pod affinity exists for `ReadWriteOnce` org filesystem claims: the worker's
+ * runner mounts `eve-org-fs-org-default`, and an RWO disk attaches to one node
+ * at a time, so the runner must land where the agent runtime already holds it
+ * (for example `app.kubernetes.io/name=eve-agent-runtime`). Without it the pod
+ * hangs in ContainerCreating with a Multi-Attach error. RWX claims do not need it.
  */
 
 const TAINT_EFFECTS = ['NoSchedule', 'PreferNoSchedule', 'NoExecute'] as const;
@@ -29,12 +36,22 @@ export interface RunnerToleration {
   effect?: TaintEffect;
 }
 
+export interface RunnerPodAffinity {
+  podAffinity: {
+    requiredDuringSchedulingIgnoredDuringExecution: Array<{
+      labelSelector: { matchLabels: Record<string, string> };
+      topologyKey: 'kubernetes.io/hostname';
+    }>;
+  };
+}
+
 export interface RunnerPodIsolation {
   /** Omitted when unset, so the pod runs as the namespace's default service account. */
   serviceAccountName?: string;
   automountServiceAccountToken: boolean;
   nodeSelector?: Record<string, string>;
   tolerations?: RunnerToleration[];
+  affinity?: RunnerPodAffinity;
 }
 
 function readTrimmed(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -50,6 +67,23 @@ function readNodeSelector(env: NodeJS.ProcessEnv): Record<string, string> | unde
     throw new Error('EVE_RUNNER_NODE_SELECTOR_KEY and EVE_RUNNER_NODE_SELECTOR_VALUE must be set together');
   }
   return { [key]: value };
+}
+
+function readPodAffinity(env: NodeJS.ProcessEnv): RunnerPodAffinity | undefined {
+  const key = readTrimmed(env, 'EVE_RUNNER_POD_AFFINITY_KEY');
+  const value = readTrimmed(env, 'EVE_RUNNER_POD_AFFINITY_VALUE');
+  if (!key && !value) return undefined;
+  if (!key || value === undefined) {
+    throw new Error('EVE_RUNNER_POD_AFFINITY_KEY and EVE_RUNNER_POD_AFFINITY_VALUE must be set together');
+  }
+  return {
+    podAffinity: {
+      requiredDuringSchedulingIgnoredDuringExecution: [{
+        labelSelector: { matchLabels: { [key]: value } },
+        topologyKey: 'kubernetes.io/hostname',
+      }],
+    },
+  };
 }
 
 function readTolerations(env: NodeJS.ProcessEnv): RunnerToleration[] | undefined {
@@ -73,7 +107,7 @@ function readTolerations(env: NodeJS.ProcessEnv): RunnerToleration[] | undefined
 }
 
 /**
- * Resolve the service account, token mount and placement for a runner pod.
+ * Resolve the service account, token mount, placement and co-location for a runner pod.
  * Throws on half-configured placement so a typo fails the job loudly instead of
  * scheduling job code onto the platform's own nodes.
  */
@@ -82,11 +116,13 @@ export function resolveRunnerPodIsolation(env: NodeJS.ProcessEnv = process.env):
   const automount = readTrimmed(env, 'EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN')?.toLowerCase();
   const nodeSelector = readNodeSelector(env);
   const tolerations = readTolerations(env);
+  const affinity = readPodAffinity(env);
   return {
     ...(serviceAccountName ? { serviceAccountName } : {}),
     automountServiceAccountToken: automount === 'true' || automount === '1',
     ...(nodeSelector ? { nodeSelector } : {}),
     ...(tolerations ? { tolerations } : {}),
+    ...(affinity ? { affinity } : {}),
   };
 }
 

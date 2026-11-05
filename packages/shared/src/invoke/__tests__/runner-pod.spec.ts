@@ -32,10 +32,26 @@ describe('resolveRunnerPodIsolation', () => {
       .toEqual([{ key: 'dedicated', operator: 'Exists' }]);
   });
 
+  it('co-locates with the pod holding a ReadWriteOnce org filesystem when asked', () => {
+    expect(resolveRunnerPodIsolation({}).affinity).toBeUndefined();
+    expect(resolveRunnerPodIsolation({
+      EVE_RUNNER_POD_AFFINITY_KEY: 'app.kubernetes.io/name', EVE_RUNNER_POD_AFFINITY_VALUE: 'eve-agent-runtime',
+    }).affinity).toEqual({
+      podAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: [{
+          labelSelector: { matchLabels: { 'app.kubernetes.io/name': 'eve-agent-runtime' } },
+          topologyKey: 'kubernetes.io/hostname',
+        }],
+      },
+    });
+  });
+
   it('fails loudly on half-configured placement', () => {
     expect(() => resolveRunnerPodIsolation({ EVE_RUNNER_NODE_SELECTOR_KEY: 'pool' }))
       .toThrow(/must be set together/);
     expect(() => resolveRunnerPodIsolation({ EVE_RUNNER_NODE_SELECTOR_VALUE: 'agents' }))
+      .toThrow(/must be set together/);
+    expect(() => resolveRunnerPodIsolation({ EVE_RUNNER_POD_AFFINITY_KEY: 'app.kubernetes.io/name' }))
       .toThrow(/must be set together/);
     expect(() => resolveRunnerPodIsolation({ EVE_RUNNER_TAINT_VALUE: 'agents' }))
       .toThrow(/need EVE_RUNNER_TAINT_KEY/);
