@@ -21,9 +21,9 @@ import {
   createSign,
   type KeyObject,
 } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
 import { loadConfig } from '@eve/shared';
 import { Public } from '../auth/auth.decorator.js';
+import { loadKeyValue } from '../auth/auth.util.js';
 import { InternalTokenGuard } from '../common/internal-token.guard.js';
 
 const TOKEN_TTL_SECONDS = 300;
@@ -126,18 +126,6 @@ function signRegistryToken(
   return `${signingInput}.${signature}`;
 }
 
-/**
- * Load a PEM key value that may be provided inline or as a file path.
- * Mirrors the pattern from auth.service.ts loadKeyValue().
- */
-function loadKeyValue(value: string): string {
-  if (value.includes('-----BEGIN')) return value;
-  if (existsSync(value)) {
-    return readFileSync(value, 'utf8');
-  }
-  return value;
-}
-
 @ApiTags('internal')
 @Controller('internal/registry')
 export class RegistryTokenController {
@@ -216,8 +204,8 @@ export class RegistryTokenController {
         ? []
         : parseScopes(scope);
 
-    const keyPem = loadKeyValue(config.EVE_REGISTRY_SIGNING_KEY);
-    const privateKey = createPrivateKey(keyPem);
+    const keyPem = loadKeyValue(config.EVE_REGISTRY_SIGNING_KEY, 'EVE_REGISTRY_SIGNING_KEY');
+    const privateKey = createPrivateKey(keyPem!);
     const keyId = computeRfc7638ThumbprintFromPrivateKey(privateKey);
 
     const now = Math.floor(Date.now() / 1000);

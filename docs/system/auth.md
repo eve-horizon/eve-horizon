@@ -46,7 +46,7 @@ mint the job token, so the on-disk view and API authority match.
 | Variable | Description |
 |----------|-------------|
 | `EVE_AUTH_ENABLED` | Enable authentication (`true`/`false`, default: `true`) |
-| `EVE_AUTH_PRIVATE_KEY` | RSA private key (PEM string or file path) — required for internal mode |
+| `EVE_AUTH_PRIVATE_KEY` | RSA private key (PEM, `\n`-escaped PEM, base64-encoded PEM, or file path; see below) — required for internal mode |
 | `EVE_BOOTSTRAP_TOKEN` | One-time token for initial admin creation |
 
 ### Optional Variables
@@ -420,6 +420,21 @@ export EVE_AUTH_PUBLIC_KEY="$(cat eve-auth.pub)"
 # Or reference files directly
 export EVE_AUTH_PRIVATE_KEY="/path/to/eve-auth.key"
 ```
+
+Env files hold one line per variable (including `kubectl create secret
+--from-env-file`), so a multi-line PEM cannot go in one as is. Every PEM key
+variable (`EVE_AUTH_PRIVATE_KEY`, `EVE_AUTH_PUBLIC_KEY`, `EVE_AUTH_PUBLIC_KEY_OLD`,
+`EVE_REGISTRY_SIGNING_KEY`) also accepts either single-line form:
+
+```bash
+# base64-encoded PEM (recommended for env files)
+EVE_AUTH_PRIVATE_KEY=$(base64 < eve-auth.key | tr -d '\n')
+# PEM with literal \n escapes
+EVE_AUTH_PRIVATE_KEY=$(awk 'BEGIN{ORS="\\n"} {print}' eve-auth.key)
+```
+
+Surrounding quotes and whitespace are ignored. A value that is none of the
+accepted forms stops the API at startup with an error naming the variable.
 
 ## Bootstrap Flow
 

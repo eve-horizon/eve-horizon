@@ -67,9 +67,9 @@ export function parseProjectAuthConfig(logger: Logger, value: Record<string, unk
 
 export function loadKeyRing(config: ReturnType<typeof loadConfig>): KeyEntry[] {
   const keys: KeyEntry[] = [];
-  const privateKeyPem = loadKeyValue(config.EVE_AUTH_PRIVATE_KEY);
-  const publicKeyPem = loadKeyValue(config.EVE_AUTH_PUBLIC_KEY);
-  const oldPublicKeyPem = loadKeyValue(config.EVE_AUTH_PUBLIC_KEY_OLD);
+  const privateKeyPem = loadKeyValue(config.EVE_AUTH_PRIVATE_KEY, 'EVE_AUTH_PRIVATE_KEY');
+  const publicKeyPem = loadKeyValue(config.EVE_AUTH_PUBLIC_KEY, 'EVE_AUTH_PUBLIC_KEY');
+  const oldPublicKeyPem = loadKeyValue(config.EVE_AUTH_PUBLIC_KEY_OLD, 'EVE_AUTH_PUBLIC_KEY_OLD');
 
   if (privateKeyPem) {
     const privateKey = createPrivateKey(privateKeyPem);
@@ -86,13 +86,60 @@ export function loadKeyRing(config: ReturnType<typeof loadConfig>): KeyEntry[] {
   return keys;
 }
 
-export function loadKeyValue(value?: string): string | undefined {
+const PEM_BEGIN = '-----BEGIN ';
+const PEM_END = '-----END ';
+const BASE64_TEXT = /^[A-Za-z0-9+/_-]+={0,2}$/;
+
+/**
+ * Read a PEM key from an environment value. Accepted forms:
+ *
+ * - the PEM itself, with real newlines or with `\n` escapes (env files and
+ *   `kubectl create secret --from-env-file` carry one line per variable);
+ * - a path to a file holding the PEM;
+ * - the PEM base64-encoded (line breaks allowed). Only a value whose decoding
+ *   is a PEM block counts, so a file name is never mistaken for one.
+ *
+ * Surrounding whitespace and one pair of matching quotes are ignored.
+ * `name` labels the error for a value that is none of these.
+ */
+export function loadKeyValue(value?: string, name = 'key'): string | undefined {
   if (!value) return undefined;
-  if (value.includes('-----BEGIN')) return value;
-  if (existsSync(value)) {
-    return readFileSync(value, 'utf8');
+  const trimmed = stripMatchingQuotes(value.trim());
+  if (!trimmed) return undefined;
+
+  if (trimmed.includes(PEM_BEGIN)) return unescapePemNewlines(trimmed);
+  if (existsSync(trimmed)) {
+    return unescapePemNewlines(readFileSync(trimmed, 'utf8'));
+  }
+  const decoded = decodeBase64Pem(trimmed);
+  if (decoded) return decoded;
+
+  throw new Error(
+    `${name} is not a PEM key, a readable key file path, or a base64-encoded PEM key`,
+  );
+}
+
+function stripMatchingQuotes(value: string): string {
+  const first = value[0];
+  if (value.length >= 2 && (first === '"' || first === "'") && value[value.length - 1] === first) {
+    return value.slice(1, -1).trim();
   }
   return value;
+}
+
+function unescapePemNewlines(pem: string): string {
+  // Base64 bodies and PEM armour never contain a backslash, so every `\n` or
+  // `\r\n` escape is a flattened line break.
+  return pem.replace(/\\r\\n|\\n/g, '\n');
+}
+
+function decodeBase64Pem(value: string): string | undefined {
+  const compact = value.replace(/\s+/g, '');
+  if (!BASE64_TEXT.test(compact)) return undefined;
+  const decoded = Buffer.from(compact, 'base64').toString('utf8');
+  return decoded.includes(PEM_BEGIN) && decoded.includes(PEM_END)
+    ? unescapePemNewlines(decoded.trim())
+    : undefined;
 }
 
 export function createJwtRs256(payload: Record<string, unknown>, key: KeyEntry): string {
