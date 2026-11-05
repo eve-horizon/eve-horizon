@@ -81,3 +81,20 @@ export interface ObjectStorageClient {
   /** Undo setBucketPublicReadPolicy: remove anonymous read grants. Idempotent. */
   removeBucketPublicReadPolicy(name: string): Promise<void>;
 }
+
+/**
+ * Per-bucket IAM membership. Only backends with bucket-level IAM (native GCS)
+ * implement it; the worker uses it to grant an app identity its env buckets.
+ */
+export interface BucketIamMemberClient {
+  /** Add `member` to `role` on the bucket. Idempotent. */
+  addBucketIamMember(bucket: string, role: string, member: string): Promise<void>;
+  /** Remove `member` from `role` on the bucket. Idempotent; a missing bucket is a no-op. */
+  removeBucketIamMember(bucket: string, role: string, member: string): Promise<void>;
+}
+
+export function supportsBucketIamMembers(client: unknown): client is BucketIamMemberClient {
+  const candidate = client as Partial<BucketIamMemberClient> | null | undefined;
+  return typeof candidate?.addBucketIamMember === 'function'
+    && typeof candidate?.removeBucketIamMember === 'function';
+}

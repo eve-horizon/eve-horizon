@@ -1,5 +1,7 @@
 import type { Db } from '../client.js';
 
+export type StorageBucketIsolationMode = 'irsa' | 'shared' | 'minio-static-key' | 'gcp-workload-identity';
+
 export interface StorageBucket {
   id: string;
   org_id: string | null;
@@ -10,7 +12,7 @@ export interface StorageBucket {
   physical_name: string;
   visibility: 'private' | 'public';
   cors_json: Record<string, unknown>;
-  isolation_mode: 'irsa' | 'shared' | 'minio-static-key' | null;
+  isolation_mode: StorageBucketIsolationMode | null;
   iam_role_arn: string | null;
   iam_role_name: string | null;
   service_account_name: string | null;
@@ -28,7 +30,7 @@ export interface UpsertStorageBucketInput {
   physical_name: string;
   visibility: 'private' | 'public';
   cors_json: Record<string, unknown>;
-  isolation_mode?: 'irsa' | 'shared' | 'minio-static-key' | null;
+  isolation_mode?: StorageBucketIsolationMode | null;
   iam_role_arn?: string | null;
   iam_role_name?: string | null;
   service_account_name?: string | null;

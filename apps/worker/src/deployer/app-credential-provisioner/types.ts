@@ -1,4 +1,4 @@
-export type AppObjectStoreCredentialMode = 'irsa' | 'shared' | 'minio-static-key';
+export type AppObjectStoreCredentialMode = 'irsa' | 'shared' | 'minio-static-key' | 'gcp-workload-identity';
 
 export interface AppObjectStoreScope {
   orgId: string;
@@ -47,7 +47,19 @@ export interface AppCredentialProvisionerAvailability {
 
 export interface AppCredentialProvisioner {
   readonly mode: AppObjectStoreCredentialMode;
+  /** Whether `isolation: auto` may pick this mode when it is available (default true). */
+  readonly autoSelectable?: boolean;
   availability(): AppCredentialProvisionerAvailability;
   ensureForEnv(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<AppObjectStoreBinding>;
-  removeForEnv(scope: AppObjectStoreScope): Promise<void>;
+  /**
+   * For modes whose grants live on the buckets themselves: called once the
+   * env's buckets exist, with the env's buckets and those it no longer declares.
+   */
+  grantBucketAccess?(
+    scope: AppObjectStoreScope,
+    physicalBucketNames: string[],
+    droppedBucketNames: string[],
+  ): Promise<void>;
+  /** `physicalBucketNames` are the env's tracked buckets, for modes that granted on them. */
+  removeForEnv(scope: AppObjectStoreScope, physicalBucketNames: string[]): Promise<void>;
 }

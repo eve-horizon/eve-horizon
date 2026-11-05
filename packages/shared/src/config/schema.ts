@@ -153,6 +153,9 @@ export const configSchema = z.object({
   EVE_APP_STORAGE_REGION: z.string().optional(),
   EVE_APP_STORAGE_ACCESS_KEY_ID: z.string().optional(),
   EVE_APP_STORAGE_SECRET_ACCESS_KEY: z.string().optional(),
+  // GKE Workload Identity pool for keyless app buckets:
+  // projects/<number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog
+  EVE_GKE_WORKLOAD_IDENTITY_POOL: z.string().optional(),
 
   // SES mailer hardening. See docs/plans/magic-link-email-silent-drop-plan.md.
   // 'auto' = enabled when GOTRUE_SMTP_HOST is *.amazonaws.com. 'true'/'false' override.

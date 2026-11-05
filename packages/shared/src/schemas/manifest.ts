@@ -254,7 +254,12 @@ export const ObjectStoreBucketSchema = z.object({
 
 export type ObjectStoreBucket = z.infer<typeof ObjectStoreBucketSchema>;
 
-export const ObjectStoreIsolationSchema = z.enum(['auto', 'irsa', 'shared']);
+/**
+ * `workload-identity` binds the env's pods to a GKE Workload Identity
+ * principal with bucket-scoped IAM. It is keyless, so apps must use the Google
+ * Cloud Storage client libraries rather than an S3 SDK.
+ */
+export const ObjectStoreIsolationSchema = z.enum(['auto', 'irsa', 'shared', 'workload-identity']);
 export type ObjectStoreIsolation = z.infer<typeof ObjectStoreIsolationSchema>;
 
 export const ObjectStoreConfigSchema = z.object({

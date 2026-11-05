@@ -110,6 +110,20 @@ export class ObjectStoreProvisioner {
       await this.provisionObjectStoreBucket(entry, params.scope, binding);
     }
 
+    if (provisioner.grantBucketAccess) {
+      const dropped = previous
+        .map((row) => row.physical_name)
+        .filter((name) => !physicalBucketNames.includes(name));
+      try {
+        await provisioner.grantBucketAccess(params.scope, physicalBucketNames, dropped);
+      } catch (error) {
+        throw new Error(
+          `Failed to grant ${binding.mode} access to the object_store buckets of env "${params.scope.envName}": ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     await this.storageBuckets.deleteMissingForEnv(
       params.scope.projectId,
       params.scope.envName,
@@ -280,23 +294,31 @@ export class ObjectStoreProvisioner {
       return this.requireObjectStoreProvisioner('irsa', requestedMode, desired);
     }
 
+    if (requestedMode === 'workload-identity') {
+      return this.requireObjectStoreProvisioner('gcp-workload-identity', requestedMode, desired);
+    }
+
     if (requestedMode === 'shared') {
       const staticMode: AppObjectStoreCredentialMode =
         this.bucketProvisioner.backend === 'minio' ? 'minio-static-key' : 'shared';
       return this.requireObjectStoreProvisioner(staticMode, requestedMode, desired);
     }
 
-    for (const mode of ['irsa', 'minio-static-key', 'shared'] satisfies AppObjectStoreCredentialMode[]) {
+    const autoModes: AppObjectStoreCredentialMode[] = ['irsa', 'gcp-workload-identity', 'minio-static-key', 'shared'];
+    for (const mode of autoModes) {
       const provisioner = this.appCredentialProvisioners.find((candidate) => candidate.mode === mode);
-      const availability = provisioner?.availability() ?? { available: false, reason: 'provisioner is not registered' };
-      if (availability.available && provisioner) {
+      if (!provisioner || provisioner.autoSelectable === false) {
+        continue;
+      }
+      if (provisioner.availability().available) {
         return provisioner;
       }
     }
 
     throw new Error(
       'No object-store credential isolation mode is available on this cluster. ' +
-      'Configure IRSA or static app storage credentials before deploying services with x-eve.object_store.buckets.',
+      'Configure IRSA, GKE Workload Identity (EVE_GKE_WORKLOAD_IDENTITY_POOL) or static app storage credentials ' +
+      'before deploying services with x-eve.object_store.buckets.',
     );
   }
 
@@ -419,16 +441,17 @@ export class ObjectStoreProvisioner {
 
   buildObjectStoreServiceAccount(objectStorePlan: EnvObjectStorePlan): Record<string, unknown> | null {
     const serviceAccount = objectStorePlan.binding?.serviceAccount;
-    if (!serviceAccount || objectStorePlan.binding?.mode !== 'irsa') {
+    if (!serviceAccount) {
       return null;
     }
+    const hasAnnotations = Object.keys(serviceAccount.annotations).length > 0;
     return {
       apiVersion: 'v1',
       kind: 'ServiceAccount',
       metadata: {
         name: serviceAccount.name,
         namespace: serviceAccount.namespace,
-        annotations: serviceAccount.annotations,
+        ...(hasAnnotations ? { annotations: serviceAccount.annotations } : {}),
       },
     };
   }
@@ -437,13 +460,10 @@ export class ObjectStoreProvisioner {
     objectStorePlan: EnvObjectStorePlan,
     serviceName: string,
   ): string | undefined {
-    if (objectStorePlan.binding?.mode !== 'irsa') {
-      return undefined;
-    }
     if (!objectStorePlan.bucketsByService.has(serviceName)) {
       return undefined;
     }
-    return objectStorePlan.binding.serviceAccount?.name;
+    return objectStorePlan.binding?.serviceAccount?.name;
   }
 
   /**
@@ -467,12 +487,23 @@ export class ObjectStoreProvisioner {
         `${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    let trackedBuckets: string[] = [];
+    try {
+      trackedBuckets = [...new Set(
+        (await this.storageBuckets.listByEnv(scope.projectId, scope.envName)).map((row) => row.physical_name),
+      )];
+    } catch (error) {
+      this.logger.warn(
+        `Failed to list object-store buckets for ${scope.projectSlug}/${scope.envName}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     for (const provisioner of this.appCredentialProvisioners) {
       if (!provisioner.availability().available) {
         continue;
       }
       try {
-        await provisioner.removeForEnv(scope);
+        await provisioner.removeForEnv(scope, trackedBuckets);
       } catch (error) {
         this.logger.warn(
           `Failed to remove ${provisioner.mode} object-store binding for ${scope.projectSlug}/${scope.envName}: ` +

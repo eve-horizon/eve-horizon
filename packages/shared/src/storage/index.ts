@@ -1,4 +1,6 @@
+export { supportsBucketIamMembers } from './storage-client.js';
 export type {
+  BucketIamMemberClient,
   ObjectStorageClient,
   StorageGetObjectResult,
   StorageObjectMetadata,
