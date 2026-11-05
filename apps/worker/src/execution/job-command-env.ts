@@ -9,7 +9,11 @@
  * project secrets only through declared env_overrides.
  */
 
-/** Worker env keys a job command may inherit. Everything else stays in the worker. */
+/**
+ * Worker env keys a job command may inherit. Everything else stays in the worker,
+ * including KUBERNETES_SERVICE_HOST/PORT: a script should not silently act with
+ * the worker's in-cluster identity.
+ */
 export const JOB_COMMAND_INHERITED_ENV_KEYS = [
   'PATH',
   'LANG',
@@ -18,6 +22,17 @@ export const JOB_COMMAND_INHERITED_ENV_KEYS = [
   'TERM',
   'USER',
   'SHELL',
+  'TMPDIR',
+  // Egress settings, so commands work behind a proxy or private CA.
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'NODE_EXTRA_CA_CERTS',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
   'EVE_API_URL',
   'EVE_PUBLIC_API_URL',
   'EVE_TOOLCHAIN_INIT_MOUNTED',

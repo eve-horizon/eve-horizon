@@ -49,6 +49,26 @@ attempt logs. Script steps use the persisted `script_timeout_seconds`; action
 run steps use `action.timeout_seconds` or `action.timeout` before falling back
 to job hints.
 
+Pipeline definitions and individual steps can declare `toolchains` with valid
+values `python`, `media`, `rust`, `java`, and `kotlin`. Script, shorthand
+`run`, agent, and `action: { type: run }` steps resolve `step.toolchains >
+pipeline.toolchains > []` and persist the result on `jobs.hints.toolchains`.
+Other action types cannot declare step-level toolchains. Do not nest
+`toolchains` inside `action`; use the top-level step field.
+
+Pipeline definitions and steps can also declare `env_overrides`. Today the
+pipeline expander persists merged `env_overrides` only for `action: { type:
+run }` jobs; step-level keys override pipeline-level defaults. The action-run
+executor resolves `${secret.KEY}` placeholders immediately before launching
+bash, strips Eve-reserved keys defensively, and leaves the persisted job row
+unresolved for audit/debugging. Other action types are platform operations and
+continue to ignore `env_overrides`.
+
+Workflow step jobs may also declare `scope` blocks. These narrow the job token
+and org filesystem mount for orgfs/orgdocs/envdb/cloud_fs resources. See
+[workflows.md](./workflows.md#workflow-token-scope) for the scope grammar and
+merge semantics.
+
 #### Where script steps run, and what they can reach
 
 Script steps are repository code, so treat them as untrusted. There are two
@@ -61,7 +81,7 @@ execution modes:
 
 In both modes the command starts from an allowlisted environment
 (`apps/worker/src/execution/job-command-env.ts`): `PATH`, `HOME` (a
-workspace-scoped directory), locale and terminal variables, `EVE_API_URL`,
+workspace-scoped directory), locale, terminal, proxy and CA variables, `EVE_API_URL`,
 `EVE_PUBLIC_API_URL`, job identifiers, the job's own scoped `EVE_JOB_TOKEN`,
 `EVE_ENV_NAME`/`EVE_ENV_NAMESPACE`, toolchain paths, app-link variables and
 declared `env_overrides`. `DATABASE_URL`, `EVE_INTERNAL_API_KEY`,
@@ -120,26 +140,6 @@ pod affinity would hang. The production default belongs in the deployment manife
 See [job-execution-isolation-plan.md](../plans/job-execution-isolation-plan.md)
 for what remains (runner pods still carry `DATABASE_URL` and the internal key;
 the worker's own RBAC is cluster-wide).
-
-Pipeline definitions and individual steps can declare `toolchains` with valid
-values `python`, `media`, `rust`, `java`, and `kotlin`. Script, shorthand
-`run`, agent, and `action: { type: run }` steps resolve `step.toolchains >
-pipeline.toolchains > []` and persist the result on `jobs.hints.toolchains`.
-Other action types cannot declare step-level toolchains. Do not nest
-`toolchains` inside `action`; use the top-level step field.
-
-Pipeline definitions and steps can also declare `env_overrides`. Today the
-pipeline expander persists merged `env_overrides` only for `action: { type:
-run }` jobs; step-level keys override pipeline-level defaults. The action-run
-executor resolves `${secret.KEY}` placeholders immediately before launching
-bash, strips Eve-reserved keys defensively, and leaves the persisted job row
-unresolved for audit/debugging. Other action types are platform operations and
-continue to ignore `env_overrides`.
-
-Workflow step jobs may also declare `scope` blocks. These narrow the job token
-and org filesystem mount for orgfs/orgdocs/envdb/cloud_fs resources. See
-[workflows.md](./workflows.md#workflow-token-scope) for the scope grammar and
-merge semantics.
 
 ### Job Graph Expansion
 
