@@ -146,6 +146,26 @@ Example:     web.acme-fstack-test.lvh.me
 
 **Production VPS:** Set `EVE_DEFAULT_DOMAIN=apps.yourdomain.com` in the worker deployment.
 
+### Reserved Platform Domains
+
+A project cannot claim the platform's own hosts as custom domains, through
+`eve domain register` or a manifest's `x-eve.ingress.domains`, and the worker
+never renders an Ingress for them. Reserved, each with all its subdomains:
+
+- the hosts of `EVE_API_URL`, `EVE_PUBLIC_API_URL`, `EVE_SSO_URL` and
+  `SUPABASE_AUTH_EXTERNAL_URL`, plus `EVE_REGISTRY_HOST` and
+  `EVE_PLATFORM_INGRESS_HOSTNAME` (always);
+- every domain in `EVE_RESERVED_DOMAINS` (comma-separated, optional).
+
+If DNS has an apex or wildcard record for the platform's parent domain pointing
+at the shared ingress, set `EVE_RESERVED_DOMAINS=yourdomain.com` on both the API
+and the worker, so no tenant can claim any host under it (for example a future
+platform host). Hosts under `EVE_DEFAULT_DOMAIN` keep their existing handling:
+`eve domain register` refuses them and deploys skip them in favour of an ingress
+alias. Manifest sync rejects a reserved custom domain with a 400 naming the
+manifest path; a deploy that still carries one (claimed before this check
+existed) logs a warning, skips it and garbage-collects its old Ingress.
+
 ### Ingress Timeouts and Body Size
 
 Tenant HTTP ingresses support two controller-agnostic knobs under
