@@ -129,6 +129,19 @@ that never enabled runner mode see no change.
 
 ## Phase 2: runners without platform credentials
 
+The runner process uses its platform credentials for:
+
+| Credential | Outbound use in a runner pod |
+| --- | --- |
+| `DATABASE_URL` | job and attempt reads, execution log appends, runtime metadata, thread messages |
+| `EVE_INTERNAL_API_KEY` | `mintJobToken` (the script's `EVE_JOB_TOKEN`), `resolveProjectSecrets` (git auth, `env_overrides`), `mintAppLinkToken`, `emitRunnerEvent` (`runner.started/completed/failed`) |
+
+Job code does not inherit either (allowlisted env), and with the non-dumpable
+service process change it cannot read them from the runner's `/proc` entries;
+but both remain in the pod spec, visible to anyone who can read the pod. Dropping
+only the internal key would buy nothing while `DATABASE_URL` stays, and would
+break runner pods once inbound internal-key checks land on the worker app.
+
 Give a runner pod an attempt-scoped token instead of `DATABASE_URL` and the
 internal key:
 
@@ -139,6 +152,10 @@ internal key:
   events for that attempt only.
 - Secret resolution uses the job token's project scope.
 - The runner image's DB module is not loaded in runner mode.
+- Inbound calls to the runner (`/invoke`, `/scripts/execute`) authenticate
+  with a per-pod random token that the creating worker generates, puts in the
+  pod spec as the runner's expected inbound key, and sends with its submit
+  request. That keeps inbound auth working without the platform-wide key.
 
 ## Phase 3: per-namespace worker RBAC
 
