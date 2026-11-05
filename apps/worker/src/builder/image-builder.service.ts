@@ -19,6 +19,7 @@ import {
   BuildBackend,
 } from './image-builder.interface.js';
 import { RegistryAuthService } from './registry-auth.service.js';
+import { serviceGitEnv } from '@eve/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -176,7 +177,7 @@ export class ImageBuilderService {
       const { stdout } = await execFileAsync(
         'git',
         ['remote', 'get-url', 'origin'],
-        { cwd: workspacePath },
+        { cwd: workspacePath, env: serviceGitEnv() },
       );
 
       let url = stdout.trim();

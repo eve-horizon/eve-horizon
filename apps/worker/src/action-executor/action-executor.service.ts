@@ -46,6 +46,7 @@ import {
   toK8sName,
   readPositiveTimeoutSeconds,
 } from '@eve/shared';
+import { serviceGitEnv } from '@eve/shared';
 import * as yaml from 'yaml';
 import { DeployerService } from '../deployer/deployer.service';
 import { ImageBuilderService } from '../builder/image-builder.service.js';
@@ -773,7 +774,7 @@ export class ActionExecutorService {
       try {
         await execFileAsync('git', ['tag', '-a', tag, '-m', `Release ${tag}`], {
           cwd: workspace,
-          env: process.env,
+          env: serviceGitEnv(),
           maxBuffer: 1024 * 1024,
         });
       } catch (error) {
@@ -1934,7 +1935,7 @@ export class ActionExecutorService {
 
     try {
       await execFileAsync('git', ['clone', '--no-checkout', cloneUrl, workspace], {
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       });
     } catch (err) {
@@ -1951,7 +1952,7 @@ export class ActionExecutorService {
     onLog?.(`Checking out ${gitSha.substring(0, 8)}...`);
     await execFileAsync('git', ['checkout', gitSha], {
       cwd: workspace,
-      env: process.env,
+      env: serviceGitEnv(),
       maxBuffer: 1024 * 1024,
     });
     onLog?.('Workspace ready');
@@ -2040,7 +2041,7 @@ export class ActionExecutorService {
     try {
       const { stdout } = await execFileAsync('git', ['describe', '--tags', '--abbrev=0', gitSha], {
         cwd: workspace,
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       });
       return stdout.trim() || null;
@@ -2055,7 +2056,7 @@ export class ActionExecutorService {
       ['log', '--no-merges', '--pretty=format:%s%n%b%n----END----', range],
       {
         cwd: workspace,
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       },
     );

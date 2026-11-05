@@ -37,6 +37,7 @@ import {
   type ToolchainCacheEvent,
   toK8sName,
   deriveNamespace,
+  serviceGitEnv,
 } from '@eve/shared';
 import { runStreamingCommand } from '../execution/streaming-command.js';
 import { buildJobCommandEnv } from '../execution/job-command-env.js';
@@ -59,7 +60,7 @@ function isMissingSecretOverrideError(
 
 async function runGit(args: string[], options?: { env?: NodeJS.ProcessEnv; cwd?: string }): Promise<ExecResult> {
   return (await execFileAsync('git', args, {
-    env: options?.env,
+    env: serviceGitEnv(options?.env),
     cwd: options?.cwd,
   })) as ExecResult;
 }

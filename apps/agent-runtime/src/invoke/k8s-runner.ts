@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import { getCorrelationHeaders, loadConfig, resolveRunnerPodIsolation, runnerUsesPlatformServiceAccount } from '@eve/shared';
 import type { HarnessInvocation, HarnessResult } from '@eve/shared';
 import { buildToolchainRuntimeMeta, type ToolchainRuntimeMeta } from './toolchains';
+import { serviceHelperEnv } from '@eve/shared';
 
 const DEFAULT_NAMESPACE = 'eve';
 const DEFAULT_WORKSPACE_SIZE = '10Gi';
@@ -121,6 +122,8 @@ async function pollForCompletion(
 function execKubectl(args: string[], input?: string, signal?: AbortSignal): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('kubectl', ['--request-timeout=10s', ...args], {
+      // The manifest on stdin carries runner credentials; the process env does not need to.
+      env: serviceHelperEnv(),
       signal,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

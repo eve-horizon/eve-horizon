@@ -114,6 +114,13 @@ Each job has a unique workspace path. Sandboxing prevents traversal to:
 
 CLI sandboxes primarily restrict file system tools (Read, Write, Edit, Glob, etc.). The Bash tool can execute arbitrary commands which may bypass file restrictions.
 
+Bash can also read `/proc`, signal processes and write the shared HOME. The
+agent runtime and worker run as the same UID as the job, so their images start
+them from an execute-only interpreter with `--disable-sigusr1`, and their own
+helpers run from a root-owned PATH with no credentials in their environment
+(see [agent-secret-isolation.md](./agent-secret-isolation.md#layer-1b-the-runtimes-own-environment)).
+This is defence in depth, not a sandbox boundary.
+
 Mitigations:
 1. **Container isolation**: Runner pods provide syscall-level isolation
 2. **Permission policies**: `default` mode requires human approval for risky commands

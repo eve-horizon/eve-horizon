@@ -10,6 +10,7 @@ import {
   registerInternalAuthHook,
 } from '@eve/shared';
 import { AppModule } from './app.module';
+import { checkProcessIsolation } from '@eve/shared';
 
 function resolvePort(): number {
   const raw = process.env.AGENT_RUNTIME_PORT ?? process.env.EVE_AGENT_RUNTIME_PORT;
@@ -22,6 +23,10 @@ async function bootstrap() {
   const logger = (await initServiceTelemetry('agent-runtime')) as LoggerService;
   // Every route except /health requires the internal key (fails closed).
   assertInternalApiKeyConfigured(logger, 'AGENT_RUNTIME');
+
+  // Harnesses run as this process's UID; they must not be able to read its
+  // environment (DATABASE_URL, EVE_INTERNAL_API_KEY) through /proc.
+  checkProcessIsolation(logger, 'AGENT-RUNTIME');
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
