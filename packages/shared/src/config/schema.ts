@@ -148,6 +148,7 @@ export const configSchema = z.object({
   EVE_STORAGE_ORG_BUCKET_PREFIX: z.string().optional(),
   EVE_STORAGE_APP_BUCKET_PREFIX: z.string().optional(),
   EVE_STORAGE_INTERNAL_BUCKET: z.string().optional(),
+  EVE_STORAGE_GCP_PROJECT_NUMBER: z.string().optional(), // Project that must own existing GCS buckets (default: metadata server)
   EVE_APP_STORAGE_ENDPOINT: z.string().optional(),
   EVE_APP_STORAGE_PUBLIC_ENDPOINT: z.string().optional(),
   EVE_APP_STORAGE_REGION: z.string().optional(),

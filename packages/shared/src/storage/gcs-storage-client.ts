@@ -9,6 +9,17 @@ import type {
 } from './storage-client.js';
 
 const DEFAULT_TTL = 300;
+const METADATA_TIMEOUT_MS = 3000;
+
+export interface GcsStorageClientConfig {
+  region?: string;
+  /**
+   * Numeric ID of the Google Cloud project that must own every bucket this
+   * client creates or adopts. Defaults to EVE_STORAGE_GCP_PROJECT_NUMBER, then
+   * to the project the GKE/GCE metadata server reports.
+   */
+  projectNumber?: string;
+}
 
 /**
  * Native GCS storage client using Application Default Credentials.
@@ -22,9 +33,13 @@ const DEFAULT_TTL = 300;
 export class GcsStorageClient implements ObjectStorageClient {
   private storagePromise: Promise<any>;
   private readonly location: string;
+  private readonly configuredProjectNumber?: string;
+  private projectNumberPromise: Promise<string | null> | null = null;
 
-  constructor(config: { region?: string }) {
+  constructor(config: GcsStorageClientConfig) {
     this.location = config.region ?? 'us';
+    this.configuredProjectNumber =
+      config.projectNumber?.trim() || process.env.EVE_STORAGE_GCP_PROJECT_NUMBER?.trim() || undefined;
     this.storagePromise = this.initStorage();
   }
 
@@ -122,16 +137,67 @@ export class GcsStorageClient implements ObjectStorageClient {
     return url;
   }
 
+  /**
+   * Create a bucket, or adopt an existing one only when this platform's
+   * project owns it. Bucket names are global, so GCS answers 409 both for a
+   * bucket we already own and for a name another project holds; adopting the
+   * latter would let an outsider pre-create a predictable app bucket name and
+   * receive the app's writes.
+   */
   async ensureBucket(name: string): Promise<void> {
     const storage = await this.getStorage();
     try {
       await storage.createBucket(name, { location: this.location });
     } catch (err: unknown) {
-      const code = (err as { code?: number })?.code;
-      // 409 = bucket already exists
-      if (code === 409) return;
+      if (gcsErrorCode(err) !== 409) throw err;
+      await this.assertBucketOwnedByPlatform(storage, name);
+    }
+  }
+
+  private async assertBucketOwnedByPlatform(storage: any, name: string): Promise<void> {
+    let metadata: { projectNumber?: string | number } | undefined;
+    try {
+      [metadata] = await storage.bucket(name).getMetadata();
+    } catch (err: unknown) {
+      const code = gcsErrorCode(err);
+      if (code === 401 || code === 403 || code === 404) {
+        throw new Error(
+          `Bucket name "${name}" already exists but this platform cannot read it (HTTP ${code}); ` +
+            'it belongs to another Google Cloud project. Refusing to use it.',
+        );
+      }
       throw err;
     }
+
+    const expected = await this.resolveProjectNumber();
+    if (!expected) {
+      throw new Error(
+        `Bucket "${name}" already exists and its owner cannot be verified: ` +
+          'set EVE_STORAGE_GCP_PROJECT_NUMBER to the numeric ID of the project that owns Eve buckets ' +
+          '(the GCE/GKE metadata server was not reachable).',
+      );
+    }
+
+    const actual = metadata?.projectNumber == null ? '' : String(metadata.projectNumber);
+    if (actual !== expected) {
+      throw new Error(
+        `Bucket "${name}" already exists in another Google Cloud project ` +
+          `(project number ${actual || 'unknown'}, expected ${expected}). Refusing to use it.`,
+      );
+    }
+  }
+
+  private resolveProjectNumber(): Promise<string | null> {
+    if (this.configuredProjectNumber) {
+      return Promise.resolve(this.configuredProjectNumber);
+    }
+    if (!this.projectNumberPromise) {
+      this.projectNumberPromise = fetchMetadataProjectNumber().then((value) => {
+        if (!value) this.projectNumberPromise = null; // retry on the next call
+        return value;
+      });
+    }
+    return this.projectNumberPromise;
   }
 
   async setBucketCors(name: string, rules: StorageCorsRule[]): Promise<void> {
@@ -156,5 +222,29 @@ export class GcsStorageClient implements ObjectStorageClient {
       members: ['allUsers'],
     });
     await bucket.iam.setPolicy(policy);
+  }
+}
+
+function gcsErrorCode(err: unknown): number | undefined {
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === 'number' ? code : undefined;
+}
+
+/**
+ * Numeric project ID from the GCE/GKE metadata server (Workload Identity
+ * serves it too). Returns null off Google Cloud or on any failure.
+ */
+async function fetchMetadataProjectNumber(): Promise<string | null> {
+  const host = process.env.GCE_METADATA_HOST?.trim() || 'metadata.google.internal';
+  try {
+    const res = await fetch(`http://${host}/computeMetadata/v1/project/numeric-project-id`, {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(METADATA_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = (await res.text()).trim();
+    return /^\d+$/.test(body) ? body : null;
+  } catch {
+    return null;
   }
 }
