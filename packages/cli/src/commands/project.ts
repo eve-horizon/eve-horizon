@@ -243,14 +243,18 @@ export async function handleProject(
       return;
     }
     case 'delete': {
-      const projectId = positionals[0] ?? (getStringFlag(flags, ['project']) ?? context.projectId);
+      // Deliberately no fallback to the profile's default project: the target
+      // of a delete must be named.
+      const projectId = positionals[0] ?? getStringFlag(flags, ['project']);
       if (!projectId) {
         throw new Error('Usage: eve project delete <project_id> [--hard] [--force]');
       }
       const hard = toBoolean(flags.hard) ?? false;
       const force = toBoolean(flags.force) ?? false;
       const query = buildQuery({ hard: hard ? 'true' : undefined, force: force ? 'true' : undefined });
-      await requestRaw(context, `/projects/${projectId}${query}`, { method: 'DELETE' });
+      // requestJson throws on a non-2xx response, so a refused or failed
+      // delete is never reported as a success.
+      await requestJson(context, `/projects/${projectId}${query}`, { method: 'DELETE' });
       const mode = hard ? 'hard-deleted' : 'soft-deleted';
       outputJson({ project_id: projectId, deleted: true, mode }, json, `✓ Project ${projectId} ${mode}`);
       return;

@@ -64,7 +64,7 @@ agents:
 
 ### Agent Slugs (Org-Unique)
 
-Agents may declare a `slug` for cross-project addressing (e.g., Slack `@eve <agent-slug> <command>`). Slugs must be **unique across the org**; sync will fail if a slug already exists in another project.
+Agents may declare a `slug` for cross-project addressing (e.g., Slack `@eve <agent-slug> <command>`). Slugs must be **unique across the org**; sync will fail if a slug already exists in another project. Agents of soft-deleted projects do not count: deleting a project frees its slugs and aliases, and routing ignores them.
 
 Orgs may set a `default_agent_slug` used when a message doesn’t start with a known slug.
 Set via `eve org update <org_id> --default-agent <slug>`.

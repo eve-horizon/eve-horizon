@@ -134,6 +134,19 @@ export const HELP: Record<string, CommandHelp> = {
         description: 'Update project',
         usage: 'eve project update <project_id> [--name <name>] [--repo-url <url>] [--branch <branch>] [--deleted <bool>]',
       },
+      delete: {
+        description: 'Delete a project. Tears down its deployments, then soft-deletes it (undo with eve project update <project_id> --deleted false) or, with --hard, removes it and everything it owns',
+        usage: 'eve project delete <project_id> [--hard] [--force]',
+        options: [
+          '--hard               Permanently remove the project and all its data (jobs, events, builds, environments, agents)',
+          '--force              Continue past deployment teardown failures; with --hard, also delete when managed databases are not yet destroyed (they are left for manual cleanup)',
+          '--json               Machine-readable JSON output',
+        ],
+        examples: [
+          'eve project delete proj_xxx',
+          'eve project delete proj_xxx --hard',
+        ],
+      },
       sync: {
         description: 'Sync manifest and agents config from local .eve/ to Eve API',
         usage: 'eve project sync [--project <id>] [--dir <path>] [--ref <sha|branch>] [--local]',

@@ -240,9 +240,30 @@ export function projectQueries(db: Db) {
       return row ?? null;
     },
 
+    /**
+     * Physically remove a project and everything it owns.
+     *
+     * One DELETE on `projects` removes the project's rows through ON DELETE
+     * CASCADE (environments, jobs, events, builds, pipeline runs, agents, ...),
+     * so it must not be preceded by piecemeal deletes of child rows: the
+     * cascade satisfies cross-references between them within one statement.
+     * Job-attempt execution logs carry no FK (attempt_id only), so they are
+     * removed explicitly in the same transaction.
+     */
     async hardDelete(id: string): Promise<boolean> {
-      const result = await db`DELETE FROM projects WHERE id = ${id}`;
-      return result.count > 0;
+      return db.begin(async (rawTx) => {
+        const tx = rawTx as unknown as Db;
+        await tx`
+          DELETE FROM execution_logs
+          WHERE attempt_id IN (
+            SELECT a.id FROM job_attempts a
+            JOIN jobs j ON j.id = a.job_id
+            WHERE j.project_id = ${id}
+          )
+        `;
+        const result = await tx`DELETE FROM projects WHERE id = ${id}`;
+        return result.count > 0;
+      });
     },
 
   };
