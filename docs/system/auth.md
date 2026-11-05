@@ -433,7 +433,9 @@ The first admin user is created via the bootstrap endpoint. Eve supports three s
 | **recovery** | Trigger file on host | No | Lost admin access |
 | **secure** | `EVE_BOOTSTRAP_TOKEN` set | Yes | Production lockdown |
 
-**Production note:** When `NODE_ENV=production`, bootstrap requires `EVE_BOOTSTRAP_TOKEN`. If it is missing, the bootstrap window is closed.
+**Production note:** When `NODE_ENV=production`, bootstrap requires `EVE_BOOTSTRAP_TOKEN`. If it is missing, the bootstrap window is closed. The published API image sets `NODE_ENV=production`; only local dev stacks override it.
+
+**Once an admin exists, bootstrap is closed** and `POST /auth/bootstrap` returns 403 with no token, in every mode. The one exception is a dev/test convenience: with `EVE_DEV_REBOOTSTRAP=true` and `NODE_ENV` other than `production`, a repeat bootstrap re-issues the existing admin's token, and it still requires `EVE_BOOTSTRAP_TOKEN` when one is configured. The integration tests (`.env.test`) and the local k3d overlay enable it; never set it on a hosted deployment.
 
 ### Auto-Open Mode (Default)
 
@@ -488,6 +490,7 @@ This mode overrides auto-open and recovery modes.
 | `EVE_BOOTSTRAP_TOKEN` | (none) | Enables secure mode if set |
 | `EVE_BOOTSTRAP_TRIGGER_FILE` | `/tmp/eve-bootstrap-enable` | Recovery trigger file path |
 | `EVE_BOOTSTRAP_WINDOW_MINUTES` | `10` | Window duration |
+| `EVE_DEV_REBOOTSTRAP` | `false` | Dev/test only: re-issue the existing admin's token on a repeat bootstrap (ignored when `NODE_ENV=production`) |
 
 ### Checking Status
 
@@ -1077,8 +1080,10 @@ export EVE_AUTH_ENABLED=false  # For local dev only
 
 In normal operation, use `eve auth login` (existing user) or `eve admin invite` (new users).
 
-For local/non-production stacks, `eve auth bootstrap` now attempts the server recovery path automatically.
-If the API is configured to allow non-prod recovery, it can return an existing admin token.
+For local dev stacks, `eve auth bootstrap` attempts the dev recovery path automatically.
+It returns the existing admin's token only when the API runs with `EVE_DEV_REBOOTSTRAP=true`
+and `NODE_ENV` other than `production` (the local k3d overlay sets both), and you pass the
+bootstrap token when one is configured. Hosted deployments refuse it.
 
 **If you bootstrapped with the wrong email** and need an explicit recovery flow:
 

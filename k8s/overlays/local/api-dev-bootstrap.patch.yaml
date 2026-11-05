@@ -1,0 +1,19 @@
+# Local k3d stack only: keep the dev bootstrap recovery path, where a repeat
+# `eve auth bootstrap --token <EVE_BOOTSTRAP_TOKEN>` re-issues the existing
+# admin's token. The published API image defaults to NODE_ENV=production,
+# which refuses this; never apply this patch to a hosted deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-api
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: NODE_ENV
+              value: "development"
+            - name: EVE_DEV_REBOOTSTRAP
+              value: "true"

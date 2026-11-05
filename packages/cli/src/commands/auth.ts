@@ -317,8 +317,9 @@ export async function handleAuth(
       // Check status and handle accordingly
       if (status) {
         if (status.completed) {
-          // In non-production/dev stacks the API may still return an existing admin token.
-          console.log('Bootstrap already completed. Attempting server-side recovery flow.');
+          // Only dev/test stacks with EVE_DEV_REBOOTSTRAP enabled re-issue the existing
+          // admin's token (and they still require the bootstrap token when one is set).
+          console.log('Bootstrap already completed. Attempting dev recovery (local stacks only).');
         }
 
         if (!status.completed && !status.requires_token && status.window_open) {
