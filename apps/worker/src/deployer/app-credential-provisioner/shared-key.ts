@@ -1,10 +1,12 @@
 import * as crypto from 'crypto';
-import type {
-  AppCredentialProvisioner,
-  AppCredentialProvisionerAvailability,
-  AppObjectStoreBinding,
-  AppObjectStoreCredentialMode,
-  AppObjectStoreScope,
+import {
+  APP_STORAGE_CREDENTIALS_SECRET,
+  type AppCredentialProvisioner,
+  type AppCredentialProvisionerAvailability,
+  type AppObjectStoreBinding,
+  type AppObjectStoreCredentialMode,
+  type AppObjectStoreEnvVar,
+  type AppObjectStoreScope,
 } from './types';
 
 interface StaticStorageEnv {
@@ -36,11 +38,19 @@ export class SharedKeyAppCredentialProvisioner implements AppCredentialProvision
       throw new Error(`app storage env injection is incomplete. Missing: ${missing.join(', ')}.`);
     }
 
-    const envVars: Array<{ name: string; value: string }> = [
+    // The key pair lives in a namespace Secret, not in the Deployment spec,
+    // so reading Deployments does not reveal it.
+    const stringData: Record<string, string> = {
+      STORAGE_ACCESS_KEY_ID: env.accessKeyId,
+      STORAGE_SECRET_ACCESS_KEY: env.secretAccessKey,
+    };
+    const envVars: AppObjectStoreEnvVar[] = [
       { name: 'STORAGE_ENDPOINT', value: env.endpoint },
       { name: 'STORAGE_REGION', value: env.region },
-      { name: 'STORAGE_ACCESS_KEY_ID', value: env.accessKeyId },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: env.secretAccessKey },
+      ...Object.keys(stringData).map((key) => ({
+        name: key,
+        valueFrom: { secretKeyRef: { name: APP_STORAGE_CREDENTIALS_SECRET, key } },
+      })),
     ];
 
     if (this.forcePathStyle) {
@@ -50,7 +60,8 @@ export class SharedKeyAppCredentialProvisioner implements AppCredentialProvision
     return {
       mode: this.mode,
       envVars,
-      bindingHash: this.hashBinding(scope, physicalBucketNames, envVars),
+      credentialSecret: { name: APP_STORAGE_CREDENTIALS_SECRET, stringData },
+      bindingHash: this.hashBinding(scope, physicalBucketNames, envVars, stringData),
       iamRoleArn: null,
       iamRoleName: null,
       serviceAccount: null,
@@ -102,10 +113,15 @@ export class SharedKeyAppCredentialProvisioner implements AppCredentialProvision
     return missing;
   }
 
+  /**
+   * Changes when the credentials change, so a rotated key rolls the pods
+   * that read it from the Secret (secretKeyRef is resolved at container start).
+   */
   protected hashBinding(
     scope: AppObjectStoreScope,
     physicalBucketNames: string[],
-    envVars: Array<{ name: string; value: string }>,
+    envVars: AppObjectStoreEnvVar[],
+    credentials: Record<string, string>,
   ): string {
     return crypto
       .createHash('sha256')
@@ -114,6 +130,7 @@ export class SharedKeyAppCredentialProvisioner implements AppCredentialProvision
         namespace: scope.namespace,
         buckets: [...physicalBucketNames].sort(),
         envVars: envVars.map((entry) => entry.name).sort(),
+        credentials: crypto.createHash('sha256').update(JSON.stringify(credentials)).digest('hex'),
       }))
       .digest('hex')
       .slice(0, 16);

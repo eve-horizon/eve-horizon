@@ -1,5 +1,7 @@
 import type { Db } from '../client.js';
 
+export type StorageBucketIsolationMode = 'irsa' | 'shared' | 'minio-static-key' | 'gcp-workload-identity';
+
 export interface StorageBucket {
   id: string;
   org_id: string | null;
@@ -10,11 +12,12 @@ export interface StorageBucket {
   physical_name: string;
   visibility: 'private' | 'public';
   cors_json: Record<string, unknown>;
-  isolation_mode: 'irsa' | 'shared' | 'minio-static-key' | null;
+  isolation_mode: StorageBucketIsolationMode | null;
   iam_role_arn: string | null;
   iam_role_name: string | null;
   service_account_name: string | null;
   service_account_namespace: string | null;
+  iam_member: string | null;
   created_at: Date;
 }
 
@@ -28,11 +31,12 @@ export interface UpsertStorageBucketInput {
   physical_name: string;
   visibility: 'private' | 'public';
   cors_json: Record<string, unknown>;
-  isolation_mode?: 'irsa' | 'shared' | 'minio-static-key' | null;
+  isolation_mode?: StorageBucketIsolationMode | null;
   iam_role_arn?: string | null;
   iam_role_name?: string | null;
   service_account_name?: string | null;
   service_account_namespace?: string | null;
+  iam_member?: string | null;
 }
 
 export interface StorageBucketDesiredKey {
@@ -59,7 +63,8 @@ export function storageBucketQueries(db: Db) {
           iam_role_arn,
           iam_role_name,
           service_account_name,
-          service_account_namespace
+          service_account_namespace,
+          iam_member
         )
         VALUES (
           ${input.id},
@@ -75,7 +80,8 @@ export function storageBucketQueries(db: Db) {
           ${input.iam_role_arn ?? null},
           ${input.iam_role_name ?? null},
           ${input.service_account_name ?? null},
-          ${input.service_account_namespace ?? null}
+          ${input.service_account_namespace ?? null},
+          ${input.iam_member ?? null}
         )
         ON CONFLICT (project_id, env_name, service_name, name) DO UPDATE
         SET
@@ -86,7 +92,8 @@ export function storageBucketQueries(db: Db) {
           iam_role_arn              = EXCLUDED.iam_role_arn,
           iam_role_name             = EXCLUDED.iam_role_name,
           service_account_name      = EXCLUDED.service_account_name,
-          service_account_namespace = EXCLUDED.service_account_namespace
+          service_account_namespace = EXCLUDED.service_account_namespace,
+          iam_member                = EXCLUDED.iam_member
         RETURNING *
       `;
       return row;
@@ -98,6 +105,14 @@ export function storageBucketQueries(db: Db) {
         WHERE project_id = ${projectId}
           AND env_name   = ${envName}
         ORDER BY service_name ASC, name ASC
+      `;
+    },
+
+    async listByPhysicalNames(physicalNames: string[]): Promise<StorageBucket[]> {
+      if (physicalNames.length === 0) return [];
+      return db<StorageBucket[]>`
+        SELECT * FROM storage_buckets
+        WHERE physical_name = ANY(${physicalNames}::text[])
       `;
     },
 

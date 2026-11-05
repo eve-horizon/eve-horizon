@@ -18,6 +18,7 @@ export interface S3StorageClientConfig {
 }
 
 const DEFAULT_TTL = 300;
+const PUBLIC_READ_SID = 'PublicReadGetObject';
 
 /**
  * S3-compatible storage client.
@@ -249,7 +250,7 @@ export class S3StorageClient implements ObjectStorageClient {
       Version: '2012-10-17',
       Statement: [
         {
-          Sid: 'PublicReadGetObject',
+          Sid: PUBLIC_READ_SID,
           Effect: 'Allow',
           Principal: '*',
           Action: 's3:GetObject',
@@ -259,6 +260,86 @@ export class S3StorageClient implements ObjectStorageClient {
     });
     await client.send(new PutBucketPolicyCommand({ Bucket: name, Policy: policy }));
   }
+
+  async removeBucketPublicReadPolicy(name: string): Promise<void> {
+    const client = await this.getClient();
+    const {
+      DeleteBucketPolicyCommand,
+      GetBucketPolicyCommand,
+      PutBucketPolicyCommand,
+      PutPublicAccessBlockCommand,
+    } = await import('@aws-sdk/client-s3');
+
+    // Turn Block Public Access back on first: S3 then ignores any public
+    // statement that is left, so the bucket is private even if the policy
+    // edit below is not permitted. MinIO does not implement these APIs.
+    let publicAccessBlocked = false;
+    try {
+      await client.send(
+        new PutPublicAccessBlockCommand({
+          Bucket: name,
+          PublicAccessBlockConfiguration: {
+            BlockPublicAcls: true,
+            IgnorePublicAcls: true,
+            BlockPublicPolicy: true,
+            RestrictPublicBuckets: true,
+          },
+        }),
+      );
+      publicAccessBlocked = true;
+    } catch (err: unknown) {
+      const errName = s3ErrorName(err);
+      if (errName === 'NoSuchBucket') return; // bucket gone: nothing is public
+      if (errName !== 'NotImplemented') throw err;
+    }
+
+    let policyText: string | undefined;
+    try {
+      policyText = (await client.send(new GetBucketPolicyCommand({ Bucket: name }))).Policy;
+    } catch (err: unknown) {
+      if (s3ErrorName(err) === 'NoSuchBucketPolicy') return;
+      throw err;
+    }
+    if (!policyText) return;
+
+    const policy = JSON.parse(policyText) as { Statement?: unknown };
+    const statements = Array.isArray(policy.Statement)
+      ? policy.Statement
+      : policy.Statement
+        ? [policy.Statement]
+        : [];
+    const kept = statements.filter((statement) => !isPublicReadStatement(statement));
+    if (kept.length === statements.length) return;
+
+    try {
+      if (kept.length > 0) {
+        await client.send(
+          new PutBucketPolicyCommand({ Bucket: name, Policy: JSON.stringify({ ...policy, Statement: kept }) }),
+        );
+      } else {
+        await client.send(new DeleteBucketPolicyCommand({ Bucket: name }));
+      }
+    } catch (err: unknown) {
+      // Block Public Access already neutralises the leftover statement.
+      if (publicAccessBlocked && s3ErrorName(err) === 'AccessDenied') return;
+      throw err;
+    }
+  }
+}
+
+function s3ErrorName(err: unknown): string {
+  return (err as { name?: string })?.name ?? '';
+}
+
+/** Eve's own public-read statement, or any Allow statement for everyone. */
+function isPublicReadStatement(statement: unknown): boolean {
+  const s = statement as { Sid?: string; Effect?: string; Principal?: unknown };
+  if (s?.Sid === PUBLIC_READ_SID) return true;
+  if (s?.Effect !== 'Allow') return false;
+  const principal = s.Principal as string | { AWS?: string | string[] } | undefined;
+  if (principal === '*') return true;
+  const aws = typeof principal === 'object' ? principal?.AWS : undefined;
+  return aws === '*' || (Array.isArray(aws) && aws.includes('*'));
 }
 
 function addS3CompatibleMd5Middleware(command: { middlewareStack?: { add?: Function } }): void {

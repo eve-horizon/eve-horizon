@@ -20,8 +20,8 @@ export class AwsIrsaAppCredentialProvisioner implements AppCredentialProvisioner
     if (authMode && !['auto', 'irsa'].includes(authMode)) {
       return {
         available: false,
-        reason: authMode === 'shared'
-          ? 'EVE_APP_BUCKET_AUTH_MODE=shared'
+        reason: authMode === 'shared' || authMode === 'workload-identity'
+          ? `EVE_APP_BUCKET_AUTH_MODE=${authMode}`
           : `unsupported EVE_APP_BUCKET_AUTH_MODE=${process.env.EVE_APP_BUCKET_AUTH_MODE}`,
       };
     }

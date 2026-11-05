@@ -103,3 +103,13 @@ export function deriveNamespace(
   }
   return toK8sName(`eve-${orgSlug}-${projectSlug}-${envName}`, 'namespace');
 }
+
+/**
+ * Prefix every namespace of a project's environments shares
+ * (`eve-{orgSlug}-{projectSlug}-`). Org and project slugs contain no hyphens,
+ * so no other project and no system namespace can start with it. User-chosen
+ * environment namespaces must stay under it.
+ */
+export function projectNamespacePrefix(orgSlug: string, projectSlug: string): string {
+  return `${toK8sName(`eve-${orgSlug}-${projectSlug}`, 'namespace')}-`;
+}

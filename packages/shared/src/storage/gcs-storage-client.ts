@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import type {
+  BucketIamMemberClient,
   ObjectStorageClient,
   StorageGetObjectResult,
   StorageObjectMetadata,
@@ -30,7 +31,7 @@ export interface GcsStorageClientConfig {
  * Uses dynamic import so @google-cloud/storage is only loaded at runtime
  * when this code path is actually used. AWS deployments never load it.
  */
-export class GcsStorageClient implements ObjectStorageClient {
+export class GcsStorageClient implements ObjectStorageClient, BucketIamMemberClient {
   private storagePromise: Promise<any>;
   private readonly location: string;
   private readonly configuredProjectNumber?: string;
@@ -210,6 +211,71 @@ export class GcsStorageClient implements ObjectStorageClient {
         maxAgeSeconds: r.maxAgeSeconds ?? 3600,
       })),
     );
+  }
+
+  async addBucketIamMember(name: string, role: string, member: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    const [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    const bindings: Array<{ role: string; members?: string[]; condition?: unknown }> = policy.bindings || [];
+    const binding = bindings.find((candidate) => candidate.role === role && !candidate.condition);
+    if (binding?.members?.includes(member)) return;
+    if (binding) {
+      binding.members = [...(binding.members ?? []), member];
+    } else {
+      bindings.push({ role, members: [member] });
+    }
+    policy.bindings = bindings;
+    await bucket.iam.setPolicy(policy);
+  }
+
+  async removeBucketIamMember(name: string, role: string, member: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    let policy: any;
+    try {
+      [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 404) return; // bucket gone: no grant left
+      throw err;
+    }
+    const bindings: Array<{ role: string; members?: string[]; condition?: unknown }> = policy.bindings || [];
+    let changed = false;
+    const kept = bindings.flatMap((binding) => {
+      if (binding.role !== role || binding.condition || !binding.members?.includes(member)) return [binding];
+      changed = true;
+      const members = binding.members.filter((candidate) => candidate !== member);
+      return members.length > 0 ? [{ ...binding, members }] : [];
+    });
+    if (!changed) return;
+    policy.bindings = kept;
+    await bucket.iam.setPolicy(policy);
+  }
+
+  async removeBucketPublicReadPolicy(name: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    let policy: any;
+    try {
+      [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 404) return; // bucket gone: nothing is public
+      throw err;
+    }
+    const bindings: Array<{ role: string; members?: string[] }> = policy.bindings || [];
+    let changed = false;
+    const kept: Array<{ role: string; members?: string[] }> = [];
+    for (const binding of bindings) {
+      const members = binding.members ?? [];
+      const privateMembers = members.filter((member) => member !== 'allUsers' && member !== 'allAuthenticatedUsers');
+      if (privateMembers.length !== members.length) changed = true;
+      if (privateMembers.length > 0 || members.length === 0) {
+        kept.push({ ...binding, members: privateMembers });
+      }
+    }
+    if (!changed) return;
+    policy.bindings = kept;
+    await bucket.iam.setPolicy(policy);
   }
 
   async setBucketPublicReadPolicy(name: string): Promise<void> {

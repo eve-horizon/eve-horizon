@@ -25,6 +25,50 @@ import { K8sOperationError } from '../deployer/k8s-error.js';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Worker variables a pipeline `run` step inherits. Run steps execute
+ * repository code, so everything else the worker holds (storage keys, the
+ * internal API key, database URLs, cloud credentials) is withheld, matching
+ * the allowlists of action `run` jobs and script jobs.
+ */
+export const PIPELINE_RUN_INHERITED_ENV = [
+  'PATH',
+  'HOME',
+  'USER',
+  'SHELL',
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+  'TMPDIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'NODE_EXTRA_CA_CERTS',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'KUBERNETES_SERVICE_HOST',
+  'KUBERNETES_SERVICE_PORT',
+  'EVE_API_URL',
+  'EVE_PUBLIC_API_URL',
+] as const;
+
+export function buildPipelineRunEnv(
+  source: NodeJS.ProcessEnv,
+  context: { envName?: string | null; envNamespace?: string | null },
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of PIPELINE_RUN_INHERITED_ENV) {
+    if (source[name] !== undefined) env[name] = source[name];
+  }
+  if (context.envName) env.EVE_ENV_NAME = context.envName;
+  if (context.envNamespace) env.EVE_ENV_NAMESPACE = context.envNamespace;
+  return env;
+}
+
 function extractErrorContext(error: unknown): Record<string, unknown> {
   if (error instanceof K8sOperationError) {
     return {
@@ -379,11 +423,7 @@ export class PipelineRunnerService {
     try {
       const { stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
         cwd: workspace,
-        env: {
-          ...process.env,
-          ...(run.env_name ? { EVE_ENV_NAME: run.env_name } : {}),
-          ...(envNamespace ? { EVE_ENV_NAMESPACE: envNamespace } : {}),
-        },
+        env: buildPipelineRunEnv(process.env, { envName: run.env_name, envNamespace }),
         maxBuffer: 1024 * 1024,
       });
 

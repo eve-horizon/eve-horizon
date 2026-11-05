@@ -259,6 +259,7 @@ export class DeployerService {
       db,
       this.bucketProvisioner,
       this.appCredentialProvisioners,
+      k8sService,
       this.logger,
       (service) => this.resolveXeve(service),
     );
@@ -322,12 +323,13 @@ export class DeployerService {
 
     const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
 
+    // The namespace can be user-chosen: never adopt one another env owns.
     await this.k8sService.createNamespace(namespace, {
       'eve.org_id': project.org_id,
       'eve.project_id': project.id,
       'eve.env_id': envId,
       'eve.env': toK8sLabelValue(environment.name, 'env'),
-    });
+    }, { ownerLabel: 'eve.env_id' });
 
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
@@ -676,7 +678,7 @@ export class DeployerService {
       'eve.project_id': project.id,
       'eve.env_id': environment.id,
       'eve.env': toK8sLabelValue(environment.name, 'env'),
-    });
+    }, { ownerLabel: 'eve.env_id' });
 
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
@@ -751,6 +753,7 @@ export class DeployerService {
       scope: {
         orgId: project.org_id,
         projectId: params.projectId,
+        envId: environment.id,
         envName: params.envName,
         orgSlug: org.slug,
         projectSlug: project.slug,
@@ -942,15 +945,31 @@ export class DeployerService {
   async deleteEnvironment(envId: string): Promise<void> {
     this.logger.log(`Deleting environment ${envId}`);
     const { namespace, environment, project, org } = await this.resolveEnvironmentScope(envId);
-    await this.objectStoreProvisioner.removeObjectStoreBinding({
+    const objectStoreScope = {
       orgId: project.org_id,
       projectId: project.id,
+      envId,
       envName: environment.name,
       orgSlug: org.slug,
       projectSlug: project.slug,
       namespace,
-    });
+    };
+    // Buckets and their data outlive the env; their public grants and the
+    // env's access grants do not. A failed revocation fails the delete with
+    // the bucket rows kept, so a retry revokes again.
+    await this.objectStoreProvisioner.unpublishEnvBuckets(objectStoreScope);
+    await this.objectStoreProvisioner.revokeEnvGrants(objectStoreScope);
+    await this.objectStoreProvisioner.removeObjectStoreBinding(objectStoreScope);
     await this.storageBuckets.deleteByEnv(project.id, environment.name);
+    // Delete only a namespace this env owns; a user-chosen namespace may
+    // point at another env's or at one Eve did not create.
+    const namespaceLabels = await this.k8sService.getNamespaceLabels(namespace);
+    if (namespaceLabels && namespaceLabels['eve.env_id'] !== envId) {
+      this.logger.warn(
+        `Not deleting namespace ${namespace} for environment ${envId}: it is not owned by this environment`,
+      );
+      return;
+    }
     await this.k8sService.deleteNamespace(namespace);
   }
 
@@ -1011,6 +1030,7 @@ export class DeployerService {
       scope: {
         orgId: params.orgId,
         projectId: params.projectId,
+        envId: params.envId,
         envName: params.envName,
         orgSlug: params.orgSlug,
         projectSlug: params.projectSlug,
@@ -2298,11 +2318,11 @@ export class DeployerService {
       managedValues?: Map<string, string>;
     },
     objectStorePlan?: EnvObjectStorePlan,
-  ): Promise<Array<{ name: string; value: string }>> {
+  ): Promise<k8s.V1EnvVar[]> {
     const config = loadConfig();
 
     // Platform-injected env vars (can be overridden by user-defined vars)
-    const platformEnvVars: Array<{ name: string; value: string }> = [
+    const platformEnvVars: k8s.V1EnvVar[] = [
       { name: 'EVE_API_URL', value: this.resolveServiceEveApiUrl(config.EVE_API_URL) },
       ...(config.EVE_PUBLIC_API_URL ? [{ name: 'EVE_PUBLIC_API_URL', value: config.EVE_PUBLIC_API_URL }] : []),
       ...(config.EVE_SSO_URL ? [{ name: 'EVE_SSO_URL', value: config.EVE_SSO_URL }] : []),
@@ -2350,15 +2370,12 @@ export class DeployerService {
       : [];
 
     // Merge: platform vars first, then user vars (user can override platform vars)
-    const envMap = new Map<string, string>();
-    for (const entry of platformEnvVars) {
-      envMap.set(entry.name, entry.value);
-    }
-    for (const entry of userEnvVars) {
-      envMap.set(entry.name, entry.value);
+    const envMap = new Map<string, k8s.V1EnvVar>();
+    for (const entry of [...platformEnvVars, ...userEnvVars]) {
+      envMap.set(entry.name, entry);
     }
 
-    return Array.from(envMap.entries()).map(([name, value]) => ({ name, value }));
+    return Array.from(envMap.values());
   }
 
   private async resolveAppLinkEnvVars(context: {
@@ -2467,9 +2484,10 @@ export class DeployerService {
     if (params.managedDbTrustHash) {
       annotations['eve.managed_db_trust_hash'] = params.managedDbTrustHash;
     }
+    // Roll pods when the binding changes: an IRSA role, or a rotated static
+    // key that pods read from the namespace Secret at container start.
     if (
-      params.objectStorePlan.binding?.mode === 'irsa' &&
-      params.objectStorePlan.binding.bindingHash &&
+      params.objectStorePlan.binding?.bindingHash &&
       params.objectStorePlan.bucketsByService.has(params.serviceName)
     ) {
       annotations['eve.app_bucket_binding_hash'] = params.objectStorePlan.binding.bindingHash;
