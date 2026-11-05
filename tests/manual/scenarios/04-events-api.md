@@ -43,7 +43,7 @@ eve event emit \
 
 **Expected:**
 - Returns JSON with event details
-- Event has `id`, `type`, `source`, `payload`
+- Event has `id`, `type`, `source`, `payload_json` (the CLI sends `--payload` as `payload_json`; the API returns `payload_json`, not `payload`)
 - `status` indicates event was received
 
 ### 2. List Events

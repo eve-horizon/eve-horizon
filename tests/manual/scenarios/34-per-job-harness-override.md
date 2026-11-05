@@ -30,7 +30,7 @@ Plan: [`docs/plans/per-job-harness-override-plan.md`](../../../docs/plans/per-jo
   ```
 - Test org + secrets imported:
   ```bash
-  eve org ensure "manual-test-org" --slug manual-test-org --json
+  eve org ensure "manual-test-org" --slug mto --json
   eve secrets import --org org_manualtestorg --file manual-tests.secrets
   ```
 
