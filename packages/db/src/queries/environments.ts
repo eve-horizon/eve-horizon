@@ -257,6 +257,13 @@ export function environmentQueries(db: Db) {
       return result.count > 0;
     },
 
+    async listByNamespace(namespace: string): Promise<Environment[]> {
+      return db<Environment[]>`
+        SELECT * FROM environments
+        WHERE namespace = ${namespace}
+      `;
+    },
+
     async listByProject(projectId: string): Promise<Environment[]> {
       return db<Environment[]>`
         SELECT * FROM environments
