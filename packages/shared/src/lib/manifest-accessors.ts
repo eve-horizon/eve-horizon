@@ -498,6 +498,65 @@ export function isEveRegistry(manifest: Manifest): boolean {
 }
 
 /**
+ * Repository prefix a project owns in the Eve-native registry. Every image a
+ * project builds into the Eve registry lives under it, and the registry token
+ * endpoint grants a project's credentials nothing outside it. Uses the
+ * project id, which never changes and is never reused (slugs can be reused
+ * once a project is deleted).
+ */
+export function eveRegistryRepositoryPrefix(projectId: string): string {
+  if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(projectId)) {
+    throw new Error(`Project id "${projectId}" cannot be used as an Eve registry repository prefix`);
+  }
+  return `${projectId}/`;
+}
+
+/**
+ * Place an image in the project's namespace of the Eve-native registry:
+ * `<host>/<project id>/<name>[:tag]`. A leading `<host>/` is accepted and not
+ * repeated, and neither is the project prefix, so the result is the same
+ * whatever spelling the manifest used, and the function is idempotent.
+ */
+export function eveRegistryImageRef(image: string, host: string, projectId: string): string {
+  const prefix = eveRegistryRepositoryPrefix(projectId);
+  let rest = image.startsWith(`${host}/`) ? image.slice(host.length + 1) : image;
+  if (!rest.startsWith(prefix)) rest = `${prefix}${rest}`;
+  return `${host}/${rest}`;
+}
+
+/**
+ * Image ref a build pushes to, and a build artifact records, for a buildable
+ * service image.
+ *
+ * - An image whose first path segment names a registry (contains `.` or `:`,
+ *   or is `localhost`) is used as written, except that one naming the Eve
+ *   registry itself is moved into the project's namespace.
+ * - A bare image goes to `registryHost`: into the project's namespace for the
+ *   Eve registry (`eveProjectId` set), as `<host>/<image>` otherwise.
+ */
+export function resolveBuildImageRef(
+  image: string,
+  registryHost: string,
+  eveProjectId?: string,
+): string {
+  const imageWithoutDigest = image.split('@')[0] ?? image;
+  const lastSlash = imageWithoutDigest.lastIndexOf('/');
+  const lastColon = imageWithoutDigest.lastIndexOf(':');
+  const imageName = lastColon > lastSlash ? imageWithoutDigest.slice(0, lastColon) : imageWithoutDigest;
+  const firstSegment = imageName.split('/')[0] ?? '';
+  const hasRegistry =
+    firstSegment.includes('.') || firstSegment.includes(':') || firstSegment === 'localhost';
+
+  if (eveProjectId) {
+    if (!hasRegistry || firstSegment === registryHost) {
+      return eveRegistryImageRef(image, registryHost, eveProjectId);
+    }
+    return image;
+  }
+  return hasRegistry ? image : `${registryHost}/${image}`;
+}
+
+/**
  * Returns true if registry is explicitly set to "none" (opt-out of any registry).
  */
 export function isRegistryNone(manifest: Manifest): boolean {

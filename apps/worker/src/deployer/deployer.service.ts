@@ -815,7 +815,6 @@ export class DeployerService {
       managedTrust.volumeMounts,
     );
 
-    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const imageDigest = this.resolveServiceDigest(
       params.serviceName,
       service,
@@ -824,7 +823,9 @@ export class DeployerService {
     );
     // Auto-derive image from service key when build config exists but image is not explicit
     const derivedImage = service.image || (service.build ? params.serviceName : undefined);
-    const prefixedImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
+    const prefixedImage = derivedImage
+      ? this.imageResolver.resolveServiceImage(derivedImage, manifest, params.projectId)
+      : undefined;
     const resolvedImage = this.imageResolver.resolveImageRef(
       prefixedImage,
       imageDigest,
@@ -1014,7 +1015,6 @@ export class DeployerService {
         namespace: params.namespace,
       },
     });
-    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const config = loadConfig();
     const hasTcpIngress = Object.values(deployableServices).some((service) => this.resolveTcpIngressConfig(service));
     if (hasTcpIngress) {
@@ -1065,7 +1065,9 @@ export class DeployerService {
 
       // Auto-derive image from service key when build config exists but image is not explicit
       const derivedImage = service.image || (service.build ? name : undefined);
-      const baseImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
+      const baseImage = derivedImage
+        ? this.imageResolver.resolveServiceImage(derivedImage, manifest, params.projectId)
+        : undefined;
       const imageDigest = this.resolveServiceDigest(
         name,
         service,

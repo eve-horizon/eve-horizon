@@ -48,7 +48,7 @@ Required system configuration:
 - `EVE_BUILDKIT_INSECURE_ALL` (optional) — set to `true` only for local troubleshooting to force insecure transport for all BuildKit registry operations
 
 The signing key is needed on the API only. `EVE_INTERNAL_API_KEY`, on the API
-and the worker, also signs the pull credentials described below.
+and the worker, also signs the push and pull credentials described below.
 
 Token endpoint (the registry's token realm, which must stay reachable by
 BuildKit and by kubelet on every node):
@@ -58,24 +58,45 @@ GET  /internal/registry/token?service=eve-registry&scope=repository:<name>:<acti
 POST /internal/registry/token                                                          (x-eve-internal-token)
 ```
 
+**Image names.** Every image a project builds into the Eve registry lives
+under the project's repository prefix, its project id:
+`<EVE_REGISTRY_HOST>/<project id>/<image>`. The platform applies the prefix
+whatever the manifest says: `image: api`, `image: <EVE_REGISTRY_HOST>/api` and
+a build-only service `api` all push to `<host>/proj_.../api`, and the deployer
+pulls from the same place. A name that already starts with the project's
+prefix is not prefixed twice. Images on other registries (`ghcr.io/...`) are
+left as written. The project id is used rather than slugs because it never
+changes and is never reused. A `EVE_BUILDKIT_CACHE_REPO` on the Eve registry
+becomes one cache per project under the same prefix.
+
 What a token grants depends on who asks. The endpoint grants the permitted
 subset of the requested scopes and leaves the rest out (the registry then
 refuses that operation):
 
 | Caller | Credential | Granted |
 |--------|------------|---------|
-| Worker builds (BuildKit) | Basic password = `EVE_INTERNAL_API_KEY` | `pull`, `push` on any `repository` scope |
-| Kubelet in an app namespace | Basic password = environment pull credential | `pull` on repositories named in the project's build artifacts |
+| A build (BuildKit or Kaniko) | Basic `eve-push` / project push credential | `pull`, `push` on repositories under `<project id>/` |
+| Kubelet in an app namespace | Basic `eve-pull` / environment pull credential | `pull` on repositories under `<project id>/` |
+| Operator or internal POST | `EVE_INTERNAL_API_KEY` | `pull`, `push` on any `repository` scope |
 
 Never granted to anyone: `delete`, `*`, and non-repository scopes such as
-`registry:catalog:*`.
+`registry:catalog:*`. Because the prefix is assigned by the platform, not
+chosen by the tenant, one project cannot name its way into another project's
+repositories, for push or pull.
+
+**Push credentials.** A build gets
+`evepush1.<base64url({"p":"<project id>","exp":<unix seconds>})>.<HMAC>`
+(HMAC key derived from `EVE_INTERNAL_API_KEY` by HKDF under its own label),
+valid for 6 hours, in place of the internal API key. The build backend's
+docker config never holds the internal key, so a Dockerfile `RUN` step that
+can read it (Kaniko mounts it at `/kaniko/.docker`) gets at most a short-lived
+credential for its own project's repositories.
 
 **Pull secrets.** For each environment the deployer writes an `eve-registry`
 pull secret (username `eve-pull`) holding an environment pull credential, not
 the internal API key:
-`evepull1.<base64url({"p":"<project id>","e":"<environment id>","ns":"<namespace>","n":<epoch>})>.<HMAC>`,
-with the HMAC key derived from `EVE_INTERNAL_API_KEY` by HKDF. The token
-endpoint honours it only while:
+`evepull1.<base64url({"p":"<project id>","e":"<environment id>","ns":"<namespace>","n":<epoch>})>.<HMAC>`.
+The token endpoint honours it only while:
 
 - the environment still exists, is not terminated, and belongs to the project;
 - the project is not deleted;
@@ -89,29 +110,24 @@ It has no expiry time of its own, so pods can be rescheduled at any time while
 the environment lives.
 
 **Revocation.** Redeploy the environment twice, or delete it, to retire a
-leaked pull secret. Rotating `EVE_INTERNAL_API_KEY` revokes every pull
-credential at once; each environment gets a fresh one on its next deploy.
-Environments deployed before environment pull credentials existed still hold
-the internal key in their `eve-registry` secret until they are redeployed:
-redeploy them, then rotate the key.
+leaked pull secret. Rotating `EVE_INTERNAL_API_KEY` revokes every pull and push
+credential at once; each environment gets a fresh pull credential on its next
+deploy.
 
-**What "the project's repositories" means, and what it does not.** A project's
-repositories are the repository paths of the image refs in its build artifacts
-(registry host, tag and digest removed). Those names come from the manifest
-(the image name, or the service name when there is none) and are **not
-namespaced per project**: a service `api` pushes to `<host>/api`. So this does
-not isolate projects from each other. A project that builds an image with the
-same name as another project's (once is enough) gets pull on that repository,
-and every build may push to any repository, because builds use the internal
-key. What it does guarantee: an app namespace's pull secret no longer carries
-the internal key, cannot push, cannot list or delete, and cannot pull
-repositories its project never built. Isolation between projects needs
-per-project repository namespacing and project-scoped push credentials
-(tracked as EVE-038).
-
-Pruning builds (`eve build prune`) removes their artifacts; an image whose
-repository no remaining build uses can no longer be pulled with the
-environment's credential.
+**Upgrading from un-prefixed images.** Images pushed before project prefixes
+(`<host>/<image>`) are outside every project's prefix, so no project
+credential can pull them. After upgrading, run each environment's pipeline
+(build, release, deploy) once: build reuse ignores builds whose images are
+not under the prefix, so the images are rebuilt into it and the deploy pulls
+them from there. Deploying an older release by id, without a build, fails
+with an image pull error, because its images were never pushed under the
+prefix. Until that redeploy, an environment keeps its old `eve-registry`
+secret: if it still holds the internal key (written before environment pull
+credentials existed), rescheduled pods can still pull their un-prefixed
+images; if it already holds an environment pull credential, a pod rescheduled
+onto a node without the image cached fails to pull until the redeploy. Once
+every environment is redeployed, rotate `EVE_INTERNAL_API_KEY`. Old
+un-prefixed repositories stay in the registry's storage until removed by hand.
 
 ### Service Images
 

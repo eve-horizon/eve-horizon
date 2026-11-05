@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   mintRegistryPullCredential,
+  mintRegistryPushCredential,
+  REGISTRY_PUSH_CREDENTIAL_TTL_SECONDS,
   verifyRegistryPullCredential,
+  verifyRegistryPushCredential,
 } from '../registry-pull-credential.ts';
 
 const KEY = 'internal-key';
@@ -54,5 +57,38 @@ describe('registry pull credential', () => {
     expect(() => mintRegistryPullCredential({ ...CLAIMS, namespace: '' }, KEY)).toThrow();
     expect(() => mintRegistryPullCredential({ ...CLAIMS, epoch: -1 }, KEY)).toThrow();
     expect(() => mintRegistryPullCredential({ ...CLAIMS, epoch: 1.5 }, KEY)).toThrow();
+  });
+});
+
+describe('registry push credential', () => {
+  it('round-trips the project until it expires', () => {
+    const now = 1_700_000_000;
+    const credential = mintRegistryPushCredential('proj_abc', KEY, now);
+    expect(credential.startsWith('evepush1.')).toBe(true);
+    expect(credential).not.toContain(KEY);
+    expect(verifyRegistryPushCredential(credential, KEY, now + 60)).toEqual({
+      projectId: 'proj_abc',
+      expiresAt: now + REGISTRY_PUSH_CREDENTIAL_TTL_SECONDS,
+    });
+    expect(verifyRegistryPushCredential(credential, KEY, now + REGISTRY_PUSH_CREDENTIAL_TTL_SECONDS)).toBeNull();
+  });
+
+  it('is rejected under another key, when tampered with, or without a key', () => {
+    const credential = mintRegistryPushCredential('proj_abc', KEY);
+    expect(verifyRegistryPushCredential(credential, 'rotated-key')).toBeNull();
+    expect(verifyRegistryPushCredential(credential, undefined)).toBeNull();
+    const [prefix, , mac] = credential.split('.');
+    const forged = Buffer.from(JSON.stringify({ p: 'proj_other', exp: 9_999_999_999 })).toString('base64url');
+    expect(verifyRegistryPushCredential(`${prefix}.${forged}.${mac}`, KEY)).toBeNull();
+  });
+
+  it('cannot be confused with a pull credential, either way round', () => {
+    const push = mintRegistryPushCredential('proj_abc', KEY);
+    const pull = mintRegistryPullCredential(CLAIMS, KEY);
+    expect(verifyRegistryPullCredential(push, KEY)).toBeNull();
+    expect(verifyRegistryPushCredential(pull, KEY)).toBeNull();
+    // Same payload, other prefix: the MACs are under different keys.
+    const [, payload, mac] = pull.split('.');
+    expect(verifyRegistryPushCredential(`evepush1.${payload}.${mac}`, KEY)).toBeNull();
   });
 });

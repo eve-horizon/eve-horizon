@@ -385,7 +385,9 @@ registry: "eve"   # Use Eve-native registry (internal)
 registry: "none"  # Opt out of registry auth and pull secrets
 ```
 
-- `"eve"` uses the internal Eve registry and an API-issued JWT.
+- `"eve"` uses the internal Eve registry and an API-issued JWT. Images live
+  under the project's prefix, `<registry host>/<project id>/<image>`, whatever
+  the manifest names them; see `docs/system/container-registry.md`.
 - `"none"` disables registry handling (assumes public images or external auth).
 
 The deployer uses these secrets to create Kubernetes `imagePullSecrets` for

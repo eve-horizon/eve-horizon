@@ -25,14 +25,13 @@ import {
 import { existsSync, readFileSync } from 'fs';
 import { loadConfig } from '@eve/shared';
 import type { Db } from '@eve/db';
-import { buildQueries, environmentQueries, projectQueries } from '@eve/db';
+import { environmentQueries, projectQueries } from '@eve/db';
 import { Public } from '../auth/auth.decorator.js';
 import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import {
   grantRegistryAccess,
   identifyRegistryCaller,
   isPullCredentialCurrent,
-  repositoryFromImageRef,
   type RegistryAccessEntry,
   type RegistryCaller,
 } from './registry-access.js';
@@ -147,12 +146,10 @@ function loadKeyValue(value: string): string {
 @Controller('internal/registry')
 export class RegistryTokenController {
   private readonly logger = new Logger(RegistryTokenController.name);
-  private readonly builds: ReturnType<typeof buildQueries>;
   private readonly environments: ReturnType<typeof environmentQueries>;
   private readonly projects: ReturnType<typeof projectQueries>;
 
   constructor(@Inject('DB') db: Db) {
-    this.builds = buildQueries(db);
     this.environments = environmentQueries(db);
     this.projects = projectQueries(db);
   }
@@ -213,17 +210,6 @@ export class RegistryTokenController {
     return this.buildScopedToken(config, caller, scope, service);
   }
 
-  /** Repositories in the registry that the project's builds have pushed to. */
-  private async projectRepositories(projectId: string): Promise<Set<string>> {
-    const imageRefs = await this.builds.listImageRefsForProject(projectId);
-    const repositories = new Set<string>();
-    for (const imageRef of imageRefs) {
-      const repository = repositoryFromImageRef(imageRef);
-      if (repository) repositories.add(repository);
-    }
-    return repositories;
-  }
-
   private extractBasicAuthPassword(
     authorization: string | undefined,
   ): string | undefined {
@@ -259,13 +245,7 @@ export class RegistryTokenController {
         : parseScopes(scope);
     // Grant only what this caller may hold; anything else is silently left
     // out, and the registry then refuses the operation.
-    const access = grantRegistryAccess(
-      caller,
-      requested,
-      caller.kind === 'project-pull' && requested.length > 0
-        ? await this.projectRepositories(caller.projectId)
-        : undefined,
-    );
+    const access = grantRegistryAccess(caller, requested);
 
     const keyPem = loadKeyValue(config.EVE_REGISTRY_SIGNING_KEY);
     const privateKey = createPrivateKey(keyPem);
@@ -273,7 +253,10 @@ export class RegistryTokenController {
 
     const now = Math.floor(Date.now() / 1000);
     const payload: Record<string, unknown> = {
-      sub: caller.kind === 'internal' ? 'eve-worker' : `eve-pull:${caller.projectId}`,
+      sub:
+        caller.kind === 'internal'
+          ? 'eve-worker'
+          : `${caller.kind === 'project-push' ? 'eve-push' : 'eve-pull'}:${caller.projectId}`,
       aud: 'eve-registry',
       iss: 'eve-api',
       access,
@@ -285,7 +268,11 @@ export class RegistryTokenController {
 
     const scopeDisplay = Array.isArray(scope) ? scope.join(' ') : scope;
     const callerDisplay =
-      caller.kind === 'internal' ? 'internal' : `project ${caller.projectId} (${caller.namespace})`;
+      caller.kind === 'internal'
+        ? 'internal'
+        : caller.kind === 'project-push'
+          ? `build of project ${caller.projectId}`
+          : `project ${caller.projectId} (${caller.namespace})`;
     this.logger.debug(
       `Issued registry token to ${callerDisplay} for scope="${scopeDisplay}" service="${service}" ` +
         `(${access.length} of ${requested.length} access entries granted)`,

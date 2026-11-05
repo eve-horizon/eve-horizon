@@ -1,5 +1,9 @@
 import { createHash, timingSafeEqual } from 'crypto';
-import { verifyRegistryPullCredential } from '@eve/shared';
+import {
+  eveRegistryRepositoryPrefix,
+  verifyRegistryPullCredential,
+  verifyRegistryPushCredential,
+} from '@eve/shared';
 
 export interface RegistryAccessEntry {
   type: string;
@@ -10,15 +14,18 @@ export interface RegistryAccessEntry {
 /**
  * Who is asking the token endpoint for registry access.
  *
- * - `internal`: holds `EVE_INTERNAL_API_KEY` (the worker's builds, through
- *   BuildKit, or the internal POST endpoint). May push and pull.
+ * - `internal`: holds `EVE_INTERNAL_API_KEY` (the internal POST endpoint, or
+ *   an operator). May push and pull anywhere.
+ * - `project-push`: presents a build's push credential (BuildKit or Kaniko).
+ *   May push and pull under the project's repository prefix, until it expires.
  * - `project-pull`: presents an environment's pull credential from an app
- *   namespace's `eve-registry` pull secret (kubelet). May pull the project's
- *   repositories only, and only while the credential is current
+ *   namespace's `eve-registry` pull secret (kubelet). May pull under the
+ *   project's repository prefix, while the credential is current
  *   (`isPullCredentialCurrent`).
  */
 export type RegistryCaller =
   | { kind: 'internal' }
+  | { kind: 'project-push'; projectId: string; expiresAt: number }
   | { kind: 'project-pull'; projectId: string; environmentId: string; namespace: string; epoch: number };
 
 /** The environment fields a pull credential is checked against. */
@@ -50,6 +57,7 @@ export function isPullCredentialCurrent(
 
 const GRANTABLE_ACTIONS: Record<RegistryCaller['kind'], ReadonlySet<string>> = {
   internal: new Set(['pull', 'push']),
+  'project-push': new Set(['pull', 'push']),
   'project-pull': new Set(['pull']),
 };
 
@@ -58,15 +66,26 @@ function secretsEqual(presented: string, expected: string): boolean {
   return timingSafeEqual(digest(presented), digest(expected));
 }
 
-/** Identify a Basic-auth password as the internal key or a project pull credential. */
+/** Identify a Basic-auth password as the internal key, a push credential or a pull credential. */
 export function identifyRegistryCaller(
   password: string | undefined,
   internalKey: string | undefined,
 ): RegistryCaller | null {
   if (!password || !internalKey) return null;
   if (secretsEqual(password, internalKey)) return { kind: 'internal' };
-  const claims = verifyRegistryPullCredential(password, internalKey);
-  return claims ? { kind: 'project-pull', ...claims } : null;
+  const push = verifyRegistryPushCredential(password, internalKey);
+  if (push) return { kind: 'project-push', ...push };
+  const pull = verifyRegistryPullCredential(password, internalKey);
+  return pull ? { kind: 'project-pull', ...pull } : null;
+}
+
+function projectPrefix(caller: RegistryCaller): string | null {
+  if (caller.kind === 'internal') return null;
+  try {
+    return eveRegistryRepositoryPrefix(caller.projectId);
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -74,47 +93,28 @@ export function identifyRegistryCaller(
  * Docker token spec (grant the permitted subset, never fail the request):
  *
  * - only `repository` resources (no `registry:catalog`);
- * - only `pull`/`push` for internal callers, only `pull` for project callers
+ * - `pull`/`push` for internal and push callers, `pull` for pull callers
  *   (never `delete` or `*`);
- * - project callers only on repositories their project has built.
+ * - project callers only on repositories under their project's prefix
+ *   (`<project id>/`), which the platform assigns, not the manifest.
  *
  * Entries left with no actions are dropped.
  */
 export function grantRegistryAccess(
   caller: RegistryCaller,
   requested: RegistryAccessEntry[],
-  projectRepositories: ReadonlySet<string> = new Set(),
 ): RegistryAccessEntry[] {
   const grantable = GRANTABLE_ACTIONS[caller.kind];
+  const prefix = projectPrefix(caller);
+  if (prefix === '') return [];
   const granted: RegistryAccessEntry[] = [];
   for (const entry of requested) {
     if (entry.type !== 'repository') continue;
-    if (caller.kind === 'project-pull' && !projectRepositories.has(entry.name)) continue;
+    if (prefix !== null && !entry.name.startsWith(prefix)) continue;
     const actions = [...new Set(entry.actions.filter((action) => grantable.has(action)))];
     if (actions.length > 0) {
       granted.push({ type: 'repository', name: entry.name, actions });
     }
   }
   return granted;
-}
-
-/**
- * Repository path of an image ref inside its registry, as it appears in a
- * registry scope: drops the digest, the tag and a leading registry host
- * (a first segment containing `.` or `:`, or `localhost`).
- *
- * `registry.example.com/api:sha-1` -> `api`;
- * `eve-registry.eve.svc.cluster.local:5000/acme/web@sha256:...` -> `acme/web`.
- */
-export function repositoryFromImageRef(imageRef: string): string | null {
-  const withoutDigest = imageRef.split('@')[0] ?? '';
-  const lastSlash = withoutDigest.lastIndexOf('/');
-  const lastColon = withoutDigest.lastIndexOf(':');
-  const name = lastColon > lastSlash ? withoutDigest.slice(0, lastColon) : withoutDigest;
-  const segments = name.split('/').filter(Boolean);
-  const first = segments[0] ?? '';
-  if (segments.length > 1 && (first.includes('.') || first.includes(':') || first === 'localhost')) {
-    segments.shift();
-  }
-  return segments.length > 0 ? segments.join('/') : null;
 }

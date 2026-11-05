@@ -11,6 +11,11 @@ export interface RegistryAuth {
 export interface RegistryConfig {
   host: string;
   namespace?: string;
+  /**
+   * Set for the Eve-native registry: images are pushed under this project's
+   * repository prefix (`<host>/<project id>/...`), whatever the manifest says.
+   */
+  eveProjectId?: string;
   auth?: {
     username_secret?: string;
     token_secret?: string;

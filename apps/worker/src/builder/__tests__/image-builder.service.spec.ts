@@ -379,6 +379,38 @@ services:
       );
     });
 
+    it('pushes Eve registry images under the project prefix, whatever the manifest says', async () => {
+      (mockRegistryAuth.resolve as any).mockResolvedValue({
+        auth: { ...mockRegistryAuthData, host: 'registry.eve.example.com' },
+        config: { host: 'registry.eve.example.com', eveProjectId: 'proj_123' },
+      });
+      const manifestYaml = `
+registry: eve
+services:
+  api:
+    build:
+      context: ./api
+  web:
+    image: registry.eve.example.com/other-project-web
+    build:
+      context: ./web
+`;
+
+      await service.buildAll({
+        manifest: {} as any,
+        manifestYaml,
+        gitSha: 'abc123def456',
+        workspacePath: '/workspace',
+        projectId: 'proj_123',
+      });
+
+      const refs = (mockBuilder.buildService as any).mock.calls.map((call: any[]) => call[0].imageRef).sort();
+      expect(refs).toEqual([
+        'registry.eve.example.com/proj_123/api',
+        'registry.eve.example.com/proj_123/other-project-web',
+      ]);
+    });
+
     it('excludes services marked as external via x-eve', async () => {
       const manifestYaml = `
 services:

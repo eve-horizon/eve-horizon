@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import yaml from 'yaml';
-import { loadConfig, resolveProjectSecrets } from '@eve/shared';
+import {
+  loadConfig,
+  mintRegistryPushCredential,
+  REGISTRY_PUSH_USERNAME,
+  resolveProjectSecrets,
+} from '@eve/shared';
 import { RegistryAuth, RegistryConfig } from './image-builder.interface.js';
 
 @Injectable()
@@ -11,7 +16,7 @@ export class RegistryAuthService {
    * Resolve registry authentication from manifest and project secrets.
    *
    * Two paths:
-   * - `registry: "eve"` — requests a push-scoped JWT from the Eve API internal endpoint
+   * - `registry: "eve"` — a short-lived push credential scoped to the project's repository prefix
    * - `registry: { host, ... }` — resolves username/token from project secrets (BYO registry)
    */
   async resolve(
@@ -32,7 +37,7 @@ export class RegistryAuthService {
 
     // ── Eve-native registry ─────────────────────────────────────────────
     if (registry === 'eve') {
-      return this.resolveEveRegistry();
+      return this.resolveEveRegistry(projectId);
     }
 
     // ── BYO registry (existing path) ────────────────────────────────────
@@ -42,10 +47,10 @@ export class RegistryAuthService {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // Eve-native registry: fetch a push-scoped token from the internal API
+  // Eve-native registry: a project-scoped push credential
   // ────────────────────────────────────────────────────────────────────────
 
-  private async resolveEveRegistry(): Promise<{
+  private async resolveEveRegistry(projectId: string): Promise<{
     auth: RegistryAuth;
     config: RegistryConfig;
   }> {
@@ -60,20 +65,22 @@ export class RegistryAuthService {
 
     if (!config.EVE_INTERNAL_API_KEY) {
       throw new Error(
-        'Eve registry requires EVE_INTERNAL_API_KEY for BuildKit auth',
+        'Eve registry requires EVE_INTERNAL_API_KEY to sign build credentials',
       );
     }
 
-    // Use the internal API key as the docker config password.
-    // BuildKit follows the Docker v2 token auth flow: the registry challenges
-    // with 401, BuildKit GETs the token endpoint with Basic auth (these creds),
-    // and the API issues a scoped JWT.
-    const username = 'eve-token';
-    const password = config.EVE_INTERNAL_API_KEY;
+    // A push credential scoped to this project's repository prefix, never the
+    // internal API key: the docker config is written where the build backend
+    // can read it (Kaniko mounts it into the build pod). BuildKit follows the
+    // Docker v2 token auth flow: the registry challenges with 401, BuildKit
+    // GETs the token endpoint with Basic auth (these creds), and the API grants
+    // push and pull under `<project id>/` only.
+    const username = REGISTRY_PUSH_USERNAME;
+    const password = mintRegistryPushCredential(projectId, config.EVE_INTERNAL_API_KEY);
 
     const dockerConfigJson = this.buildDockerConfigJson(host, username, password);
 
-    const registryConfig: RegistryConfig = { host };
+    const registryConfig: RegistryConfig = { host, eveProjectId: projectId };
     const registryAuth: RegistryAuth = {
       host,
       username,
