@@ -104,6 +104,9 @@ export const configSchema = z.object({
   EVE_BOOTSTRAP_TOKEN: z.string().optional(),
   EVE_BOOTSTRAP_TRIGGER_FILE: z.string().default('/tmp/eve-bootstrap-enable'),
   EVE_BOOTSTRAP_WINDOW_MINUTES: z.coerce.number().default(10),
+  // Dev/test only: once an admin exists, let a repeat bootstrap call re-issue that
+  // admin's token (integration tests, local stacks). Ignored when NODE_ENV=production.
+  EVE_DEV_REBOOTSTRAP: booleanFromEnv.default(false),
   EVE_AUTH_CHALLENGE_TTL_SECONDS: z.coerce.number().default(300),
   EVE_SUPABASE_URL: z.string().optional(),
   SUPABASE_URL: z.string().optional(),

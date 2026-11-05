@@ -143,6 +143,16 @@ export class BootstrapService {
     }
   }
 
+  private reissueAllowed(config: ReturnType<typeof loadConfig>, presentedToken?: string): boolean {
+    if (!config.EVE_DEV_REBOOTSTRAP || config.NODE_ENV === 'production') {
+      return false;
+    }
+    if (this.bootstrapToken) {
+      return Boolean(presentedToken) && safeEqual(presentedToken!, this.bootstrapToken);
+    }
+    return true;
+  }
+
   private cleanupTriggerFile(): void {
     try {
       if (existsSync(this.bootstrapTriggerFile)) {
@@ -158,8 +168,11 @@ export class BootstrapService {
     const bootstrapStatus = await this.getBootstrapStatus();
 
     if (bootstrapStatus.completed) {
-      // Non-production mode: allow re-bootstrap and return existing admin token
-      if (config.NODE_ENV !== 'production') {
+      // Once an admin exists, bootstrap is closed. Re-issuing the existing admin's
+      // token is a dev/test convenience that needs an explicit opt-in, is never
+      // available in production, and still requires the bootstrap token when one
+      // is configured.
+      if (this.reissueAllowed(config, input.token)) {
         const existingAdmin = await this.users.findFirstAdmin();
         if (existingAdmin) {
           const token = await this.appAuth.mintUserToken(existingAdmin.id, existingAdmin.email);

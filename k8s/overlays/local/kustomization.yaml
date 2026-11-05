@@ -10,5 +10,6 @@ patchesStrategicMerge:
   - managed-db.patch.yaml
 
   - api-tcp-ingress.patch.yaml
+  - api-dev-bootstrap.patch.yaml
   - worker-registry.patch.yaml
   - worker-tcp-ingress.patch.yaml
