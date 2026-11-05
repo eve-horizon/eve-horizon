@@ -157,13 +157,32 @@ ensure_variant() {
   if [[ -n "$api_key" ]]; then
     "${timeout_prefix[@]}" "${command_prefix[@]}" quick --provider "$provider" --name "$name" --api-key "$api_key" --yes --no-tui || {
       echo "WARNING: Failed to install cc-mirror variant $name — continuing without it" >&2
+      return 0
     }
   else
     "${timeout_prefix[@]}" "${command_prefix[@]}" quick --provider "$provider" --name "$name" --yes --no-tui || {
       echo "WARNING: Failed to install cc-mirror variant $name — continuing without it" >&2
+      return 0
     }
   fi
+  echo "Installed cc-mirror variant: $name" >&2
 }
+
+# The image bakes the harness variants in. Anything still missing (a custom
+# image, or zai once Z_AI_API_KEY is provided) is installed in the background:
+# a network install must not hold up the service, its probes or a runner pod.
+# The double fork hands the installer to tini (PID 1), which reaps it.
+install_missing_variants_in_background() {
+  ( {
+      ensure_variant "mclaude" "mirror" ""
+      ensure_variant "zai" "zai" "${Z_AI_API_KEY:-}"
+    } & )
+}
+
+# docker/worker/entrypoint.test.sh sources this file for its functions only.
+if [[ "${EVE_ENTRYPOINT_FUNCTIONS_ONLY:-}" == "1" ]]; then
+  return 0
+fi
 
 # Ensure workspace directory exists with proper permissions
 if [[ -n "${WORKSPACE_ROOT:-}" ]]; then
@@ -172,8 +191,7 @@ fi
 
 preflight_check
 ensure_env_aliases
-ensure_variant "mclaude" "mirror" ""
-ensure_variant "zai" "zai" "${Z_AI_API_KEY:-}"
+install_missing_variants_in_background
 write_claude_credentials
 write_codex_credentials
 
