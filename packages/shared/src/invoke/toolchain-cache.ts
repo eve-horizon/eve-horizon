@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { VALID_TOOLCHAINS } from '../schemas/agent-config.js';
+import { withoutPlatformSecrets } from '../process-isolation.js';
 
 const DEFAULT_TOOLCHAIN_ROOT = '/opt/eve/toolchains';
 const DEFAULT_IMAGE_PREFIX = 'eve-horizon/toolchain-';
@@ -139,7 +140,7 @@ export async function ensureToolchains(options: EnsureToolchainsOptions): Promis
 async function resolveImageDigest(image: string, insecureRegistry: boolean, dockerConfigDir?: string): Promise<string> {
   const args = [...(insecureRegistry ? ['--insecure'] : []), 'digest', image];
   const child = spawn('crane', args, {
-    env: { ...process.env, ...(dockerConfigDir ? { DOCKER_CONFIG: dockerConfigDir } : {}) },
+    env: { ...withoutPlatformSecrets(process.env), ...(dockerConfigDir ? { DOCKER_CONFIG: dockerConfigDir } : {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const [result, output] = await waitForProcessWithStdout(child, 'crane');
@@ -297,12 +298,12 @@ async function exportToolchainImage(
     '-',
   ];
   const env = {
-    ...process.env,
+    ...withoutPlatformSecrets(process.env),
     ...(options.dockerConfigDir ? { DOCKER_CONFIG: options.dockerConfigDir } : {}),
   };
 
   const crane = spawn('crane', craneArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  const tar = spawn('tar', ['-xf', '-', '-C', extractRoot], { stdio: ['pipe', 'ignore', 'pipe'] });
+  const tar = spawn('tar', ['-xf', '-', '-C', extractRoot], { env: withoutPlatformSecrets(process.env), stdio: ['pipe', 'ignore', 'pipe'] });
   crane.stdout.pipe(tar.stdin);
 
   const [craneResult, tarResult] = await Promise.all([

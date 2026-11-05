@@ -49,6 +49,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get install -y --no-install-recommends git bash ca-certificates curl tini procps jq gpg poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Execute-only copies of node and tini for the service's own processes.
+# The kernel marks a process non-dumpable when it executes a binary its user
+# cannot read, so job code running as the same UID (pipeline scripts, harnesses)
+# cannot read the worker's environment from /proc/<pid>/environ or its memory.
+# Jobs keep the ordinary, readable /usr/local/bin/node.
+RUN install -D -o root -g root -m 0711 /usr/local/bin/node /usr/local/libexec/eve-node \
+    && install -o root -g root -m 0711 /usr/bin/tini /usr/local/libexec/eve-tini
+
 # Install GitHub CLI (gh) from official apt repository
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -303,8 +311,8 @@ WORKDIR /app/apps/worker
 USER node
 # Use tini as init system for proper zombie reaping and signal forwarding
 # This prevents orphaned processes from accumulating and exhausting resources
-ENTRYPOINT ["/usr/bin/tini", "--", "eve-worker-entrypoint"]
-CMD ["node", "dist/main.js"]
+ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "eve-worker-entrypoint"]
+CMD ["/usr/local/libexec/eve-node", "dist/main.js"]
 
 # =============================================================================
 # Stage: media
@@ -439,8 +447,8 @@ ENV PATH="${KOTLIN_HOME}/bin:${PATH}"
 
 WORKDIR /app/apps/worker
 USER node
-ENTRYPOINT ["/usr/bin/tini", "--", "eve-worker-entrypoint"]
-CMD ["node", "dist/main.js"]
+ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "eve-worker-entrypoint"]
+CMD ["/usr/local/libexec/eve-node", "dist/main.js"]
 
 # =============================================================================
 # Stage: full

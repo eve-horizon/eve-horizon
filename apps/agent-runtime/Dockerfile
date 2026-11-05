@@ -114,10 +114,15 @@ COPY --from=build /app/packages/cli/bin ./packages/cli/bin
 COPY --from=build /app/packages/cli/package.json ./packages/cli/
 RUN ln -sf /app/packages/eve-agent-cli/bin/eve-agent-cli.js /usr/local/bin/eve-agent-cli
 RUN ln -sf /app/packages/cli/bin/eve.js /usr/local/bin/eve
+# Execute-only copy of node for the runtime itself. The kernel marks a process
+# non-dumpable when it executes a binary its user cannot read, so harnesses
+# (same UID) cannot read the runtime's environment from /proc/<pid>/environ or
+# its memory. Harnesses keep the ordinary, readable /usr/local/bin/node.
+RUN install -D -o root -g root -m 0711 /usr/local/bin/node /usr/local/libexec/eve-node
 ENV PATH="/home/node/.local/bin:/app/packages/eve-agent-cli/bin:${PATH}"
 WORKDIR /app/apps/agent-runtime
 USER node
-CMD ["node", "dist/main.js"]
+CMD ["/usr/local/libexec/eve-node", "dist/main.js"]
 
 FROM dependencies AS development
 COPY . .

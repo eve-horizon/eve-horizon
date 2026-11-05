@@ -187,7 +187,14 @@ write_codex_credentials
 # accumulate when agent jobs timeout or are killed, exhausting system resources.
 if [[ "${EVE_ORPHAN_REAPER:-true}" == "true" ]]; then
   if command -v orphan-reaper >/dev/null 2>&1; then
-    orphan-reaper start >&2
+    # The reaper outlives this script as an ordinary (dumpable) process with the
+    # worker's UID, so job code could read its /proc/<pid>/environ. Start it with
+    # only what it needs, never the worker's secrets.
+    env -i PATH="$PATH" HOME="$HOME" \
+      ${EVE_REAPER_INTERVAL:+EVE_REAPER_INTERVAL="$EVE_REAPER_INTERVAL"} \
+      ${EVE_ORPHAN_AGE:+EVE_ORPHAN_AGE="$EVE_ORPHAN_AGE"} \
+      ${EVE_REAPER_LOG:+EVE_REAPER_LOG="$EVE_REAPER_LOG"} \
+      orphan-reaper start >&2
   fi
 fi
 

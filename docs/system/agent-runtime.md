@@ -71,6 +71,17 @@ Session workspaces, the configured root itself, paths outside that root, and
 symlink aliases are preserved. Operators must still size local storage for peak
 active attempts and shared toolchain caches.
 
+## Process isolation
+
+Inline harnesses run as the runtime's UID. The image starts the runtime from
+`/usr/local/libexec/eve-node`, an execute-only copy of node, so the kernel marks
+it non-dumpable and harnesses cannot read its environment (`DATABASE_URL`,
+`EVE_INTERNAL_API_KEY`) from `/proc/1/environ` or its memory. The boot log says
+`AGENT-RUNTIME: process is non-dumpable`; a warning means the pod is not
+protected (for example a `command:` override that runs plain `node`). Set
+`EVE_REQUIRE_ENVIRON_PROTECTION=true` to refuse to start in that case. See
+[agent-secret-isolation.md](./agent-secret-isolation.md#layer-1b-the-runtimes-own-environment).
+
 ## Data Model
 
 - `agent_runtime_pods` (heartbeat + capacity)

@@ -8,6 +8,7 @@ export * from './logger.js';
 export * from './redaction.js';
 export * from './otel.js';
 export * from './service-bootstrap.js';
+export * from './process-isolation.js';
 export * from './error-codes.js';
 export * from './lib/pack-resolver.js';
 export * from './lib/overlay-merge.js';
