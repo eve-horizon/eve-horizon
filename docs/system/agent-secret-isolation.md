@@ -167,7 +167,8 @@ The one secret that _must_ remain accessible to the agent process is the LLM pro
 - Security policy prompt preamble (all harnesses).
 - Security CLAUDE.md for Claude-family harnesses.
 - Stopped writing `.eve/secrets.env` to workspace.
-- `EVE_SECRETS_MASTER_KEY` removed from K8s runner pod env.
+- `EVE_SECRETS_MASTER_KEY` removed from K8s runner pod env (worker and agent-runtime runners).
+- Runner pods mount no service account token and drop all capabilities.
 
 ### Phase 2 (Planned): Per-Job HOME + Tool Credential Files
 - Create a per-job `$HOME` directory outside the workspace.

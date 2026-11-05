@@ -22,6 +22,7 @@ import {
 import * as yaml from 'yaml';
 import { DeployerService } from '../deployer/deployer.service';
 import { K8sOperationError } from '../deployer/k8s-error.js';
+import { buildJobCommandEnv } from '../execution/job-command-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -379,11 +380,9 @@ export class PipelineRunnerService {
     try {
       const { stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
         cwd: workspace,
-        env: {
-          ...process.env,
-          ...(run.env_name ? { EVE_ENV_NAME: run.env_name } : {}),
-          ...(envNamespace ? { EVE_ENV_NAMESPACE: envNamespace } : {}),
-        },
+        // Allowlisted env: the worker's DATABASE_URL, internal key and cloud
+        // credentials must not reach repository-defined commands.
+        env: buildJobCommandEnv({ envName: run.env_name, envNamespace }),
         maxBuffer: 1024 * 1024,
       });
 

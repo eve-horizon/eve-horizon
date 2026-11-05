@@ -42,7 +42,11 @@ executes against env namespaces but does not live inside them.
 | `EVE_K8S_NAMESPACE` | Namespace for runner pods | `eve` |
 | `EVE_K8S_WORKSPACE_SIZE` | PVC size for workspace | `10Gi` |
 | `EVE_K8S_POD_READY_TIMEOUT` | Pod readiness timeout | `120s` |
-| `EVE_RUNNER_SERVICE_ACCOUNT` | Service account for runner pods | - |
+| `EVE_RUNNER_SERVICE_ACCOUNT` | Service account for runner pods; use one with no RBAC (for example `eve-runner`) | namespace default |
+| `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN` | `true` mounts the API token into runner pods | `false` |
+| `EVE_RUNNER_NODE_SELECTOR_KEY` / `_VALUE` | Node label runner pods must land on (set both) | - |
+| `EVE_RUNNER_TAINT_KEY` / `_VALUE` / `_EFFECT` | Taint runner pods tolerate | - |
+| `EVE_SCRIPT_K8S_RUNNER` | `true` runs script steps in runner pods instead of the worker process (recommended in production) | `false` |
 | `EVE_BUILD_BACKEND` | Image build backend (`buildkit`/`buildx`) | buildkit in K8s |
 
 ## Deployer Service

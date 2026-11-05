@@ -39,6 +39,7 @@ import {
   deriveNamespace,
 } from '@eve/shared';
 import { runStreamingCommand } from '../execution/streaming-command.js';
+import { buildJobCommandEnv } from '../execution/job-command-env.js';
 import { runInvocationInK8s } from '../invoke/k8s-runner.js';
 
 const execFileAsync = promisify(execFile);
@@ -777,41 +778,17 @@ export class ScriptExecutorService {
     },
   ): Promise<Omit<ScriptExecutionResult, 'durationMs'>> {
     try {
-      // Prepare environment with job context
-      let env: NodeJS.ProcessEnv = {
-        PATH: process.env.PATH,
-        HOME: context.scriptHome ?? process.env.HOME,
-        EVE_JOB_ID: context.jobId,
-        EVE_PROJECT_ID: context.projectId,
-        EVE_ATTEMPT_ID: context.attemptId,
-        EVE_TOOLCHAIN_INIT_MOUNTED: process.env.EVE_TOOLCHAIN_INIT_MOUNTED,
-        EVE_RUNTIME_IMAGE_DIGEST: process.env.EVE_RUNTIME_IMAGE_DIGEST,
-      };
-
-      // API URL so the Eve CLI can reach the API from inside the worker pod
-      if (process.env.EVE_API_URL) {
-        env.EVE_API_URL = process.env.EVE_API_URL;
-      }
-      if (process.env.EVE_PUBLIC_API_URL) {
-        env.EVE_PUBLIC_API_URL = process.env.EVE_PUBLIC_API_URL;
-      }
-
-      // Job token for CLI authentication
-      if (context.jobToken) {
-        env.EVE_JOB_TOKEN = context.jobToken;
-      }
-
-      if (context.runId) {
-        env.EVE_RUN_ID = context.runId;
-      }
-
-      if (context.envName) {
-        env.EVE_ENV_NAME = context.envName;
-      }
-
-      if (context.envNamespace) {
-        env.EVE_ENV_NAMESPACE = context.envNamespace;
-      }
+      // Allowlisted env plus job context; the worker's own secrets never reach the script.
+      let env = buildJobCommandEnv({
+        home: context.scriptHome,
+        jobId: context.jobId,
+        projectId: context.projectId,
+        attemptId: context.attemptId,
+        runId: context.runId,
+        envName: context.envName,
+        envNamespace: context.envNamespace,
+        jobToken: context.jobToken,
+      });
 
       if (context.toolchains && context.toolchains.length > 0) {
         const provisioned = await ensureToolchains({

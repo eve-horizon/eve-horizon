@@ -178,3 +178,11 @@ export type { BrowserProbeResult } from './browser-runtime.js';
 
 export { watchJobCancellation, bindProcessCancellation, JOB_CANCELLED, type JobCancellationMonitor } from './job-cancellation.js';
 export { cleanupAttemptWorkspace } from './workspace-cleanup.js';
+
+// Runner pod isolation and placement (service account, token mount, node pool).
+export {
+  resolveRunnerPodIsolation,
+  runnerUsesPlatformServiceAccount,
+  type RunnerPodIsolation,
+  type RunnerToleration,
+} from './runner-pod.js';

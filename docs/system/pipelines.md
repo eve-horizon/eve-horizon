@@ -49,6 +49,69 @@ attempt logs. Script steps use the persisted `script_timeout_seconds`; action
 run steps use `action.timeout_seconds` or `action.timeout` before falling back
 to job hints.
 
+#### Where script steps run, and what they can reach
+
+Script steps are repository code, so treat them as untrusted. There are two
+execution modes:
+
+| Mode | When | Process | Kubernetes API | Worker secrets |
+| --- | --- | --- | --- | --- |
+| In-process | Default; always outside Kubernetes | `bash` child of the worker, same UID | Worker service account token is readable on disk | Not in the env (allowlist) |
+| Runner pod | `EVE_RUNTIME=k8s` and `EVE_SCRIPT_K8S_RUNNER=true` | Ephemeral pod per attempt | No token mounted | Runner holds `DATABASE_URL` and the internal key (see below) |
+
+In both modes the command starts from an allowlisted environment
+(`apps/worker/src/execution/job-command-env.ts`): `PATH`, `HOME` (a
+workspace-scoped directory), locale and terminal variables, `EVE_API_URL`,
+`EVE_PUBLIC_API_URL`, job identifiers, the job's own scoped `EVE_JOB_TOKEN`,
+`EVE_ENV_NAME`/`EVE_ENV_NAMESPACE`, toolchain paths, app-link variables and
+declared `env_overrides`. `DATABASE_URL`, `EVE_INTERNAL_API_KEY`,
+`EVE_SECRETS_MASTER_KEY`, signing keys, storage and cloud credentials, and
+`KUBERNETES_*` never reach it. The same allowlist covers `action: { type: run }`
+commands and the legacy step-run `run` action.
+
+The allowlist does not make in-process execution a sandbox: the script shares
+the worker's UID, filesystem and service account token. **Production
+deployments should run scripts in runner pods**:
+
+```yaml
+- name: EVE_SCRIPT_K8S_RUNNER
+  value: "true"
+- name: EVE_RUNNER_SERVICE_ACCOUNT      # a service account with no RBAC
+  value: eve-runner
+- name: EVE_RUNNER_NODE_SELECTOR_KEY    # schedule job code with the agents pool,
+  value: pool                           # not on the platform's core nodes
+- name: EVE_RUNNER_NODE_SELECTOR_VALUE
+  value: agents
+- name: EVE_RUNNER_TAINT_KEY
+  value: pool
+- name: EVE_RUNNER_TAINT_VALUE
+  value: agents
+- name: EVE_RUNNER_TAINT_EFFECT
+  value: NoSchedule
+```
+
+Runner pods (worker and agent-runtime alike) always set
+`automountServiceAccountToken: false`, drop all Linux capabilities, run as UID
+1000 with `allowPrivilegeEscalation: false`, and run as the namespace default
+service account when `EVE_RUNNER_SERVICE_ACCOUNT` is unset. A platform account
+(`eve-worker`, `eve-agent-runtime`) logs a warning, because a cloud identity
+bound to it (GKE Workload Identity, EKS IRSA) still reaches job code without a
+token. `EVE_RUNNER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN=true` restores the token for
+an install that knowingly gives job code API access. Placement must be set in
+pairs: a key without a value fails the job rather than scheduling job code on
+the wrong pool. The worker's runner mounts the org filesystem claim
+`eve-org-fs-org-default`; with a `ReadWriteOnce` claim the runner must land on
+the node that already holds it, which the selector and toleration above
+achieve when the agents pool is one node (use a `ReadWriteMany` claim or pod
+affinity otherwise).
+
+`EVE_SCRIPT_K8S_RUNNER` stays off by default in code because local
+docker-compose has no Kubernetes and the k3d stack has not been verified with
+runner-pod scripts. The production default belongs in the deployment manifests.
+See [job-execution-isolation-plan.md](../plans/job-execution-isolation-plan.md)
+for what remains (runner pods still carry `DATABASE_URL` and the internal key;
+the worker's own RBAC is cluster-wide).
+
 Pipeline definitions and individual steps can declare `toolchains` with valid
 values `python`, `media`, `rust`, `java`, and `kotlin`. Script, shorthand
 `run`, agent, and `action: { type: run }` steps resolve `step.toolchains >

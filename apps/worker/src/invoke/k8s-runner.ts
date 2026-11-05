@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
-import { getCorrelationHeaders, loadConfig } from '@eve/shared';
+import { getCorrelationHeaders, loadConfig, resolveRunnerPodIsolation, runnerUsesPlatformServiceAccount } from '@eve/shared';
 import type { HarnessInvocation, HarnessResult } from '@eve/shared';
 
 const DEFAULT_NAMESPACE = 'eve';
@@ -200,6 +200,15 @@ function pushOptionalEnv(entries: { name: string; value: string }[], name: strin
   entries.push({ name, value });
 }
 
+let warnedPlatformServiceAccount = false;
+
+function warnIfPlatformServiceAccount(isolation: ReturnType<typeof resolveRunnerPodIsolation>): void {
+  if (warnedPlatformServiceAccount || !runnerUsesPlatformServiceAccount(isolation)) return;
+  warnedPlatformServiceAccount = true;
+  console.warn(`[k8s-runner] EVE_RUNNER_SERVICE_ACCOUNT=${isolation.serviceAccountName} gives job code a platform `
+    + 'service account and any cloud identity bound to it. Use a dedicated account with no RBAC, such as eve-runner.');
+}
+
 export function buildRunnerManifests(
   invocation: HarnessInvocation,
   namespace: string,
@@ -209,7 +218,8 @@ export function buildRunnerManifests(
 ): string {
   const runnerImage = requiredEnv('EVE_RUNNER_IMAGE');
   const workspaceSize = optionalEnv('EVE_K8S_WORKSPACE_SIZE', DEFAULT_WORKSPACE_SIZE);
-  const serviceAccount = process.env.EVE_RUNNER_SERVICE_ACCOUNT;
+  const isolation = resolveRunnerPodIsolation();
+  warnIfPlatformServiceAccount(isolation);
   const dbUrl = requiredEnv('DATABASE_URL');
   const jobLabel = sanitizeLabelValue(invocation.jobId);
   const attemptLabel = sanitizeLabelValue(invocation.attemptId);
@@ -334,7 +344,9 @@ export function buildRunnerManifests(
         spec: {
           activeDeadlineSeconds: parseInt(process.env.EVE_K8S_ACTIVE_DEADLINE_SECONDS ?? '7200', 10),
           restartPolicy: 'Never',
-          serviceAccountName: serviceAccount,
+          // Job code needs no Kubernetes API: no token, no platform service account,
+          // and placement on the job pool rather than the platform's nodes.
+          ...isolation,
           securityContext: {
             runAsUser: 1000,
             runAsGroup: 1000,
@@ -355,6 +367,7 @@ export function buildRunnerManifests(
                 runAsGroup: 1000,
                 runAsNonRoot: true,
                 allowPrivilegeEscalation: false,
+                capabilities: { drop: ['ALL'] },
               },
               resources: {
                 requests: {

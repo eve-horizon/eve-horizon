@@ -61,9 +61,18 @@ gemini --sandbox ...
 
 For production deployments using Kubernetes runner pods:
 - Each job executes in an isolated container
+- No service account token is mounted (`automountServiceAccountToken: false`);
+  set `EVE_RUNNER_SERVICE_ACCOUNT` to an account with no RBAC or cloud identity
+- All Linux capabilities dropped, UID 1000, no privilege escalation
+- Placement on the job pool via `EVE_RUNNER_NODE_SELECTOR_*` and
+  `EVE_RUNNER_TAINT_*`, away from the platform's own nodes
 - Network policies restrict pod communication
 - Resource limits prevent DoS attacks
 - Ephemeral storage destroyed after job completion
+
+Runner pods still receive `DATABASE_URL` and `EVE_INTERNAL_API_KEY`, which the
+runner process uses to record logs and resolve secrets. See
+[job-execution-isolation-plan.md](../plans/job-execution-isolation-plan.md).
 
 ## Configuration
 
