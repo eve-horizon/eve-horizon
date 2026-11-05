@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeployerService } from '../deployer.service.js';
 
 describe('DeployerService - registry image normalization', () => {
@@ -125,6 +125,46 @@ describe('DeployerService - registry image normalization', () => {
         'eve-registry.eve.svc:5000',
       );
       expect(result).toBe('eve-registry.eve.svc.cluster.local:5000/evepm/migrate');
+    });
+  });
+
+  describe('resolveServiceImage (Eve registry project namespacing)', () => {
+    const eveManifest = { registry: 'eve', services: {} } as any;
+    const byoManifest = { registry: { host: 'ghcr.io/acme' }, services: {} } as any;
+
+    beforeEach(() => {
+      vi.stubEnv('DATABASE_URL', 'postgres://user:pass@localhost:5432/eve_test');
+      vi.stubEnv('EVE_REGISTRY_HOST', 'registry.eve.example.com');
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const resolve = (image: string, manifest = eveManifest) =>
+      (deployer as any).imageResolver.resolveServiceImage(image, manifest, 'proj_01hshop');
+
+    it('places bare images under the project prefix', () => {
+      expect(resolve('api')).toBe('registry.eve.example.com/proj_01hshop/api');
+      expect(resolve('acme/api')).toBe('registry.eve.example.com/proj_01hshop/acme/api');
+    });
+
+    it('moves images that name the Eve registry host under the project prefix', () => {
+      expect(resolve('registry.eve.example.com/victim-api')).toBe(
+        'registry.eve.example.com/proj_01hshop/victim-api',
+      );
+      expect(resolve('registry.eve.example.com/proj_01hshop/api')).toBe(
+        'registry.eve.example.com/proj_01hshop/api',
+      );
+    });
+
+    it('leaves images on other registries alone', () => {
+      expect(resolve('ghcr.io/acme/api')).toBe('ghcr.io/acme/api');
+      expect(resolve('postgres:16')).toBe('postgres:16');
+    });
+
+    it('keeps the previous rule for BYO registries', () => {
+      expect(resolve('api', byoManifest)).toBe('ghcr.io/acme/api');
     });
   });
 });

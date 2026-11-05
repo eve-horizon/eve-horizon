@@ -12,6 +12,7 @@ import {
   BadRequestException,
   Logger,
   UseGuards,
+  Inject,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
@@ -22,9 +23,18 @@ import {
   type KeyObject,
 } from 'crypto';
 import { loadConfig } from '@eve/shared';
+import type { Db } from '@eve/db';
+import { environmentQueries, projectQueries } from '@eve/db';
 import { Public } from '../auth/auth.decorator.js';
 import { loadKeyValue } from '../auth/auth.util.js';
 import { InternalTokenGuard } from '../common/internal-token.guard.js';
+import {
+  grantRegistryAccess,
+  identifyRegistryCaller,
+  isPullCredentialCurrent,
+  type RegistryAccessEntry,
+  type RegistryCaller,
+} from './registry-access.js';
 
 const TOKEN_TTL_SECONDS = 300;
 
@@ -37,12 +47,6 @@ interface RegistryTokenResponse {
   token: string;
   expires_in: number;
   issued_at: string;
-}
-
-interface RegistryAccessEntry {
-  type: string;
-  name: string;
-  actions: string[];
 }
 
 /**
@@ -130,6 +134,13 @@ function signRegistryToken(
 @Controller('internal/registry')
 export class RegistryTokenController {
   private readonly logger = new Logger(RegistryTokenController.name);
+  private readonly environments: ReturnType<typeof environmentQueries>;
+  private readonly projects: ReturnType<typeof projectQueries>;
+
+  constructor(@Inject('DB') db: Db) {
+    this.environments = environmentQueries(db);
+    this.projects = projectQueries(db);
+  }
 
   /**
    * POST token endpoint — used by the Eve worker (internal x-eve-internal-token header).
@@ -141,7 +152,7 @@ export class RegistryTokenController {
   @ApiOperation({ summary: 'Issue a scoped registry token (internal only)' })
   async issueToken(@Body() body: RegistryTokenRequest): Promise<RegistryTokenResponse> {
     const config = loadConfig();
-    return this.buildScopedToken(config, body.scope, body.service);
+    return this.buildScopedToken(config, { kind: 'internal' }, body.scope, body.service);
   }
 
   /**
@@ -149,7 +160,9 @@ export class RegistryTokenController {
    *
    * BuildKit and docker clients follow the registry's WWW-Authenticate challenge
    * by sending a GET request with scope/service as query params and Basic auth
-   * credentials from the Docker config.
+   * credentials from the Docker config. The password is either the internal
+   * API key (worker builds: push and pull) or a project pull credential from an
+   * app namespace's pull secret (kubelet: pull on that project's repositories).
    */
   @Public()
   @Get('token')
@@ -162,13 +175,27 @@ export class RegistryTokenController {
   ): Promise<RegistryTokenResponse> {
     const config = loadConfig();
 
-    // Validate Basic auth — password must be the internal API key
     const password = this.extractBasicAuthPassword(authorization);
-    if (!config.EVE_INTERNAL_API_KEY || password !== config.EVE_INTERNAL_API_KEY) {
+    const caller = identifyRegistryCaller(password, config.EVE_INTERNAL_API_KEY);
+    if (!caller) {
       throw new UnauthorizedException('Invalid registry credentials');
     }
+    if (caller.kind === 'project-pull') {
+      const [environment, project] = await Promise.all([
+        this.environments.findById(caller.environmentId),
+        this.projects.findById(caller.projectId),
+      ]);
+      if (!isPullCredentialCurrent(caller, environment, project !== null)) {
+        this.logger.warn(
+          `Refused a registry pull credential for project ${caller.projectId}, environment ` +
+            `${caller.environmentId} (${caller.namespace}), epoch ${caller.epoch}: environment gone, ` +
+            `terminated, moved to another project, or the credential was superseded`,
+        );
+        throw new UnauthorizedException('Invalid registry credentials');
+      }
+    }
 
-    return this.buildScopedToken(config, scope, service);
+    return this.buildScopedToken(config, caller, scope, service);
   }
 
   private extractBasicAuthPassword(
@@ -186,11 +213,12 @@ export class RegistryTokenController {
     }
   }
 
-  private buildScopedToken(
+  private async buildScopedToken(
     config: { EVE_REGISTRY_SIGNING_KEY?: string },
+    caller: RegistryCaller,
     scope: string | string[] | undefined,
     service: string | undefined,
-  ): RegistryTokenResponse {
+  ): Promise<RegistryTokenResponse> {
     if (!config.EVE_REGISTRY_SIGNING_KEY) {
       throw new ServiceUnavailableException(
         'Registry signing key is not configured',
@@ -199,10 +227,13 @@ export class RegistryTokenController {
 
     // Docker login sends a scopeless request just to verify credentials.
     // Return a token with empty access so `docker login` succeeds.
-    const access =
+    const requested =
       !scope || (Array.isArray(scope) && scope.length === 0)
         ? []
         : parseScopes(scope);
+    // Grant only what this caller may hold; anything else is silently left
+    // out, and the registry then refuses the operation.
+    const access = grantRegistryAccess(caller, requested);
 
     const keyPem = loadKeyValue(config.EVE_REGISTRY_SIGNING_KEY, 'EVE_REGISTRY_SIGNING_KEY');
     const privateKey = createPrivateKey(keyPem!);
@@ -210,7 +241,10 @@ export class RegistryTokenController {
 
     const now = Math.floor(Date.now() / 1000);
     const payload: Record<string, unknown> = {
-      sub: 'eve-worker',
+      sub:
+        caller.kind === 'internal'
+          ? 'eve-worker'
+          : `${caller.kind === 'project-push' ? 'eve-push' : 'eve-pull'}:${caller.projectId}`,
       aud: 'eve-registry',
       iss: 'eve-api',
       access,
@@ -221,8 +255,15 @@ export class RegistryTokenController {
     const signedToken = signRegistryToken(payload, privateKey, keyId);
 
     const scopeDisplay = Array.isArray(scope) ? scope.join(' ') : scope;
+    const callerDisplay =
+      caller.kind === 'internal'
+        ? 'internal'
+        : caller.kind === 'project-push'
+          ? `build of project ${caller.projectId}`
+          : `project ${caller.projectId} (${caller.namespace})`;
     this.logger.debug(
-      `Issued registry token for scope="${scopeDisplay}" service="${service}" (${access.length} access entries)`,
+      `Issued registry token to ${callerDisplay} for scope="${scopeDisplay}" service="${service}" ` +
+        `(${access.length} of ${requested.length} access entries granted)`,
     );
 
     return {

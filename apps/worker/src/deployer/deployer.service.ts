@@ -26,6 +26,8 @@ import {
   resolveProjectSecrets,
   mintServiceToken,
   mintAppLinkToken,
+  mintRegistryPullCredential,
+  REGISTRY_PULL_USERNAME,
   getServicePermissions,
   DEFAULT_SERVICE_PERMISSIONS,
   isPlatformDomainHostname,
@@ -330,6 +332,7 @@ export class DeployerService {
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
       projectId: project.id,
+      environmentId: envId,
       manifestYaml: manifest.manifest_yaml,
     });
 
@@ -678,6 +681,7 @@ export class DeployerService {
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
       projectId: project.id,
+      environmentId: environment.id,
       manifestYaml: params.manifestYaml,
     });
 
@@ -813,7 +817,6 @@ export class DeployerService {
       managedTrust.volumeMounts,
     );
 
-    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const imageDigest = this.resolveServiceDigest(
       params.serviceName,
       service,
@@ -822,7 +825,9 @@ export class DeployerService {
     );
     // Auto-derive image from service key when build config exists but image is not explicit
     const derivedImage = service.image || (service.build ? params.serviceName : undefined);
-    const prefixedImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
+    const prefixedImage = derivedImage
+      ? this.imageResolver.resolveServiceImage(derivedImage, manifest, params.projectId)
+      : undefined;
     const resolvedImage = this.imageResolver.resolveImageRef(
       prefixedImage,
       imageDigest,
@@ -1012,7 +1017,6 @@ export class DeployerService {
         namespace: params.namespace,
       },
     });
-    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const config = loadConfig();
     const hasTcpIngress = Object.values(deployableServices).some((service) => this.resolveTcpIngressConfig(service));
     if (hasTcpIngress) {
@@ -1063,7 +1067,9 @@ export class DeployerService {
 
       // Auto-derive image from service key when build config exists but image is not explicit
       const derivedImage = service.image || (service.build ? name : undefined);
-      const baseImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
+      const baseImage = derivedImage
+        ? this.imageResolver.resolveServiceImage(derivedImage, manifest, params.projectId)
+        : undefined;
       const imageDigest = this.resolveServiceDigest(
         name,
         service,
@@ -2875,6 +2881,7 @@ export class DeployerService {
   private async ensureImagePullSecret(params: {
     namespace: string;
     projectId: string;
+    environmentId: string;
     manifestYaml: string;
   }): Promise<string | null> {
     const parsed = yaml.parse(params.manifestYaml) as {
@@ -2888,7 +2895,7 @@ export class DeployerService {
 
     const registryValue = parsed?.registry;
 
-    // --- Eve-native registry: use EVE_INTERNAL_API_KEY for Docker v2 token auth ---
+    // --- Eve-native registry: a pull-only credential scoped to this project ---
     if (registryValue === 'eve') {
       const config = loadConfig();
       const registryHost = config.EVE_REGISTRY_HOST;
@@ -2901,12 +2908,27 @@ export class DeployerService {
         return null;
       }
 
-      // Store the API key as the docker password — NOT a pre-signed JWT.
+      // Store an environment-bound pull credential as the docker password:
+      // never the internal API key, and not a pre-signed JWT (those expire).
       // When kubelet gets a 401 from the registry, it follows the Docker v2
       // token auth flow: GET the token endpoint with Basic auth (these creds).
-      // The token endpoint validates the API key and issues a fresh JWT.
-      const username = 'eve-token';
-      const password = config.EVE_INTERNAL_API_KEY;
+      // The token endpoint verifies the credential against the environment and
+      // grants pull on this project's repositories. Each rewrite starts a new
+      // pull epoch, which retires the credential written before the last one.
+      const epoch = await this.environments.bumpRegistryPullEpoch(params.environmentId);
+      if (epoch === null) {
+        throw new Error(`Environment ${params.environmentId} not found while writing its registry pull secret`);
+      }
+      const username = REGISTRY_PULL_USERNAME;
+      const password = mintRegistryPullCredential(
+        {
+          projectId: params.projectId,
+          environmentId: params.environmentId,
+          namespace: params.namespace,
+          epoch,
+        },
+        config.EVE_INTERNAL_API_KEY,
+      );
       const auth = Buffer.from(`${username}:${password}`).toString('base64');
       const dockerConfig = {
         auths: {
