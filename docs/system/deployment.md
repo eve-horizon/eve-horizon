@@ -90,6 +90,12 @@ The AWS overlay and Terraform have been extracted from this repo. See
 - **Postgres**: StatefulSet with 5Gi PVC
 - **Runner pods**: Ephemeral pods spawned per job attempt for isolated execution
 - **Ingress access**: No port-forwarding needed - access via `http://api.eve.lvh.me`
+- **App namespaces**: each environment deploys into `eve-{orgSlug}-{projectSlug}-{envName}`.
+  A namespace chosen with `eve env create --namespace` (or an env update) must
+  start with the project's prefix `eve-{orgSlug}-{projectSlug}-` and must not be
+  another environment's namespace. The deployer labels each namespace with
+  `eve.env_id` and refuses to deploy into, or delete, a namespace labelled for
+  another environment or one that exists without that label.
 
 ### Web Auth Services (Supabase + SSO)
 

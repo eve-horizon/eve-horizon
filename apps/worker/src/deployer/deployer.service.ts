@@ -319,12 +319,13 @@ export class DeployerService {
 
     const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
 
+    // The namespace can be user-chosen: never adopt one another env owns.
     await this.k8sService.createNamespace(namespace, {
       'eve.org_id': project.org_id,
       'eve.project_id': project.id,
       'eve.env_id': envId,
       'eve.env': toK8sLabelValue(environment.name, 'env'),
-    });
+    }, { ownerLabel: 'eve.env_id' });
 
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
@@ -672,7 +673,7 @@ export class DeployerService {
       'eve.project_id': project.id,
       'eve.env_id': environment.id,
       'eve.env': toK8sLabelValue(environment.name, 'env'),
-    });
+    }, { ownerLabel: 'eve.env_id' });
 
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
@@ -948,6 +949,15 @@ export class DeployerService {
     await this.objectStoreProvisioner.unpublishEnvBuckets(objectStoreScope);
     await this.objectStoreProvisioner.removeObjectStoreBinding(objectStoreScope);
     await this.storageBuckets.deleteByEnv(project.id, environment.name);
+    // Delete only a namespace this env owns; a user-chosen namespace may
+    // point at another env's or at one Eve did not create.
+    const namespaceLabels = await this.k8sService.getNamespaceLabels(namespace);
+    if (namespaceLabels && namespaceLabels['eve.env_id'] !== envId) {
+      this.logger.warn(
+        `Not deleting namespace ${namespace} for environment ${envId}: it is not owned by this environment`,
+      );
+      return;
+    }
     await this.k8sService.deleteNamespace(namespace);
   }
 
