@@ -1,7 +1,7 @@
 # Auth & Governance
 
 > Status: Current
-> Last Updated: 2026-02-12
+> Last Updated: 2026-11-05
 
 ## Overview
 
@@ -48,6 +48,7 @@ mint the job token, so the on-disk view and API authority match.
 | `EVE_AUTH_ENABLED` | Enable authentication (`true`/`false`, default: `true`) |
 | `EVE_AUTH_PRIVATE_KEY` | RSA private key (PEM string or file path) — required for internal mode |
 | `EVE_BOOTSTRAP_TOKEN` | One-time token for initial admin creation |
+| `EVE_INTERNAL_API_KEY` | Shared service-to-service key; see [Internal Service Authentication](#internal-service-authentication). Required on the API, orchestrator, worker, agent runtime, gateway and SSO |
 
 ### Optional Variables
 
@@ -73,6 +74,40 @@ mint the job token, so the on-disk view and API authority match.
 | `SUPABASE_ANON_KEY` | HS256 JWT with `anon` claim | — |
 | `EVE_SSO_URL` | Public SSO broker URL (e.g., `https://sso.<domain>`) | — |
 | `EVE_AUTH_ADMIN_PASSWORD` | GoTrue DB role password for bootstrap job | — |
+
+## Internal Service Authentication
+
+Platform services call each other with the shared `EVE_INTERNAL_API_KEY`, sent
+in the `x-eve-internal-token` header. Every check compares the presented token
+in constant time (`internalTokenMatches` in `@eve/shared`) and fails closed: an
+unset key matches nothing.
+
+| Surface | What requires the key | Open without it |
+|---------|-----------------------|-----------------|
+| API (`/internal/*`) | Every internal route (`InternalTokenGuard`) | Everything outside `/internal` uses user, job or service tokens |
+| Worker (`:4749`, and runner pods, which serve the worker app) | Every route: `/invoke`, `/deploy`, `/environments/delete`, `/scripts/execute`, `/actions/execute`, `/pipeline-runs/:id/execute`, and unknown paths | `GET /health` only |
+| Agent runtime (`:4812`) | Every route, including `/invoke` and unknown paths | `GET /health` only |
+
+The worker and agent runtime enforce this with a Fastify `onRequest` hook
+(`registerInternalAuthHook`), so new routes are protected by default and
+unauthenticated requests are refused before the body is parsed. Unknown paths
+answer 401, not 404. Only the exact path `/health` is open, so readiness and
+liveness probes need no credentials.
+
+Callers send the key with `internalAuthHeaders()`: the orchestrator (worker and
+agent-runtime submits, including shard redirects), the API (deploy and
+environment teardown), and the worker and agent runtime when they hand a job
+to a runner pod.
+
+**When the key is unset.** The worker and agent runtime refuse to start when
+`NODE_ENV=production` and `EVE_INTERNAL_API_KEY` is empty, with an error naming
+the variable. In any other mode they start, log a warning, and refuse every
+request except `/health`. Local stacks already set the key (`./bin/eh k8s
+secrets` and `eve local` generate one; `.env.test` sets `test-internal-key`),
+because the orchestrator needs it to read job results from the API.
+
+The key is a network-level credential, not a substitute for network policy:
+keep the worker, agent runtime and BuildKit reachable only from platform pods.
 
 ## Web Auth Stack (Supabase + SSO)
 

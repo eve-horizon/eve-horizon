@@ -1,7 +1,7 @@
 # Deployment
 
 > Status: Current
-> Last Updated: 2026-08-25
+> Last Updated: 2026-11-05
 
 ## Purpose
 
@@ -331,6 +331,15 @@ Docker Compose is optimized for **fast local iteration** during development.
 
 ## Runtime Environment Variables (Key)
 
+All platform services:
+- `EVE_INTERNAL_API_KEY` (required): the service-to-service key. The worker
+  and agent runtime refuse every request except `GET /health` without it, and
+  refuse to start without it when `NODE_ENV=production`. Set the same value on
+  `eve-api`, `eve-orchestrator`, `eve-worker`, `eve-agent-runtime`,
+  `eve-gateway` and `eve-sso`; runner pods inherit it from the worker or agent
+  runtime that creates them. See
+  [auth.md → Internal Service Authentication](./auth.md#internal-service-authentication).
+
 Orchestrator:
 - `ORCH_LOOP_INTERVAL_MS`
 - `ORCH_CONCURRENCY`
@@ -371,7 +380,9 @@ Production uses Kubernetes (k3s or managed k8s):
 - **Platform images**: Pin all seven service images, including `worker`, to the
   same release version. Use the separate toolchain-image prefix/tag settings
   for on-demand language and media tooling.
-- **ConfigMaps/Secrets**: Environment configuration and credentials
+- **ConfigMaps/Secrets**: Environment configuration and credentials.
+  `EVE_INTERNAL_API_KEY` must reach every platform service (see above); probes
+  stay on `GET /health`, which needs no credentials.
 - **Persistent volumes**: Database and workspace storage
 - **RBAC**: Worker service account permissions (pods, PVCs, services CRUD)
 - **Manifests**: Same base manifests as local k3d with production-specific overlays

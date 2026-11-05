@@ -11,5 +11,10 @@ export type { SecretResolutionResult } from './secret-client.js';
 export { mintAppLinkToken, mintJobToken, mintServiceToken } from './auth-client.js';
 export type { AppLinkTokenResult, JobTokenResult, ServiceTokenResult } from './auth-client.js';
 
-export { internalApiFetch, INTERNAL_TOKEN_HEADER } from './internal-fetch.js';
+export {
+  internalApiFetch,
+  internalAuthHeaders,
+  internalTokenMatches,
+  INTERNAL_TOKEN_HEADER,
+} from './internal-fetch.js';
 export type { InternalApiFetchOptions } from './internal-fetch.js';
