@@ -273,6 +273,17 @@ export function buildQueries(db: Db) {
       `;
     },
 
+    /** Distinct image refs of every artifact the project has built. */
+    async listImageRefsForProject(projectId: string): Promise<string[]> {
+      const rows = await db<{ image_ref: string }[]>`
+        SELECT DISTINCT a.image_ref
+        FROM build_artifacts a
+        JOIN build_specs s ON s.id = a.build_id
+        WHERE s.project_id = ${projectId}
+      `;
+      return rows.map((row) => row.image_ref);
+    },
+
     async appendLog(buildRunId: string, type: string, content: Record<string, unknown>): Promise<BuildLog> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const jsonContent = db.json(content as any);

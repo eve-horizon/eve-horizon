@@ -21,6 +21,7 @@ export interface Environment {
   status: EnvironmentStatus;   // 'active' | 'suspended' | 'terminated'
   suspended_at: Date | null;
   suspension_reason: string | null;
+  registry_pull_epoch: number;  // Bumped each time the deployer rewrites the eve-registry pull secret
   created_at: Date;
   updated_at: Date;
 }
@@ -53,7 +54,7 @@ export function environmentQueries(db: Db) {
     },
 
     async create(
-      environment: Omit<Environment, 'created_at' | 'updated_at' | 'status' | 'suspended_at' | 'suspension_reason' | 'deploy_status'> & { deploy_status?: string },
+      environment: Omit<Environment, 'created_at' | 'updated_at' | 'status' | 'suspended_at' | 'suspension_reason' | 'deploy_status' | 'registry_pull_epoch'> & { deploy_status?: string },
     ): Promise<Environment> {
       const overridesJson = environment.overrides_json
         ? db.json(environment.overrides_json as never)
@@ -250,6 +251,20 @@ export function environmentQueries(db: Db) {
         RETURNING *
       `;
       return row ?? null;
+    },
+
+    /**
+     * Start a new registry pull epoch for the environment and return it, or
+     * null when the environment does not exist. Leaves updated_at alone.
+     */
+    async bumpRegistryPullEpoch(id: string): Promise<number | null> {
+      const [row] = await db<{ registry_pull_epoch: number }[]>`
+        UPDATE environments
+        SET registry_pull_epoch = registry_pull_epoch + 1
+        WHERE id = ${id}
+        RETURNING registry_pull_epoch
+      `;
+      return row?.registry_pull_epoch ?? null;
     },
 
     async delete(id: string): Promise<boolean> {

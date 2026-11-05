@@ -1,7 +1,7 @@
 # Container Registry
 
 > Status: Current
-> Last Updated: 2026-02-11
+> Last Updated: 2026-11-05
 
 ## Purpose
 
@@ -37,8 +37,9 @@ registry: "none"  # Skip registry handling
 
 ### Eve-Native Registry (Internal)
 
-When `registry: "eve"` is set, the worker requests a short-lived JWT from the
-internal API and uses it for push/pull.
+When `registry: "eve"` is set, images are pushed to and pulled from the
+platform's registry, which accepts only short-lived JWTs issued by the API
+(Docker v2 token auth).
 
 Required system configuration:
 - `EVE_REGISTRY_HOST` — registry hostname (e.g., `registry.eve.example.com`)
@@ -46,14 +47,71 @@ Required system configuration:
 - `EVE_BUILDKIT_INSECURE_REGISTRIES` (optional) — comma-separated registry hosts to use with BuildKit insecure/plain-HTTP transport (useful for local in-cluster registries)
 - `EVE_BUILDKIT_INSECURE_ALL` (optional) — set to `true` only for local troubleshooting to force insecure transport for all BuildKit registry operations
 
-Token issuance endpoint:
+The signing key is needed on the API only. `EVE_INTERNAL_API_KEY`, on the API
+and the worker, also signs the pull credentials described below.
+
+Token endpoint (the registry's token realm, which must stay reachable by
+BuildKit and by kubelet on every node):
 
 ```
-POST /internal/registry/token
+GET  /internal/registry/token?service=eve-registry&scope=repository:<name>:<actions>   (Basic auth)
+POST /internal/registry/token                                                          (x-eve-internal-token)
 ```
 
-The worker calls this endpoint with `x-eve-internal-token` (from
-`EVE_INTERNAL_API_KEY`) to obtain a scoped token.
+What a token grants depends on who asks. The endpoint grants the permitted
+subset of the requested scopes and leaves the rest out (the registry then
+refuses that operation):
+
+| Caller | Credential | Granted |
+|--------|------------|---------|
+| Worker builds (BuildKit) | Basic password = `EVE_INTERNAL_API_KEY` | `pull`, `push` on any `repository` scope |
+| Kubelet in an app namespace | Basic password = environment pull credential | `pull` on repositories named in the project's build artifacts |
+
+Never granted to anyone: `delete`, `*`, and non-repository scopes such as
+`registry:catalog:*`.
+
+**Pull secrets.** For each environment the deployer writes an `eve-registry`
+pull secret (username `eve-pull`) holding an environment pull credential, not
+the internal API key:
+`evepull1.<base64url({"p":"<project id>","e":"<environment id>","ns":"<namespace>","n":<epoch>})>.<HMAC>`,
+with the HMAC key derived from `EVE_INTERNAL_API_KEY` by HKDF. The token
+endpoint honours it only while:
+
+- the environment still exists, is not terminated, and belongs to the project;
+- the project is not deleted;
+- the credential's epoch is the environment's current `registry_pull_epoch` or
+  the one before. The deployer bumps the epoch each time it rewrites the
+  secret (every deploy and every job-service run), so a credential stops
+  working two rewrites after it was written. The one-epoch grace covers
+  kubelet's secret cache and two rewrites racing.
+
+It has no expiry time of its own, so pods can be rescheduled at any time while
+the environment lives.
+
+**Revocation.** Redeploy the environment twice, or delete it, to retire a
+leaked pull secret. Rotating `EVE_INTERNAL_API_KEY` revokes every pull
+credential at once; each environment gets a fresh one on its next deploy.
+Environments deployed before environment pull credentials existed still hold
+the internal key in their `eve-registry` secret until they are redeployed:
+redeploy them, then rotate the key.
+
+**What "the project's repositories" means, and what it does not.** A project's
+repositories are the repository paths of the image refs in its build artifacts
+(registry host, tag and digest removed). Those names come from the manifest
+(the image name, or the service name when there is none) and are **not
+namespaced per project**: a service `api` pushes to `<host>/api`. So this does
+not isolate projects from each other. A project that builds an image with the
+same name as another project's (once is enough) gets pull on that repository,
+and every build may push to any repository, because builds use the internal
+key. What it does guarantee: an app namespace's pull secret no longer carries
+the internal key, cannot push, cannot list or delete, and cannot pull
+repositories its project never built. Isolation between projects needs
+per-project repository namespacing and project-scoped push credentials
+(tracked as EVE-038).
+
+Pruning builds (`eve build prune`) removes their artifacts; an image whose
+repository no remaining build uses can no longer be pulled with the
+environment's credential.
 
 ### Service Images
 
