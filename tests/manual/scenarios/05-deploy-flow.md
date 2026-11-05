@@ -284,7 +284,7 @@ eve env delete test --project $PROJECT_ID --force
 rm -rf $REPO_DIR
 
 # Keep the fstest project: scenario 03 reuses it, and deleting a project does not
-# yet free the example's org-wide agent slugs (EVE-027), so recreating it can fail.
+# yet free the example's org-wide agent slugs on releases up to 0.1.321, so recreating it can fail.
 # To fully clean up all test resources:
 # eve org delete org_manualtestorg
 ```

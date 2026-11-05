@@ -111,9 +111,8 @@ From the expand output:
 
 - Agent slugs are unique per org. If `eve project sync` fails with
   `Agent slug <slug> already used by <project>:<agent>`, another project in the org already synced this
-  repo. Reuse that project instead of creating a second one. Currently, deleting a project does not free
-  its agent slugs (EVE-027), so do not rely on delete-and-recreate to work around the conflict until that fix
-  is in your cluster.
+  repo. Reuse that project instead of creating a second one. On platform releases up to 0.1.321, deleting a project does not free
+  its agent slugs, so do not rely on delete-and-recreate to work around the conflict there.
 - This test does NOT execute pipeline jobs (would take 10+ minutes)
 - The API's `dry_run` or expand endpoint validates job graph generation
 - Actual execution is covered by job execution test (scenario 02)

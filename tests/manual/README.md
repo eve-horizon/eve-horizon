@@ -116,8 +116,8 @@ Agents and packs declared by `eve-horizon-fullstack-example` claim agent slugs t
 unique per org. Only one project in the org can sync that repo, so scenarios 03 (pipelines)
 and 05 (deploy) share a single project, slug `fstest`, and must not delete it between runs.
 A second project syncing the same repo fails with
-`Agent slug <slug> already used by <project>:<agent>`. Deleting a project does not currently
-release its agent slugs (EVE-027), so do not use delete-and-recreate to work around it.
+`Agent slug <slug> already used by <project>:<agent>`. On platform releases up to 0.1.321,
+deleting a project does not release its agent slugs, so do not use delete-and-recreate to work around it.
 Other scenarios that sync this repo into their own project in the same org can hit the
 same conflict; prefer reusing `fstest`.
 
