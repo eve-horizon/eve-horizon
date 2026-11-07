@@ -7,18 +7,31 @@ import { DeployerService } from '../deployer.service.js';
 describe('DeployerService object-store buckets', () => {
   const originalEnv = { ...process.env };
 
+  const secretRef = (key: string) => ({
+    name: key,
+    valueFrom: { secretKeyRef: { name: 'eve-app-storage-credentials', key } },
+  });
+
   function configureObjectStoreMocks(
     deployer: DeployerService,
     bucketProvisioner: Record<string, unknown>,
     storageBuckets: Record<string, unknown> = {},
+    k8s: Record<string, unknown> = {},
   ) {
     Object.assign((deployer as any).objectStoreProvisioner, {
       bucketProvisioner,
       appCredentialProvisioners: createAppCredentialProvisioners(bucketProvisioner as any),
+      k8s: {
+        createSecret: vi.fn().mockResolvedValue(undefined),
+        deleteSecret: vi.fn().mockResolvedValue(undefined),
+        ...k8s,
+      },
       storageBuckets: {
         upsert: vi.fn().mockResolvedValue(undefined),
         deleteMissingForEnv: vi.fn().mockResolvedValue(0),
         deleteByEnv: vi.fn().mockResolvedValue(0),
+        listByEnv: vi.fn().mockResolvedValue([]),
+        listByPhysicalNames: vi.fn().mockResolvedValue([]),
         ...storageBuckets,
       },
     });
@@ -141,8 +154,8 @@ describe('DeployerService object-store buckets', () => {
     expect(envVars).toEqual(expect.arrayContaining([
       { name: 'STORAGE_ENDPOINT', value: 'http://storage.eve.lvh.me' },
       { name: 'STORAGE_REGION', value: 'us-east-1' },
-      { name: 'STORAGE_ACCESS_KEY_ID', value: 'minio' },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: 'minio-secret' },
+      secretRef('STORAGE_ACCESS_KEY_ID'),
+      secretRef('STORAGE_SECRET_ACCESS_KEY'),
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'eve-org-acme-media-dev-uploads' },
     ]));
     expect(envVars).not.toContainEqual({ name: 'STORAGE_FORCE_PATH_STYLE', value: 'true' });
@@ -294,6 +307,43 @@ describe('DeployerService object-store buckets', () => {
     )).rejects.toThrow('Eve object storage is not configured');
   });
 
+  it('fails the deploy and records nothing when the bucket name belongs to another project', async () => {
+    const deployer = new DeployerService(null as any, null as any);
+    const upsert = vi.fn().mockResolvedValue(undefined);
+    const setBucketPublicReadPolicy = vi.fn().mockResolvedValue(undefined);
+    configureObjectStoreMocks(deployer, {
+      isConfigured: true,
+      backend: 'gcs',
+      getAppBucketName: vi.fn().mockReturnValue('eve-app-acme-media-prod-uploads'),
+      ensureBucket: vi.fn().mockRejectedValue(new Error(
+        'Bucket "eve-app-acme-media-prod-uploads" already exists in another Google Cloud project ' +
+        '(project number 999, expected 111). Refusing to use it.',
+      )),
+      setBucketPublicReadPolicy,
+      setBucketCors: vi.fn().mockResolvedValue(undefined),
+    }, { upsert });
+
+    await expect(resolveObjectStoreForService(
+      deployer,
+      {
+        image: 'ghcr.io/example/api:latest',
+        'x-eve': { object_store: { buckets: [{ name: 'uploads', visibility: 'public' }] } },
+      },
+      {
+        orgId: 'org_123',
+        projectId: 'proj_123',
+        orgSlug: 'acme',
+        projectSlug: 'media',
+        envName: 'prod',
+        componentName: 'api',
+      },
+    )).rejects.toThrow(
+      /Failed to provision object_store bucket "uploads" for service "api": .*another Google Cloud project/,
+    );
+    expect(setBucketPublicReadPolicy).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it('injects EVE_APP_STORAGE credentials while leaving provisioner credentials unset', async () => {
     process.env = {
       ...originalEnv,
@@ -308,6 +358,7 @@ describe('DeployerService object-store buckets', () => {
     const deployer = new DeployerService(null as any, null as any);
     const ensureBucket = vi.fn().mockResolvedValue(undefined);
     const upsert = vi.fn().mockResolvedValue(undefined);
+    const createSecret = vi.fn().mockResolvedValue(undefined);
     configureObjectStoreMocks(deployer, {
       isConfigured: true,
       backend: 's3',
@@ -315,7 +366,7 @@ describe('DeployerService object-store buckets', () => {
       ensureBucket,
       setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
       setBucketCors: vi.fn().mockResolvedValue(undefined),
-    }, { upsert });
+    }, { upsert }, { createSecret });
 
     const envVars = await resolveObjectStoreForService(
       deployer,
@@ -343,11 +394,95 @@ describe('DeployerService object-store buckets', () => {
     expect(envVars).toEqual(expect.arrayContaining([
       { name: 'STORAGE_ENDPOINT', value: 'https://s3.eu-west-1.amazonaws.com' },
       { name: 'STORAGE_REGION', value: 'eu-west-1' },
-      { name: 'STORAGE_ACCESS_KEY_ID', value: 'app-access-key' },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: 'app-secret-key' },
+      secretRef('STORAGE_ACCESS_KEY_ID'),
+      secretRef('STORAGE_SECRET_ACCESS_KEY'),
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'demo-eve-app-acme-media-staging-uploads' },
     ]));
     expect(envVars).not.toContainEqual({ name: 'STORAGE_FORCE_PATH_STYLE', value: 'true' });
+    // The key pair is written to the namespace Secret and never into the pod spec.
+    expect(createSecret).toHaveBeenCalledWith('eve-acme-media-staging', 'eve-app-storage-credentials', {
+      STORAGE_ACCESS_KEY_ID: 'app-access-key',
+      STORAGE_SECRET_ACCESS_KEY: 'app-secret-key',
+    });
+    expect(JSON.stringify(envVars)).not.toContain('app-secret-key');
+    expect(JSON.stringify(envVars)).not.toContain('app-access-key');
+  });
+
+  it('rolls pods when the shared key is rotated', async () => {
+    process.env = {
+      ...originalEnv,
+      EVE_APP_STORAGE_PUBLIC_ENDPOINT: 'https://storage.googleapis.com',
+      EVE_APP_STORAGE_REGION: 'europe-west2',
+      EVE_APP_STORAGE_ACCESS_KEY_ID: 'old-access-key',
+      EVE_APP_STORAGE_SECRET_ACCESS_KEY: 'old-secret-key',
+    };
+    const deployer = new DeployerService(null as any, null as any);
+    const createSecret = vi.fn().mockResolvedValue(undefined);
+    configureObjectStoreMocks(deployer, {
+      isConfigured: true,
+      backend: 'gcs',
+      getAppBucketName: vi.fn().mockReturnValue('eve-app-acme-media-prod-uploads'),
+      ensureBucket: vi.fn().mockResolvedValue(undefined),
+      setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
+      setBucketCors: vi.fn().mockResolvedValue(undefined),
+    }, {}, { createSecret });
+
+    const services: Record<string, Service> = {
+      api: {
+        image: 'ghcr.io/example/api:latest',
+        'x-eve': { object_store: { buckets: [{ name: 'uploads' }] } },
+      },
+      web: { image: 'ghcr.io/example/web:latest' },
+    };
+    const prepare = () => (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
+      services,
+      envWorkers: [],
+      scope: {
+        orgId: 'org_123',
+        projectId: 'proj_123',
+        envName: 'prod',
+        orgSlug: 'acme',
+        projectSlug: 'media',
+        namespace: 'eve-acme-media-prod',
+      },
+    });
+    const annotations = (plan: unknown, serviceName: string) => (deployer as any).buildPodAnnotations({
+      objectStorePlan: plan,
+      serviceName,
+    });
+
+    const before = await prepare();
+    process.env.EVE_APP_STORAGE_ACCESS_KEY_ID = 'new-access-key';
+    process.env.EVE_APP_STORAGE_SECRET_ACCESS_KEY = 'new-secret-key';
+    const after = await prepare();
+
+    expect(createSecret).toHaveBeenLastCalledWith('eve-acme-media-prod', 'eve-app-storage-credentials', {
+      STORAGE_ACCESS_KEY_ID: 'new-access-key',
+      STORAGE_SECRET_ACCESS_KEY: 'new-secret-key',
+    });
+    const hashBefore = annotations(before, 'api')['eve.app_bucket_binding_hash'];
+    const hashAfter = annotations(after, 'api')['eve.app_bucket_binding_hash'];
+    expect(hashBefore).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashAfter).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashAfter).not.toBe(hashBefore);
+    expect(annotations(after, 'web')).toBeUndefined();
+  });
+
+  it('removes the credentials Secret when the env binding is removed', async () => {
+    const deployer = new DeployerService(null as any, null as any);
+    const deleteSecret = vi.fn().mockResolvedValue(undefined);
+    configureObjectStoreMocks(deployer, { isConfigured: true, backend: 's3' }, {}, { deleteSecret });
+
+    await (deployer as any).objectStoreProvisioner.removeObjectStoreBinding({
+      orgId: 'org_123',
+      projectId: 'proj_123',
+      envName: 'prod',
+      orgSlug: 'acme',
+      projectSlug: 'media',
+      namespace: 'eve-acme-media-prod',
+    });
+
+    expect(deleteSecret).toHaveBeenCalledWith('eve-acme-media-prod', 'eve-app-storage-credentials');
   });
 
   it('honors EVE_APP_BUCKET_AUTH_MODE=shared when auto isolation could use IRSA', async () => {
@@ -401,8 +536,8 @@ describe('DeployerService object-store buckets', () => {
       service_account_name: null,
     }));
     expect(envVars).toEqual(expect.arrayContaining([
-      { name: 'STORAGE_ACCESS_KEY_ID', value: 'app-access-key' },
-      { name: 'STORAGE_SECRET_ACCESS_KEY', value: 'app-secret-key' },
+      secretRef('STORAGE_ACCESS_KEY_ID'),
+      secretRef('STORAGE_SECRET_ACCESS_KEY'),
       { name: 'STORAGE_BUCKET_UPLOADS', value: 'demo-eve-app-acme-media-staging-uploads' },
     ]));
     expect(envVars.some((entry: { name: string }) => entry.name === 'STORAGE_AUTH_MODE')).toBe(false);
@@ -457,6 +592,8 @@ describe('DeployerService object-store buckets', () => {
     const deployer = new DeployerService(null as any, null as any);
     const upsert = vi.fn().mockResolvedValue(undefined);
     const deleteMissingForEnv = vi.fn().mockResolvedValue(0);
+    const createSecret = vi.fn().mockResolvedValue(undefined);
+    const deleteSecret = vi.fn().mockResolvedValue(undefined);
     configureObjectStoreMocks(deployer, {
       isConfigured: true,
       backend: 's3',
@@ -464,7 +601,7 @@ describe('DeployerService object-store buckets', () => {
       ensureBucket: vi.fn().mockResolvedValue(undefined),
       setBucketPublicReadPolicy: vi.fn().mockResolvedValue(undefined),
       setBucketCors: vi.fn().mockResolvedValue(undefined),
-    }, { upsert, deleteMissingForEnv });
+    }, { upsert, deleteMissingForEnv }, { createSecret, deleteSecret });
 
     const ensureForEnv = vi.fn().mockResolvedValue({
       mode: 'irsa',
@@ -529,6 +666,9 @@ describe('DeployerService object-store buckets', () => {
     });
 
     expect(ensureForEnv).toHaveBeenCalledTimes(1);
+    // A keyless binding leaves no static credentials behind in the namespace.
+    expect(createSecret).not.toHaveBeenCalled();
+    expect(deleteSecret).toHaveBeenCalledWith('eve-acme-media-dev', 'eve-app-storage-credentials');
     expect(ensureForEnv).toHaveBeenCalledWith(
       expect.objectContaining({ namespace: 'eve-acme-media-dev' }),
       [
@@ -607,6 +747,191 @@ describe('DeployerService object-store buckets', () => {
         componentName: 'api',
       },
     )).rejects.toThrow("isolation mode 'irsa' is not available");
+  });
+});
+
+describe('DeployerService object-store bucket lifecycle', () => {
+  const originalEnv = { ...process.env };
+  const scope = {
+    orgId: 'org_123',
+    projectId: 'proj_123',
+    envName: 'prod',
+    orgSlug: 'acme',
+    projectSlug: 'media',
+    namespace: 'eve-acme-media-prod',
+  };
+
+  function row(name: string, visibility: 'public' | 'private', extra: Record<string, unknown> = {}) {
+    return {
+      project_id: 'proj_123',
+      env_name: 'prod',
+      service_name: 'api',
+      name,
+      physical_name: `eve-app-acme-media-prod-${name}`,
+      visibility,
+      ...extra,
+    };
+  }
+
+  function setup(options: {
+    previous?: unknown[];
+    claims?: unknown[];
+    removeBucketPublicReadPolicy?: ReturnType<typeof vi.fn>;
+  } = {}) {
+    const deployer = new DeployerService(null as any, null as any);
+    const calls: string[] = [];
+    const track = (name: string, impl?: (...args: any[]) => unknown) =>
+      vi.fn(async (...args: any[]) => {
+        calls.push(`${name}:${args[0] ?? ''}`);
+        return impl?.(...args);
+      });
+    const bucketProvisioner = {
+      isConfigured: true,
+      backend: 's3',
+      getAppBucketName: vi.fn((_o, _p, env, bucket) => `eve-app-acme-media-${env}-${bucket}`),
+      ensureBucket: track('ensureBucket'),
+      setBucketPublicReadPolicy: track('setBucketPublicReadPolicy'),
+      removeBucketPublicReadPolicy: options.removeBucketPublicReadPolicy ?? track('removeBucketPublicReadPolicy'),
+      setBucketCors: track('setBucketCors'),
+    };
+    const storageBuckets = {
+      upsert: track('upsert', (input: any) => input),
+      deleteMissingForEnv: track('deleteMissingForEnv', () => 0),
+      deleteByEnv: track('deleteByEnv', () => 0),
+      listByEnv: vi.fn().mockResolvedValue(options.previous ?? []),
+      listByPhysicalNames: vi.fn().mockResolvedValue(options.claims ?? []),
+    };
+    const ensureForEnv = vi.fn(async () => {
+      calls.push('ensureForEnv');
+      return { mode: 'shared', envVars: [], bindingHash: 'h', iamRoleArn: null, iamRoleName: null, serviceAccount: null };
+    });
+    Object.assign((deployer as any).objectStoreProvisioner, {
+      bucketProvisioner,
+      storageBuckets,
+      k8s: { createSecret: vi.fn(), deleteSecret: vi.fn() },
+      appCredentialProvisioners: [{
+        mode: 'shared',
+        availability: () => ({ available: true }),
+        ensureForEnv,
+        removeForEnv: vi.fn().mockResolvedValue(undefined),
+      }],
+    });
+    const prepare = (buckets: Array<Record<string, unknown>>, envName = 'prod') =>
+      (deployer as any).objectStoreProvisioner.prepareObjectStorePlan({
+        services: {
+          api: { image: 'ghcr.io/example/api:latest', 'x-eve': { object_store: { buckets } } },
+        },
+        envWorkers: [],
+        scope: { ...scope, envName, namespace: `eve-acme-media-${envName}` },
+      });
+    return { deployer, calls, bucketProvisioner, storageBuckets, ensureForEnv, prepare };
+  }
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('removes the public grant when a public bucket turns private', async () => {
+    const { calls, prepare } = setup({ previous: [row('assets', 'public')] });
+
+    await prepare([{ name: 'assets', visibility: 'private' }]);
+
+    expect(calls).toContain('removeBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    expect(calls).not.toContain('setBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    // Un-published before the row is rewritten as private, so a failure can be retried.
+    expect(calls.indexOf('removeBucketPublicReadPolicy:eve-app-acme-media-prod-assets'))
+      .toBeLessThan(calls.findIndex((call) => call.startsWith('upsert')));
+  });
+
+  it('keeps the grant on a bucket that stays public', async () => {
+    const { calls, prepare } = setup({ previous: [row('assets', 'public')] });
+
+    await prepare([{ name: 'assets', visibility: 'public' }]);
+
+    expect(calls).toContain('setBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    expect(calls.some((call) => call.startsWith('removeBucketPublicReadPolicy'))).toBe(false);
+  });
+
+  it('un-publishes a public bucket removed from the manifest but keeps its data', async () => {
+    const { calls, storageBuckets, prepare } = setup({
+      previous: [row('assets', 'public'), row('uploads', 'private')],
+    });
+
+    await prepare([{ name: 'uploads' }]);
+
+    expect(calls).toContain('removeBucketPublicReadPolicy:eve-app-acme-media-prod-assets');
+    expect(calls.filter((call) => call.startsWith('removeBucketPublicReadPolicy'))).toHaveLength(1);
+    expect(storageBuckets.deleteMissingForEnv).toHaveBeenCalledWith('proj_123', 'prod', [
+      { service_name: 'api', name: 'uploads' },
+    ]);
+  });
+
+  it('fails the deploy and keeps the rows when un-publishing fails', async () => {
+    const { calls, storageBuckets, prepare } = setup({
+      previous: [row('assets', 'public')],
+      removeBucketPublicReadPolicy: vi.fn().mockRejectedValue(new Error('AccessDenied')),
+    });
+
+    await expect(prepare([{ name: 'uploads' }])).rejects.toThrow(
+      /Failed to remove public read access .* env "prod": eve-app-acme-media-prod-assets: AccessDenied/,
+    );
+    expect(storageBuckets.deleteMissingForEnv).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.startsWith('upsert'))).toBe(false);
+  });
+
+  it('refuses a physical name another env of the project already uses', async () => {
+    // env "test" + bucket "ab-cd" and env "test-ab" + bucket "cd" share one name.
+    const { calls, ensureForEnv, prepare } = setup({
+      claims: [row('ab-cd', 'private', { env_name: 'test', physical_name: 'eve-app-acme-media-test-ab-cd' })],
+    });
+
+    await expect(prepare([{ name: 'cd' }], 'test-ab')).rejects.toThrow(
+      'Object-store bucket name collision in env "test-ab": bucket "cd" maps to "eve-app-acme-media-test-ab-cd", ' +
+      'which env "test" (bucket "ab-cd") already uses. Rename the bucket or the environment.',
+    );
+    expect(ensureForEnv).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('does not name another project that holds the physical name', async () => {
+    const { prepare } = setup({
+      claims: [row('cd', 'private', { project_id: 'proj_other', env_name: 'test-ab', physical_name: 'eve-app-acme-media-test-ab-cd' })],
+    });
+
+    await expect(prepare([{ name: 'cd' }], 'test-ab')).rejects.toThrow(
+      'bucket "cd" maps to "eve-app-acme-media-test-ab-cd", which another project already uses',
+    );
+  });
+
+  it('accepts a physical name this env already tracks', async () => {
+    const { calls, prepare } = setup({ claims: [row('uploads', 'private')] });
+
+    await prepare([{ name: 'uploads' }]);
+
+    expect(calls).toContain('ensureBucket:eve-app-acme-media-prod-uploads');
+  });
+
+  it('un-publishes the env buckets on env deletion without failing it', async () => {
+    const removeBucketPublicReadPolicy = vi.fn()
+      .mockRejectedValueOnce(new Error('AccessDenied'))
+      .mockResolvedValue(undefined);
+    const { deployer } = setup({
+      previous: [row('assets', 'public'), row('media', 'public'), row('uploads', 'private')],
+      removeBucketPublicReadPolicy,
+    });
+    const warn = vi.spyOn((deployer as any).objectStoreProvisioner.logger, 'warn').mockImplementation(() => undefined);
+
+    await (deployer as any).objectStoreProvisioner.unpublishEnvBuckets(scope);
+
+    expect(removeBucketPublicReadPolicy.mock.calls.map(([name]) => name)).toEqual([
+      'eve-app-acme-media-prod-assets',
+      'eve-app-acme-media-prod-media',
+    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('eve-app-acme-media-prod-assets: AccessDenied'));
   });
 });
 

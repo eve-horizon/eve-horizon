@@ -223,6 +223,13 @@ export class AgentsConfigService {
 
     const configId = generateAgentConfigId();
 
+    // Refuse only a sync that removes a resolvable org default agent. A default
+    // that already resolves to nothing (for example its project was deleted)
+    // must not block unrelated projects.
+    const orgDefaultResolves = orgDefaultSlug
+      ? (await this.agents.listByOrgAndSlugs(project.org_id, [orgDefaultSlug])).length > 0
+      : false;
+
     const created = await this.db.begin(async (tx) => {
       const transaction = tx as unknown as Db;
       const agentConfigRepo = agentConfigQueries(transaction);
@@ -277,7 +284,7 @@ export class AgentsConfigService {
         }
       }
 
-      if (orgDefaultSlug) {
+      if (orgDefaultSlug && orgDefaultResolves) {
         const existingDefault = await agentsRepo.listByOrgAndSlugs(project.org_id, [orgDefaultSlug]);
         if (existingDefault.length === 0) {
           throw new BadRequestException(

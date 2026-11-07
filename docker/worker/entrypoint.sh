@@ -1,5 +1,16 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+
+# This script runs with the worker's full environment (every platform secret).
+# Job code shares the worker's UID and can write $HOME, /opt/eve and anything
+# else the worker can, and it can force a container restart. So until it hands
+# over to the service, this script runs only root-installed programs: its own
+# commands resolve through a root-owned PATH, and it never sources files a job
+# could have written. The original PATH is restored for the service, whose
+# harnesses need ~/.local/bin; the service runs its own helpers from a trusted
+# PATH (packages/shared/src/process-isolation.ts).
+SERVICE_JOB_PATH="$PATH"
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 write_claude_credentials() {
   # Claude auth is handled via CLAUDE_CODE_OAUTH_TOKEN env var (the CI auth path).
@@ -120,7 +131,8 @@ ensure_variant() {
   local provider="$2"
   local api_key="$3"
 
-  if command -v "$name" >/dev/null 2>&1; then
+  # Existence check only (nothing is executed), so the job PATH is fine here.
+  if PATH="$SERVICE_JOB_PATH" command -v "$name" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -145,30 +157,51 @@ ensure_variant() {
   if [[ -n "$api_key" ]]; then
     "${timeout_prefix[@]}" "${command_prefix[@]}" quick --provider "$provider" --name "$name" --api-key "$api_key" --yes --no-tui || {
       echo "WARNING: Failed to install cc-mirror variant $name — continuing without it" >&2
+      return 0
     }
   else
     "${timeout_prefix[@]}" "${command_prefix[@]}" quick --provider "$provider" --name "$name" --yes --no-tui || {
       echo "WARNING: Failed to install cc-mirror variant $name — continuing without it" >&2
+      return 0
     }
   fi
+  echo "Installed cc-mirror variant: $name" >&2
 }
 
-# Extend PATH with any mounted toolchains
-if [ -n "${EVE_TOOLCHAIN_PATHS:-}" ]; then
-  export PATH="${EVE_TOOLCHAIN_PATHS}:${PATH}"
-fi
+# The image bakes the harness variants in. Anything still missing (a custom
+# image, or zai once Z_AI_API_KEY is provided) is installed in the background:
+# a network install must not hold up the service, its probes or a runner pod.
+# The double fork hands the installer to tini (PID 1), which reaps it.
+#
+# The installer then keeps running next to jobs as an ordinary (dumpable)
+# process with the worker's UID, so job code could read its
+# /proc/<pid>/environ. Like the orphan reaper, it starts under `env -i`: this
+# script's trusted PATH (SERVICE_JOB_PATH only for the existence check), HOME,
+# locale, proxy and CA settings, npm config, the setup timeout and the zai key.
+# Never DATABASE_URL, the internal key or other worker secrets.
+install_missing_variants_in_background() {
+  local name
+  local passthrough=()
+  for name in $(compgen -e); do
+    case "$name" in
+      LANG|LC_ALL|TMPDIR|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|\
+      NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|\
+      EVE_CC_MIRROR_SETUP_TIMEOUT|Z_AI_API_KEY|NPM_CONFIG_*|npm_config_*)
+        passthrough+=("$name=${!name}")
+        ;;
+    esac
+  done
+  # shellcheck disable=SC2016 # the installer shell expands its own variables
+  ( env -i PATH="$PATH" HOME="$HOME" SERVICE_JOB_PATH="$SERVICE_JOB_PATH" "${passthrough[@]}" \
+      "$BASH" -c "$(declare -f ensure_variant)"'
+        ensure_variant "mclaude" "mirror" ""
+        ensure_variant "zai" "zai" "${Z_AI_API_KEY:-}"' & )
+}
 
-# Extend PATH with image-based app CLIs (injected via init containers)
-if [ -n "${EVE_APP_CLI_PATHS:-}" ]; then
-  export PATH="${EVE_APP_CLI_PATHS}:${PATH}"
+# docker/worker/entrypoint.test.sh sources this file for its functions only.
+if [[ "${EVE_ENTRYPOINT_FUNCTIONS_ONLY:-}" == "1" ]]; then
+  return 0
 fi
-
-# Source per-toolchain env.sh files (sets JAVA_HOME, RUSTUP_HOME, etc.)
-for tc_dir in /opt/eve/toolchains/*/; do
-  if [ -f "${tc_dir}env.sh" ]; then
-    . "${tc_dir}env.sh"
-  fi
-done
 
 # Ensure workspace directory exists with proper permissions
 if [[ -n "${WORKSPACE_ROOT:-}" ]]; then
@@ -177,8 +210,7 @@ fi
 
 preflight_check
 ensure_env_aliases
-ensure_variant "mclaude" "mirror" ""
-ensure_variant "zai" "zai" "${Z_AI_API_KEY:-}"
+install_missing_variants_in_background
 write_claude_credentials
 write_codex_credentials
 
@@ -186,9 +218,40 @@ write_codex_credentials
 # The reaper periodically detects and kills orphaned processes that can
 # accumulate when agent jobs timeout or are killed, exhausting system resources.
 if [[ "${EVE_ORPHAN_REAPER:-true}" == "true" ]]; then
-  if command -v orphan-reaper >/dev/null 2>&1; then
-    orphan-reaper start >&2
+  if [[ -x /usr/local/bin/orphan-reaper ]]; then
+    # The reaper outlives this script as an ordinary (dumpable) process with the
+    # worker's UID, so job code could read its /proc/<pid>/environ. Start it with
+    # only what it needs, never the worker's secrets. $$ is the PID the service
+    # will run as after `exec`; the reaper never kills it.
+    env -i PATH="$PATH" HOME="$HOME" EVE_REAPER_SERVICE_PID="$$" \
+      ${EVE_REAPER_INTERVAL:+EVE_REAPER_INTERVAL="$EVE_REAPER_INTERVAL"} \
+      ${EVE_ORPHAN_AGE:+EVE_ORPHAN_AGE="$EVE_ORPHAN_AGE"} \
+      ${EVE_REAPER_LOG:+EVE_REAPER_LOG="$EVE_REAPER_LOG"} \
+      /usr/local/bin/orphan-reaper start >&2
   fi
+fi
+
+# Hand over to the service with the original PATH.
+export PATH="$SERVICE_JOB_PATH"
+
+# Runner pods only: toolchains and app CLIs copied in by init containers. A
+# runner pod runs one job and never restarts (restartPolicy: Never), so these
+# files are read before any job code has run. In the long-lived worker,
+# /opt/eve/toolchains is a job-writable cache and is never sourced here; jobs
+# get toolchain env from ensureToolchains instead.
+if [[ "${EVE_RUNNER_SELF_TERMINATE:-}" == "1" ]]; then
+  if [ -n "${EVE_TOOLCHAIN_PATHS:-}" ]; then
+    export PATH="${EVE_TOOLCHAIN_PATHS}:${PATH}"
+  fi
+  if [ -n "${EVE_APP_CLI_PATHS:-}" ]; then
+    export PATH="${EVE_APP_CLI_PATHS}:${PATH}"
+  fi
+  # Sets JAVA_HOME, RUSTUP_HOME, etc.
+  for tc_dir in /opt/eve/toolchains/*/; do
+    if [ -f "${tc_dir}env.sh" ]; then
+      . "${tc_dir}env.sh"
+    fi
+  done
 fi
 
 exec "$@"

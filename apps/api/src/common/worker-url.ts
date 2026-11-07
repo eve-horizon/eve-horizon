@@ -1,5 +1,5 @@
 import { ServiceUnavailableException } from '@nestjs/common';
-import { parseWorkerUrlMapping } from '@eve/shared';
+import { internalAuthHeaders, parseWorkerUrlMapping } from '@eve/shared';
 
 /**
  * Resolve the worker base URL for API-initiated worker calls (deploy /
@@ -19,4 +19,12 @@ export function resolveWorkerUrl(purpose: string): string {
   }
 
   throw new ServiceUnavailableException(`WORKER_URL or EVE_WORKER_URLS must be set to ${purpose}`);
+}
+
+/**
+ * Headers for API-initiated worker calls: a JSON body plus the internal token,
+ * which the worker requires on every route except `/health`.
+ */
+export function workerRequestHeaders(): Record<string, string> {
+  return { 'content-type': 'application/json', ...internalAuthHeaders() };
 }

@@ -26,9 +26,13 @@ import {
   resolveProjectSecrets,
   mintServiceToken,
   mintAppLinkToken,
+  mintRegistryPullCredential,
+  REGISTRY_PULL_USERNAME,
   getServicePermissions,
   DEFAULT_SERVICE_PERMISSIONS,
   isPlatformDomainHostname,
+  findReservedPlatformDomain,
+  getReservedPlatformDomains,
   generateCustomDomainId,
   getServiceObjectStoreBuckets,
   getServiceObjectStoreIsolation,
@@ -58,6 +62,7 @@ import {
 } from './managed-db-provisioner';
 import { BucketProvisioner } from './bucket-provisioner';
 import { ObjectStoreProvisioner, type EnvObjectStorePlan } from './object-store-provisioner';
+import { applyAppPlacement, resolveAppPlacement, type AppPlacement } from './app-placement';
 import {
   createAppCredentialProvisioners,
   type AppCredentialProvisioner,
@@ -255,6 +260,7 @@ export class DeployerService {
       db,
       this.bucketProvisioner,
       this.appCredentialProvisioners,
+      k8sService,
       this.logger,
       (service) => this.resolveXeve(service),
     );
@@ -318,16 +324,18 @@ export class DeployerService {
 
     const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
 
+    // The namespace can be user-chosen: never adopt one another env owns.
     await this.k8sService.createNamespace(namespace, {
       'eve.org_id': project.org_id,
       'eve.project_id': project.id,
       'eve.env_id': envId,
       'eve.env': toK8sLabelValue(environment.name, 'env'),
-    });
+    }, { ownerLabel: 'eve.env_id' });
 
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
       projectId: project.id,
+      environmentId: envId,
       manifestYaml: manifest.manifest_yaml,
     });
 
@@ -671,11 +679,12 @@ export class DeployerService {
       'eve.project_id': project.id,
       'eve.env_id': environment.id,
       'eve.env': toK8sLabelValue(environment.name, 'env'),
-    });
+    }, { ownerLabel: 'eve.env_id' });
 
     const imagePullSecret = await this.ensureImagePullSecret({
       namespace,
       projectId: project.id,
+      environmentId: environment.id,
       manifestYaml: params.manifestYaml,
     });
 
@@ -745,6 +754,7 @@ export class DeployerService {
       scope: {
         orgId: project.org_id,
         projectId: params.projectId,
+        envId: environment.id,
         envName: params.envName,
         orgSlug: org.slug,
         projectSlug: project.slug,
@@ -811,7 +821,6 @@ export class DeployerService {
       managedTrust.volumeMounts,
     );
 
-    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const imageDigest = this.resolveServiceDigest(
       params.serviceName,
       service,
@@ -820,7 +829,9 @@ export class DeployerService {
     );
     // Auto-derive image from service key when build config exists but image is not explicit
     const derivedImage = service.image || (service.build ? params.serviceName : undefined);
-    const prefixedImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
+    const prefixedImage = derivedImage
+      ? this.imageResolver.resolveServiceImage(derivedImage, manifest, params.projectId)
+      : undefined;
     const resolvedImage = this.imageResolver.resolveImageRef(
       prefixedImage,
       imageDigest,
@@ -870,6 +881,8 @@ export class DeployerService {
         },
       },
     };
+
+    applyAppPlacement(jobSpec.spec!.template.spec!, this.resolveAppPlacementWithWarnings(loadConfig()));
 
     const result = await this.k8sService.runJob(namespace, jobSpec, (params.timeoutSeconds ?? 300) * 1000);
 
@@ -935,15 +948,31 @@ export class DeployerService {
   async deleteEnvironment(envId: string): Promise<void> {
     this.logger.log(`Deleting environment ${envId}`);
     const { namespace, environment, project, org } = await this.resolveEnvironmentScope(envId);
-    await this.objectStoreProvisioner.removeObjectStoreBinding({
+    const objectStoreScope = {
       orgId: project.org_id,
       projectId: project.id,
+      envId,
       envName: environment.name,
       orgSlug: org.slug,
       projectSlug: project.slug,
       namespace,
-    });
+    };
+    // Buckets and their data outlive the env; their public grants and the
+    // env's access grants do not. A failed revocation fails the delete with
+    // the bucket rows kept, so a retry revokes again.
+    await this.objectStoreProvisioner.unpublishEnvBuckets(objectStoreScope);
+    await this.objectStoreProvisioner.revokeEnvGrants(objectStoreScope);
+    await this.objectStoreProvisioner.removeObjectStoreBinding(objectStoreScope);
     await this.storageBuckets.deleteByEnv(project.id, environment.name);
+    // Delete only a namespace this env owns; a user-chosen namespace may
+    // point at another env's or at one Eve did not create.
+    const namespaceLabels = await this.k8sService.getNamespaceLabels(namespace);
+    if (namespaceLabels && namespaceLabels['eve.env_id'] !== envId) {
+      this.logger.warn(
+        `Not deleting namespace ${namespace} for environment ${envId}: it is not owned by this environment`,
+      );
+      return;
+    }
     await this.k8sService.deleteNamespace(namespace);
   }
 
@@ -1004,14 +1033,15 @@ export class DeployerService {
       scope: {
         orgId: params.orgId,
         projectId: params.projectId,
+        envId: params.envId,
         envName: params.envName,
         orgSlug: params.orgSlug,
         projectSlug: params.projectSlug,
         namespace: params.namespace,
       },
     });
-    const registryHost = this.imageResolver.resolveRegistryHost(manifest);
     const config = loadConfig();
+    const appPlacement = this.resolveAppPlacementWithWarnings(config);
     const hasTcpIngress = Object.values(deployableServices).some((service) => this.resolveTcpIngressConfig(service));
     if (hasTcpIngress) {
       await this.assertTcpIngressProviderReady(config.EVE_TCP_INGRESS_PROVIDER);
@@ -1061,7 +1091,9 @@ export class DeployerService {
 
       // Auto-derive image from service key when build config exists but image is not explicit
       const derivedImage = service.image || (service.build ? name : undefined);
-      const baseImage = derivedImage ? this.prefixRegistryHost(derivedImage, registryHost) : undefined;
+      const baseImage = derivedImage
+        ? this.imageResolver.resolveServiceImage(derivedImage, manifest, params.projectId)
+        : undefined;
       const imageDigest = this.resolveServiceDigest(
         name,
         service,
@@ -1259,6 +1291,11 @@ export class DeployerService {
         };
         const existingTolerations = Array.isArray(podSpec.tolerations) ? podSpec.tolerations : [];
         podSpec.tolerations = [...existingTolerations, ...stableEgressPlan.tolerations];
+      } else {
+        // App node pool placement. Stable-egress services are pinned to the
+        // egress pool instead; requiring both pools' labels would leave them
+        // unschedulable.
+        applyAppPlacement(deployment.spec.template.spec as k8s.V1PodSpec, appPlacement);
       }
 
       documents.push(yaml.stringify(deployment));
@@ -2026,6 +2063,15 @@ export class DeployerService {
     return xeve && typeof xeve === 'object' ? xeve as Record<string, unknown> : null;
   }
 
+  /** Resolve app pod placement for one render or job run, logging any setting it cannot honour. */
+  private resolveAppPlacementWithWarnings(config: ReturnType<typeof loadConfig>): AppPlacement | null {
+    const { placement, warnings } = resolveAppPlacement(config);
+    for (const warning of warnings) {
+      this.logger.warn(warning);
+    }
+    return placement;
+  }
+
   /**
    * Plan how to inject stable egress for a service. The result is consumed by
    * `applyStableEgressInjection` during pod-spec rendering.
@@ -2217,6 +2263,7 @@ export class DeployerService {
 
     const config = loadConfig();
     const platformDomain = config.EVE_DEFAULT_DOMAIN ?? '';
+    const reservedDomains = getReservedPlatformDomains(config);
 
     return (ingress.domains as string[])
       .map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : ''))
@@ -2224,6 +2271,13 @@ export class DeployerService {
         if (!d) return false;
         if (platformDomain && isPlatformDomainHostname(d, platformDomain)) {
           this.logger.warn(`Skipping custom domain "${d}": use alias for platform subdomains`);
+          return false;
+        }
+        // Defence in depth: the API refuses these at sync and register, but a
+        // row claimed before the check existed must still never get an ingress.
+        const reservedDomain = findReservedPlatformDomain(d, reservedDomains);
+        if (reservedDomain) {
+          this.logger.warn(`Skipping custom domain "${d}": reserved for the platform (under "${reservedDomain}")`);
           return false;
         }
         return true;
@@ -2282,11 +2336,11 @@ export class DeployerService {
       managedValues?: Map<string, string>;
     },
     objectStorePlan?: EnvObjectStorePlan,
-  ): Promise<Array<{ name: string; value: string }>> {
+  ): Promise<k8s.V1EnvVar[]> {
     const config = loadConfig();
 
     // Platform-injected env vars (can be overridden by user-defined vars)
-    const platformEnvVars: Array<{ name: string; value: string }> = [
+    const platformEnvVars: k8s.V1EnvVar[] = [
       { name: 'EVE_API_URL', value: this.resolveServiceEveApiUrl(config.EVE_API_URL) },
       ...(config.EVE_PUBLIC_API_URL ? [{ name: 'EVE_PUBLIC_API_URL', value: config.EVE_PUBLIC_API_URL }] : []),
       ...(config.EVE_SSO_URL ? [{ name: 'EVE_SSO_URL', value: config.EVE_SSO_URL }] : []),
@@ -2334,15 +2388,12 @@ export class DeployerService {
       : [];
 
     // Merge: platform vars first, then user vars (user can override platform vars)
-    const envMap = new Map<string, string>();
-    for (const entry of platformEnvVars) {
-      envMap.set(entry.name, entry.value);
-    }
-    for (const entry of userEnvVars) {
-      envMap.set(entry.name, entry.value);
+    const envMap = new Map<string, k8s.V1EnvVar>();
+    for (const entry of [...platformEnvVars, ...userEnvVars]) {
+      envMap.set(entry.name, entry);
     }
 
-    return Array.from(envMap.entries()).map(([name, value]) => ({ name, value }));
+    return Array.from(envMap.values());
   }
 
   private async resolveAppLinkEnvVars(context: {
@@ -2451,9 +2502,10 @@ export class DeployerService {
     if (params.managedDbTrustHash) {
       annotations['eve.managed_db_trust_hash'] = params.managedDbTrustHash;
     }
+    // Roll pods when the binding changes: an IRSA role, or a rotated static
+    // key that pods read from the namespace Secret at container start.
     if (
-      params.objectStorePlan.binding?.mode === 'irsa' &&
-      params.objectStorePlan.binding.bindingHash &&
+      params.objectStorePlan.binding?.bindingHash &&
       params.objectStorePlan.bucketsByService.has(params.serviceName)
     ) {
       annotations['eve.app_bucket_binding_hash'] = params.objectStorePlan.binding.bindingHash;
@@ -2865,6 +2917,7 @@ export class DeployerService {
   private async ensureImagePullSecret(params: {
     namespace: string;
     projectId: string;
+    environmentId: string;
     manifestYaml: string;
   }): Promise<string | null> {
     const parsed = yaml.parse(params.manifestYaml) as {
@@ -2878,7 +2931,7 @@ export class DeployerService {
 
     const registryValue = parsed?.registry;
 
-    // --- Eve-native registry: use EVE_INTERNAL_API_KEY for Docker v2 token auth ---
+    // --- Eve-native registry: a pull-only credential scoped to this project ---
     if (registryValue === 'eve') {
       const config = loadConfig();
       const registryHost = config.EVE_REGISTRY_HOST;
@@ -2891,12 +2944,27 @@ export class DeployerService {
         return null;
       }
 
-      // Store the API key as the docker password — NOT a pre-signed JWT.
+      // Store an environment-bound pull credential as the docker password:
+      // never the internal API key, and not a pre-signed JWT (those expire).
       // When kubelet gets a 401 from the registry, it follows the Docker v2
       // token auth flow: GET the token endpoint with Basic auth (these creds).
-      // The token endpoint validates the API key and issues a fresh JWT.
-      const username = 'eve-token';
-      const password = config.EVE_INTERNAL_API_KEY;
+      // The token endpoint verifies the credential against the environment and
+      // grants pull on this project's repositories. Each rewrite starts a new
+      // pull epoch, which retires the credential written before the last one.
+      const epoch = await this.environments.bumpRegistryPullEpoch(params.environmentId);
+      if (epoch === null) {
+        throw new Error(`Environment ${params.environmentId} not found while writing its registry pull secret`);
+      }
+      const username = REGISTRY_PULL_USERNAME;
+      const password = mintRegistryPullCredential(
+        {
+          projectId: params.projectId,
+          environmentId: params.environmentId,
+          namespace: params.namespace,
+          epoch,
+        },
+        config.EVE_INTERNAL_API_KEY,
+      );
       const auth = Buffer.from(`${username}:${password}`).toString('base64');
       const dockerConfig = {
         auths: {

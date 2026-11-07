@@ -35,6 +35,11 @@ services:
       EVE_AUTH_PUBLIC_KEY: ${EVE_AUTH_PUBLIC_KEY:-}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
       EVE_BOOTSTRAP_TOKEN: ${EVE_BOOTSTRAP_TOKEN:-}
+      # Booleans must not be empty strings (the config parser rejects "").
+      EVE_DEV_REBOOTSTRAP: ${EVE_DEV_REBOOTSTRAP:-false}
+      # This service builds the Dockerfile's development stage; pass NODE_ENV
+      # through so integration runs (.env.test: NODE_ENV=test) keep their mode.
+      NODE_ENV: ${NODE_ENV:-development}
       # Secrets encryption (required for API secrets feature)
       EVE_SECRETS_MASTER_KEY: ${EVE_SECRETS_MASTER_KEY:-}
       EVE_INTERNAL_API_KEY: ${EVE_INTERNAL_API_KEY:-}
@@ -61,6 +66,8 @@ services:
       ORCH_LOOP_INTERVAL_MS: ${ORCH_LOOP_INTERVAL_MS:-1000}
       EVE_WORKER_POLL_INTERVAL_MS: ${EVE_WORKER_POLL_INTERVAL_MS:-1000}
       EVE_AGENT_RUNTIME_POLL_INTERVAL_MS: ${EVE_AGENT_RUNTIME_POLL_INTERVAL_MS:-200}
+      # Sent to the worker and agent runtime, which refuse calls without it.
+      EVE_INTERNAL_API_KEY: ${EVE_INTERNAL_API_KEY:-}
     ports:
       - "${EVE_ORCHESTRATOR_PORT:-4702}:${EVE_ORCHESTRATOR_PORT:-4702}"
     depends_on:
@@ -89,6 +96,8 @@ services:
       EVE_API_URL: http://api:${EVE_API_PORT:-4701}
       DATABASE_URL: ${DATABASE_URL:-postgres://${EVE_DB_USER:-eve}:${EVE_DB_PASSWORD:-eve}@db:5432/${EVE_DB_NAME:-eve}}
       WORKER_PORT: ${EVE_WORKER_PORT:-4711}
+      # Required on every worker route except /health.
+      EVE_INTERNAL_API_KEY: ${EVE_INTERNAL_API_KEY:-}
       # Harness API keys - passed from shell env or system-secrets.env.local via env_file
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       Z_AI_API_KEY: ${Z_AI_API_KEY:-}

@@ -19,6 +19,11 @@ RUN pnpm --filter @eve/shared build && pnpm --filter @eve/db build && pnpm --fil
 
 FROM base AS production
 
+# Published images run in production mode unless a deployment overrides it.
+# The API reads NODE_ENV only for first-admin bootstrap (token required, no
+# auto-open window, no admin-token re-issue).
+ENV NODE_ENV=production
+
 # Build metadata (passed via --build-arg in CI)
 ARG EVE_BUILD_VERSION=dev
 ARG EVE_BUILD_SHA=unknown

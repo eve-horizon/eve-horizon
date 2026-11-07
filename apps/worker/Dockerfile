@@ -49,6 +49,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get install -y --no-install-recommends git bash ca-certificates curl tini procps jq gpg poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Execute-only copies of node and tini for the service's own processes.
+# The kernel marks a process non-dumpable when it executes a binary its user
+# cannot read, so job code running as the same UID (pipeline scripts, harnesses)
+# cannot read the worker's environment from /proc/<pid>/environ or its memory.
+# Jobs keep the ordinary, readable /usr/local/bin/node.
+RUN install -D -o root -g root -m 0711 /usr/local/bin/node /usr/local/libexec/eve-node \
+    && install -o root -g root -m 0711 /usr/bin/tini /usr/local/libexec/eve-tini
+
 # Install GitHub CLI (gh) from official apt repository
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -214,9 +222,14 @@ RUN set -eu; \
 # cc-mirror creates isolated Claude Code variants with custom commands
 # Note: This runs as root but creates files in /home/node/.cc-mirror and /home/node/.local/bin
 # API keys are stripped from settings.json after creation - they're passed via env at runtime
+# mclaude must exist in the image: if it does not, the entrypoint installs it
+# over the network on every container start (worker and every runner pod).
+# A failed variant build is reported here and falls back to a claude shim, as
+# in the agent-runtime image.
 RUN if command -v cc-mirror >/dev/null 2>&1; then \
       # Create mclaude variant (mirror provider - direct Anthropic API)
-      HOME=/home/node cc-mirror quick --provider mirror --name mclaude --yes --no-shell-env 2>/dev/null || true && \
+      HOME=/home/node cc-mirror quick --provider mirror --name mclaude --yes --no-shell-env \
+        || echo "WARNING: cc-mirror could not create the mclaude variant; using the claude shim" >&2; \
       # Create zai variant (Z.ai provider - GLM models)
       # Use placeholder API key to complete setup, then strip it from settings.json
       # (cc-mirror requires an API key to create the variant, but we want runtime env to take precedence)
@@ -228,6 +241,9 @@ RUN if command -v cc-mirror >/dev/null 2>&1; then \
       fi && \
       # Fix ownership of created files
       chown -R node:node /home/node/.cc-mirror /home/node/.local 2>/dev/null || true; \
+    fi \
+    && if [ ! -x /home/node/.local/bin/mclaude ] && command -v claude >/dev/null 2>&1; then \
+      printf '#!/bin/sh\nexec claude "$@"\n' > /usr/local/bin/mclaude && chmod +x /usr/local/bin/mclaude; \
     fi
 
 # Pre-create ALL directories node user might write to (see directory list above)
@@ -258,6 +274,19 @@ RUN mkdir -p \
     /home/node/.sdkman \
     && chown -R node:node /opt/eve /home/node
 
+# Root-owned guards in the service's HOME. Node looks for modules missing from
+# node_modules in ~/.node_modules and ~/.node_libraries, and the Kubernetes
+# client reads ~/.kube/config before in-cluster config. Job code runs as the
+# same UID and must not be able to create them; each holds a root-owned file so
+# it cannot be removed and recreated either.
+RUN for d in .node_modules .node_libraries .kube; do \
+      mkdir -p "/home/node/$d" \
+      && touch "/home/node/$d/.eve-root-owned" \
+      && chown -R root:root "/home/node/$d" \
+      && chmod 0755 "/home/node/$d" \
+      && chmod 0444 "/home/node/$d/.eve-root-owned"; \
+    done
+
 # Configure git identity for automated commits (eve-worker skills install)
 RUN git config --system user.email "eve-worker@eve-horizon.local" \
     && git config --system user.name "Eve Worker"
@@ -276,25 +305,26 @@ RUN chmod +x /usr/local/bin/eve-worker-entrypoint /usr/local/bin/eve-skills /usr
 # =============================================================================
 FROM runtime-setup AS base
 
-# Copy app code from build stage (--chown avoids extra layer from chown -R)
+# Copy app code from build stage. It stays root-owned: job code runs as `node`
+# and must not be able to modify the service it can later make restart.
 USER root
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/apps/worker/node_modules ./apps/worker/node_modules
-COPY --from=build --chown=node:node /app/apps/worker/dist ./apps/worker/dist
-COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build --chown=node:node /app/packages/shared/node_modules ./packages/shared/node_modules
-COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages/shared/
-COPY --from=build --chown=node:node /app/packages/db/dist ./packages/db/dist
-COPY --from=build --chown=node:node /app/packages/db/node_modules ./packages/db/node_modules
-COPY --from=build --chown=node:node /app/packages/db/package.json ./packages/db/
-COPY --from=build --chown=node:node /app/packages/db/migrations ./packages/db/migrations
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/dist ./packages/eve-agent-cli/dist
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/bin ./packages/eve-agent-cli/bin
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/node_modules ./packages/eve-agent-cli/node_modules
-COPY --from=build --chown=node:node /app/packages/eve-agent-cli/package.json ./packages/eve-agent-cli/
-COPY --from=build --chown=node:node /app/packages/cli/dist ./packages/cli/dist
-COPY --from=build --chown=node:node /app/packages/cli/bin ./packages/cli/bin
-COPY --from=build --chown=node:node /app/packages/cli/package.json ./packages/cli/
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/apps/worker/node_modules ./apps/worker/node_modules
+COPY --from=build /app/apps/worker/dist ./apps/worker/dist
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=build /app/packages/shared/package.json ./packages/shared/
+COPY --from=build /app/packages/db/dist ./packages/db/dist
+COPY --from=build /app/packages/db/node_modules ./packages/db/node_modules
+COPY --from=build /app/packages/db/package.json ./packages/db/
+COPY --from=build /app/packages/db/migrations ./packages/db/migrations
+COPY --from=build /app/packages/eve-agent-cli/dist ./packages/eve-agent-cli/dist
+COPY --from=build /app/packages/eve-agent-cli/bin ./packages/eve-agent-cli/bin
+COPY --from=build /app/packages/eve-agent-cli/node_modules ./packages/eve-agent-cli/node_modules
+COPY --from=build /app/packages/eve-agent-cli/package.json ./packages/eve-agent-cli/
+COPY --from=build /app/packages/cli/dist ./packages/cli/dist
+COPY --from=build /app/packages/cli/bin ./packages/cli/bin
+COPY --from=build /app/packages/cli/package.json ./packages/cli/
 
 # Link CLIs globally
 RUN ln -s /app/packages/cli/bin/eve.js /usr/local/bin/eve
@@ -303,8 +333,9 @@ WORKDIR /app/apps/worker
 USER node
 # Use tini as init system for proper zombie reaping and signal forwarding
 # This prevents orphaned processes from accumulating and exhausting resources
-ENTRYPOINT ["/usr/bin/tini", "--", "eve-worker-entrypoint"]
-CMD ["node", "dist/main.js"]
+ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "/usr/local/bin/eve-worker-entrypoint"]
+# --disable-sigusr1: a same-UID job could otherwise open the inspector with SIGUSR1.
+CMD ["/usr/local/libexec/eve-node", "--disable-sigusr1", "dist/main.js"]
 
 # =============================================================================
 # Stage: media
@@ -439,8 +470,9 @@ ENV PATH="${KOTLIN_HOME}/bin:${PATH}"
 
 WORKDIR /app/apps/worker
 USER node
-ENTRYPOINT ["/usr/bin/tini", "--", "eve-worker-entrypoint"]
-CMD ["node", "dist/main.js"]
+ENTRYPOINT ["/usr/local/libexec/eve-tini", "--", "/usr/local/bin/eve-worker-entrypoint"]
+# --disable-sigusr1: a same-UID job could otherwise open the inspector with SIGUSR1.
+CMD ["/usr/local/libexec/eve-node", "--disable-sigusr1", "dist/main.js"]
 
 # =============================================================================
 # Stage: full

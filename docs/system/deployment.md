@@ -1,7 +1,7 @@
 # Deployment
 
 > Status: Current
-> Last Updated: 2026-08-25
+> Last Updated: 2026-11-05
 
 ## Purpose
 
@@ -90,6 +90,12 @@ The AWS overlay and Terraform have been extracted from this repo. See
 - **Postgres**: StatefulSet with 5Gi PVC
 - **Runner pods**: Ephemeral pods spawned per job attempt for isolated execution
 - **Ingress access**: No port-forwarding needed - access via `http://api.eve.lvh.me`
+- **App namespaces**: each environment deploys into `eve-{orgSlug}-{projectSlug}-{envName}`.
+  A namespace chosen with `eve env create --namespace` (or an env update) must
+  start with the project's prefix `eve-{orgSlug}-{projectSlug}-` and must not be
+  another environment's namespace. The deployer labels each namespace with
+  `eve.env_id` and refuses to deploy into, or delete, a namespace labelled for
+  another environment or one that exists without that label.
 
 ### Web Auth Services (Supabase + SSO)
 
@@ -146,6 +152,26 @@ Example:     web.acme-fstack-test.lvh.me
 
 **Production VPS:** Set `EVE_DEFAULT_DOMAIN=apps.yourdomain.com` in the worker deployment.
 
+### Reserved Platform Domains
+
+A project cannot claim the platform's own hosts as custom domains, through
+`eve domain register` or a manifest's `x-eve.ingress.domains`, and the worker
+never renders an Ingress for them. Reserved, each with all its subdomains:
+
+- the hosts of `EVE_API_URL`, `EVE_PUBLIC_API_URL`, `EVE_SSO_URL` and
+  `SUPABASE_AUTH_EXTERNAL_URL`, plus `EVE_REGISTRY_HOST` and
+  `EVE_PLATFORM_INGRESS_HOSTNAME` (always);
+- every domain in `EVE_RESERVED_DOMAINS` (comma-separated, optional).
+
+If DNS has an apex or wildcard record for the platform's parent domain pointing
+at the shared ingress, set `EVE_RESERVED_DOMAINS=yourdomain.com` on both the API
+and the worker, so no tenant can claim any host under it (for example a future
+platform host). Hosts under `EVE_DEFAULT_DOMAIN` keep their existing handling:
+`eve domain register` refuses them and deploys skip them in favour of an ingress
+alias. Manifest sync rejects a reserved custom domain with a 400 naming the
+manifest path; a deploy that still carries one (claimed before this check
+existed) logs a warning, skips it and garbage-collects its old Ingress.
+
 ### Ingress Timeouts and Body Size
 
 Tenant HTTP ingresses support two controller-agnostic knobs under
@@ -176,6 +202,44 @@ eve env diagnose <project> <env>
 eve env diagnose <project> <env> --json | jq '.http_ingress'
 ```
 
+### Internal API Port (optional)
+
+The API's `/internal/*` routes are for platform services, authenticated by
+`EVE_INTERNAL_API_KEY`. By default they share the public port with every other
+route, so the ingress exposes them. Set `EVE_API_INTERNAL_PORT` on `eve-api` to
+take them off the public port:
+
+- The API also listens on `EVE_API_INTERNAL_PORT` (for example `4791`). That
+  port serves every route, `/internal/*` included.
+- On the public port (`API_PORT`), `/internal/*` answers `404`, the same as a
+  route that does not exist. The check uses the route the request resolved to
+  and the port the connection arrived on, so encoded paths and forged headers
+  do not get round it.
+- `/internal/registry/token` stays on the public port: it is the registry's
+  token realm, which BuildKit and kubelet on every node follow.
+
+Turning it on is one change across several workloads; do it in a single
+rollout, or in-cluster calls to `/internal/*` fail:
+
+1. `eve-api`: set `EVE_API_INTERNAL_PORT` and add the port to the `eve-api`
+   Service (not to the Ingress).
+2. Point `EVE_API_URL` at the internal port on the platform services that
+   call `/internal/*`: `eve-orchestrator`, `eve-worker`, `eve-agent-runtime`,
+   `eve-gateway` and `eve-sso` (for example
+   `http://eve-api.eve.svc.cluster.local:4791`). Runner pods and app
+   deployments inherit the worker's value, so they use the internal port too
+   (its `/internal/*` routes still require the internal key).
+3. Leave `eve-dashboard` on the public port. Its server proxies browser
+   requests under `/api/*` to `EVE_API_URL`, so pointing it at the internal
+   port would publish `/internal/*` through the dashboard host. (For the same
+   reason, an ingress rule that blocks `/internal` on the API host alone does
+   not cover the dashboard host; this port split does.)
+4. Allow the internal port wherever NetworkPolicies restrict traffic to
+   `eve-api`, including from app namespaces.
+
+Unset (the default), nothing changes. Local stacks (`./bin/eh`, docker
+compose, `eve local`) leave it unset.
+
 ### Ingress TLS (Apps)
 
 App ingresses can be issued TLS certificates automatically via cert-manager.
@@ -192,6 +256,29 @@ and cert-manager annotations so certificates are issued per host.
 
 If you provide a wildcard cert, the worker will reference that secret name in every
 app ingress. Ensure the secret exists in each app namespace.
+
+### App Node Placement
+
+On managed Kubernetes the worker can pin every app pod it creates (service
+Deployments and `x-eve.role: job` service Jobs) to a dedicated node pool. Set
+on the worker:
+
+| Variable | Meaning |
+| --- | --- |
+| `EVE_APP_PLACEMENT_ENABLED` | `true` to apply placement. Off by default. |
+| `EVE_COMPUTE_MODEL` | Placement applies only for `gke`, `eks` and `aks`. |
+| `EVE_APP_NODE_SELECTOR_KEY` / `_VALUE` | Node label the pods must match (`nodeSelector`). |
+| `EVE_APP_TAINT_KEY` / `_VALUE` | Taint on the pool; pods get a matching toleration (`Exists` when no value). |
+| `EVE_APP_TAINT_EFFECT` | `NoSchedule` (default), `PreferNoSchedule` or `NoExecute`. |
+
+Placement is opt-in because infrastructure templates set the selector and taint
+variables before anything read them: turning it on moves running apps onto the
+app pool (often spot capacity) at their next deploy, so make sure the pool
+exists and can scale first. Settings that cannot be honoured (placement enabled
+on `k3s`, an incomplete selector, an unknown taint effect) are logged as worker
+warnings at each deploy. Services with `x-eve.networking.egress: stable` keep
+their egress-pool placement instead. Pipeline and agent runner pods are not
+app workloads and are not affected.
 
 ### Manifest Variable Interpolation
 
@@ -331,6 +418,15 @@ Docker Compose is optimized for **fast local iteration** during development.
 
 ## Runtime Environment Variables (Key)
 
+All platform services:
+- `EVE_INTERNAL_API_KEY` (required): the service-to-service key. The worker
+  and agent runtime refuse every request except `GET /health` without it, and
+  refuse to start without it when `NODE_ENV=production`. Set the same value on
+  `eve-api`, `eve-orchestrator`, `eve-worker`, `eve-agent-runtime`,
+  `eve-gateway` and `eve-sso`; runner pods inherit it from the worker or agent
+  runtime that creates them. See
+  [auth.md → Internal Service Authentication](./auth.md#internal-service-authentication).
+
 Orchestrator:
 - `ORCH_LOOP_INTERVAL_MS`
 - `ORCH_CONCURRENCY`
@@ -371,7 +467,9 @@ Production uses Kubernetes (k3s or managed k8s):
 - **Platform images**: Pin all seven service images, including `worker`, to the
   same release version. Use the separate toolchain-image prefix/tag settings
   for on-demand language and media tooling.
-- **ConfigMaps/Secrets**: Environment configuration and credentials
+- **ConfigMaps/Secrets**: Environment configuration and credentials.
+  `EVE_INTERNAL_API_KEY` must reach every platform service (see above); probes
+  stay on `GET /health`, which needs no credentials.
 - **Persistent volumes**: Database and workspace storage
 - **RBAC**: Worker service account permissions (pods, PVCs, services CRUD)
 - **Manifests**: Same base manifests as local k3d with production-specific overlays

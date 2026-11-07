@@ -1,7 +1,7 @@
 # Auth & Governance
 
 > Status: Current
-> Last Updated: 2026-02-12
+> Last Updated: 2026-11-05
 
 ## Overview
 
@@ -46,8 +46,9 @@ mint the job token, so the on-disk view and API authority match.
 | Variable | Description |
 |----------|-------------|
 | `EVE_AUTH_ENABLED` | Enable authentication (`true`/`false`, default: `true`) |
-| `EVE_AUTH_PRIVATE_KEY` | RSA private key (PEM string or file path) — required for internal mode |
+| `EVE_AUTH_PRIVATE_KEY` | RSA private key (PEM, `\n`-escaped PEM, base64-encoded PEM, or file path; see below) — required for internal mode |
 | `EVE_BOOTSTRAP_TOKEN` | One-time token for initial admin creation |
+| `EVE_INTERNAL_API_KEY` | Shared service-to-service key; see [Internal Service Authentication](#internal-service-authentication). Required on the API, orchestrator, worker, agent runtime, gateway and SSO |
 
 ### Optional Variables
 
@@ -73,6 +74,40 @@ mint the job token, so the on-disk view and API authority match.
 | `SUPABASE_ANON_KEY` | HS256 JWT with `anon` claim | — |
 | `EVE_SSO_URL` | Public SSO broker URL (e.g., `https://sso.<domain>`) | — |
 | `EVE_AUTH_ADMIN_PASSWORD` | GoTrue DB role password for bootstrap job | — |
+
+## Internal Service Authentication
+
+Platform services call each other with the shared `EVE_INTERNAL_API_KEY`, sent
+in the `x-eve-internal-token` header. Every check compares the presented token
+in constant time (`internalTokenMatches` in `@eve/shared`) and fails closed: an
+unset key matches nothing.
+
+| Surface | What requires the key | Open without it |
+|---------|-----------------------|-----------------|
+| API (`/internal/*`) | Every internal route (`InternalTokenGuard`) | Everything outside `/internal` uses user, job or service tokens |
+| Worker (`:4749`, and runner pods, which serve the worker app) | Every route: `/invoke`, `/deploy`, `/environments/delete`, `/scripts/execute`, `/actions/execute`, `/pipeline-runs/:id/execute`, and unknown paths | `GET /health` only |
+| Agent runtime (`:4812`) | Every route, including `/invoke` and unknown paths | `GET /health` only |
+
+The worker and agent runtime enforce this with a Fastify `onRequest` hook
+(`registerInternalAuthHook`), so new routes are protected by default and
+unauthenticated requests are refused before the body is parsed. Unknown paths
+answer 401, not 404. Only the exact path `/health` is open, so readiness and
+liveness probes need no credentials.
+
+Callers send the key with `internalAuthHeaders()`: the orchestrator (worker and
+agent-runtime submits, including shard redirects), the API (deploy and
+environment teardown), and the worker and agent runtime when they hand a job
+to a runner pod.
+
+**When the key is unset.** The worker and agent runtime refuse to start when
+`NODE_ENV=production` and `EVE_INTERNAL_API_KEY` is empty, with an error naming
+the variable. In any other mode they start, log a warning, and refuse every
+request except `/health`. Local stacks already set the key (`./bin/eh k8s
+secrets` and `eve local` generate one; `.env.test` sets `test-internal-key`),
+because the orchestrator needs it to read job results from the API.
+
+The key is a network-level credential, not a substitute for network policy:
+keep the worker, agent runtime and BuildKit reachable only from platform pods.
 
 ## Web Auth Stack (Supabase + SSO)
 
@@ -421,6 +456,21 @@ export EVE_AUTH_PUBLIC_KEY="$(cat eve-auth.pub)"
 export EVE_AUTH_PRIVATE_KEY="/path/to/eve-auth.key"
 ```
 
+Env files hold one line per variable (including `kubectl create secret
+--from-env-file`), so a multi-line PEM cannot go in one as is. Every PEM key
+variable (`EVE_AUTH_PRIVATE_KEY`, `EVE_AUTH_PUBLIC_KEY`, `EVE_AUTH_PUBLIC_KEY_OLD`,
+`EVE_REGISTRY_SIGNING_KEY`) also accepts either single-line form:
+
+```bash
+# base64-encoded PEM (recommended for env files)
+EVE_AUTH_PRIVATE_KEY=$(base64 < eve-auth.key | tr -d '\n')
+# PEM with literal \n escapes
+EVE_AUTH_PRIVATE_KEY=$(awk 'BEGIN{ORS="\\n"} {print}' eve-auth.key)
+```
+
+Surrounding quotes and whitespace are ignored. A value that is none of the
+accepted forms stops the API at startup with an error naming the variable.
+
 ## Bootstrap Flow
 
 The first admin user is created via the bootstrap endpoint. Eve supports three security modes:
@@ -433,7 +483,9 @@ The first admin user is created via the bootstrap endpoint. Eve supports three s
 | **recovery** | Trigger file on host | No | Lost admin access |
 | **secure** | `EVE_BOOTSTRAP_TOKEN` set | Yes | Production lockdown |
 
-**Production note:** When `NODE_ENV=production`, bootstrap requires `EVE_BOOTSTRAP_TOKEN`. If it is missing, the bootstrap window is closed.
+**Production note:** When `NODE_ENV=production`, bootstrap requires `EVE_BOOTSTRAP_TOKEN`. If it is missing, the bootstrap window is closed. The published API image sets `NODE_ENV=production`; only local dev stacks override it.
+
+**Once an admin exists, bootstrap is closed** and `POST /auth/bootstrap` returns 403 with no token, in every mode. The one exception is a dev/test convenience: with `EVE_DEV_REBOOTSTRAP=true` and `NODE_ENV` other than `production`, a repeat bootstrap re-issues the existing admin's token, and it still requires `EVE_BOOTSTRAP_TOKEN` when one is configured. The integration tests (`.env.test`) and the local k3d overlay enable it; never set it on a hosted deployment.
 
 ### Auto-Open Mode (Default)
 
@@ -488,6 +540,7 @@ This mode overrides auto-open and recovery modes.
 | `EVE_BOOTSTRAP_TOKEN` | (none) | Enables secure mode if set |
 | `EVE_BOOTSTRAP_TRIGGER_FILE` | `/tmp/eve-bootstrap-enable` | Recovery trigger file path |
 | `EVE_BOOTSTRAP_WINDOW_MINUTES` | `10` | Window duration |
+| `EVE_DEV_REBOOTSTRAP` | `false` | Dev/test only: re-issue the existing admin's token on a repeat bootstrap (ignored when `NODE_ENV=production`) |
 
 ### Checking Status
 
@@ -1077,8 +1130,10 @@ export EVE_AUTH_ENABLED=false  # For local dev only
 
 In normal operation, use `eve auth login` (existing user) or `eve admin invite` (new users).
 
-For local/non-production stacks, `eve auth bootstrap` now attempts the server recovery path automatically.
-If the API is configured to allow non-prod recovery, it can return an existing admin token.
+For local dev stacks, `eve auth bootstrap` attempts the dev recovery path automatically.
+It returns the existing admin's token only when the API runs with `EVE_DEV_REBOOTSTRAP=true`
+and `NODE_ENV` other than `production` (the local k3d overlay sets both), and you pass the
+bootstrap token when one is configured. Hosted deployments refuse it.
 
 **If you bootstrapped with the wrong email** and need an explicit recovery flow:
 

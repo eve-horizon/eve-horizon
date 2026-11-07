@@ -113,6 +113,7 @@ import { resolveProjectSecrets, mintJobToken, updateSecret } from '@eve/shared';
 import { extractPrefixedEnv, sanitizeSecretFilename, writeEveCredentials } from '@eve/shared';
 import { createJobUserHome, cleanupJobUserHome } from '@eve/shared';
 import { materializeScopedOrgFsMount, type OrgFsMountSpec } from '@eve/shared';
+import { serviceHelperEnv } from '@eve/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -798,7 +799,7 @@ export class InvokeService {
         const cloneUrl = gitAuth?.cloneUrl ?? repoUrl;
         cloneArgs.push('--', cloneUrl, repoPath);
         console.log(`Cloning repository from ${redactRepoUrl(cloneUrl)} to ${repoPath}`);
-        await runGit(cloneArgs, { env: gitAuth?.env ? { ...process.env, ...gitAuth.env } : undefined });
+        await runGit(cloneArgs, { env: gitAuth?.env });
       }
 
       console.log(`Repository ready at ${repoPath}`);
@@ -2270,7 +2271,7 @@ export class InvokeService {
 
       const requestedToolchains = [...new Set(invocation.toolchains ?? [])];
       const provisionedToolchains = requestedToolchains.length > 0
-        ? await ensureToolchains({ toolchains: requestedToolchains, baseEnv: process.env }) : null;
+        ? await ensureToolchains({ toolchains: requestedToolchains, baseEnv: serviceHelperEnv() }) : null;
       if (provisionedToolchains) Object.assign(adapterEnv, provisionedToolchains.envOverlay);
       const processEnv = buildSanitizedHarnessEnv({
         binPaths: [

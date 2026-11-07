@@ -18,10 +18,12 @@ import {
   buildAuthenticatedHttpsUrl,
   generateReleaseId,
   resolveProjectSecrets,
+  serviceGitEnv,
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { DeployerService } from '../deployer/deployer.service';
 import { K8sOperationError } from '../deployer/k8s-error.js';
+import { buildJobCommandEnv } from '../execution/job-command-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -271,7 +273,7 @@ export class PipelineRunnerService {
       try {
         await execFileAsync('git', ['tag', '-a', tag, '-m', `Release ${tag}`], {
           cwd: workspace,
-          env: process.env,
+          env: serviceGitEnv(),
           maxBuffer: 1024 * 1024,
         });
       } catch (error) {
@@ -379,11 +381,9 @@ export class PipelineRunnerService {
     try {
       const { stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
         cwd: workspace,
-        env: {
-          ...process.env,
-          ...(run.env_name ? { EVE_ENV_NAME: run.env_name } : {}),
-          ...(envNamespace ? { EVE_ENV_NAMESPACE: envNamespace } : {}),
-        },
+        // Allowlisted env: the worker's DATABASE_URL, internal key and cloud
+        // credentials must not reach repository-defined commands.
+        env: buildJobCommandEnv({ envName: run.env_name, envNamespace }),
         maxBuffer: 1024 * 1024,
       });
 
@@ -683,7 +683,7 @@ export class PipelineRunnerService {
 
     try {
       await execFileAsync('git', ['clone', '--no-checkout', cloneUrl, workspace], {
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       });
     } catch (err) {
@@ -699,7 +699,7 @@ export class PipelineRunnerService {
 
     await execFileAsync('git', ['checkout', gitSha], {
       cwd: workspace,
-      env: process.env,
+      env: serviceGitEnv(),
       maxBuffer: 1024 * 1024,
     });
     return workspace;
@@ -759,7 +759,7 @@ export class PipelineRunnerService {
     try {
       const { stdout } = await execFileAsync('git', ['describe', '--tags', '--abbrev=0', gitSha], {
         cwd: workspace,
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       });
       return stdout.trim() || null;
@@ -774,7 +774,7 @@ export class PipelineRunnerService {
       ['log', '--no-merges', '--pretty=format:%s%n%b%n----END----', range],
       {
         cwd: workspace,
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       },
     );

@@ -1,7 +1,14 @@
 import { Inject, Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import type { Db } from '@eve/db';
 import { customDomainQueries, environmentQueries, projectManifestQueries } from '@eve/db';
-import { loadConfig, isPlatformDomainHostname, generateCustomDomainId, type Manifest } from '@eve/shared';
+import {
+  loadConfig,
+  isPlatformDomainHostname,
+  findReservedPlatformDomain,
+  getReservedPlatformDomains,
+  generateCustomDomainId,
+  type Manifest,
+} from '@eve/shared';
 import * as dns from 'node:dns/promises';
 import * as yaml from 'yaml';
 import { ensureManifestEnvironment } from '../environments/manifest-environment.js';
@@ -144,6 +151,12 @@ export class CustomDomainsService {
     if (platformDomain && isPlatformDomainHostname(hostname, platformDomain)) {
       throw new BadRequestException(
         `"${hostname}" is under the platform domain — use ingress alias instead`,
+      );
+    }
+    const reservedDomain = findReservedPlatformDomain(hostname, getReservedPlatformDomains(config));
+    if (reservedDomain) {
+      throw new BadRequestException(
+        `"${hostname}" is reserved for the platform (under "${reservedDomain}") and cannot be a custom domain`,
       );
     }
 

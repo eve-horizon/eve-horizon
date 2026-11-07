@@ -1,8 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { ensureToolchains } from '../toolchain-cache.js';
+
+// The fake crane lives in a temp dir, which the Linux-only trusted-PATH filter
+// rightly drops. That filter is covered in process-isolation.spec.ts; here,
+// evaluate it as on a non-Linux host so the fake helper resolves.
+vi.mock('../../process-isolation.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../process-isolation.js')>();
+  return {
+    ...actual,
+    serviceHelperEnv: (extra?: Record<string, string | undefined>, source: NodeJS.ProcessEnv = process.env) =>
+      actual.serviceHelperEnv(extra, source, { platform: 'darwin' }),
+  };
+});
 
 const digest = `sha256:${'a'.repeat(64)}`;
 let tempRoots: string[] = [];

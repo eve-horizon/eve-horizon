@@ -67,6 +67,7 @@ EVE_STORAGE_ACCESS_KEY_ID=<access-key>
 EVE_STORAGE_SECRET_ACCESS_KEY=<secret-key>
 EVE_STORAGE_ORG_BUCKET_PREFIX=eve-org           # Default: eve-org
 EVE_STORAGE_INTERNAL_BUCKET=eve-internal        # Default: eve-internal
+EVE_STORAGE_GCP_PROJECT_NUMBER=123456789012     # Native GCS only; default: metadata server
 ```
 
 **Dual S3 clients:** The service initializes two clients — an **internal client** (cluster endpoint, for server-side operations like `getObject`) and a **presign client** (public endpoint, for generating URLs that external clients can reach).
@@ -80,9 +81,18 @@ EVE_STORAGE_INTERNAL_BUCKET=eve-internal        # Default: eve-internal
 | `getObject(bucket, key)` | Read object content server-side (cluster-internal) |
 | `getObjectMetadata(bucket, key)` | HEAD request for content type, size, etag |
 | `deleteObject(bucket, key)` | Delete single object |
-| `ensureBucket(name)` | Create bucket if not exists (idempotent) |
+| `ensureBucket(name)` | Create bucket if not exists; adopt an existing one only if the platform owns it |
 | `setBucketCors(name, rules)` | Apply CORS configuration |
 | `setBucketPublicReadPolicy(name)` | Allow anonymous reads on entire bucket |
+| `removeBucketPublicReadPolicy(name)` | Remove anonymous read grants (worker, app buckets) |
+
+**Bucket ownership:** bucket names are global on S3 and GCS, so a predictable
+name can be pre-created by someone else. `ensureBucket` therefore adopts an
+existing bucket only when the backend confirms the platform owns it: S3 and
+MinIO `BucketAlreadyOwnedByYou`, or, for native GCS, a bucket whose
+`projectNumber` matches the platform project (`EVE_STORAGE_GCP_PROJECT_NUMBER`,
+else the GKE/GCE metadata server). Any other existing bucket fails the call
+(and so the org setup or app deploy) with a message naming the conflict.
 
 **Bucket layout:**
 
@@ -134,7 +144,7 @@ CREATE TABLE storage_buckets (
   physical_name   TEXT NOT NULL,             -- Actual S3 bucket name
   visibility      TEXT DEFAULT 'private',    -- 'private' | 'public'
   cors_json       JSONB DEFAULT '{}',
-  isolation_mode  TEXT,                       -- 'irsa' | 'shared' | 'minio-static-key'
+  isolation_mode  TEXT,                       -- 'irsa' | 'shared' | 'minio-static-key' | 'gcp-workload-identity'
   iam_role_arn    TEXT,                       -- IRSA role ARN when isolation_mode='irsa'
   iam_role_name   TEXT,
   service_account_name TEXT,
@@ -735,7 +745,7 @@ services:
   api:
     x-eve:
       object_store:
-        # Optional: auto (default), irsa, or shared
+        # Optional: auto (default), irsa, shared, or workload-identity
         isolation: auto
         buckets:
           - name: uploads
@@ -757,10 +767,17 @@ gets:
 
 - `STORAGE_ENDPOINT`
 - `STORAGE_REGION`
-- `STORAGE_ACCESS_KEY_ID`
-- `STORAGE_SECRET_ACCESS_KEY`
+- `STORAGE_ACCESS_KEY_ID` and `STORAGE_SECRET_ACCESS_KEY`, read through
+  `secretKeyRef` from the namespace Secret `eve-app-storage-credentials`
 - `STORAGE_BUCKET_<NAME>` (for example, `STORAGE_BUCKET_UPLOADS`)
 - `STORAGE_FORCE_PATH_STYLE=true` for MinIO
+
+The key pair never appears in the Deployment or Job spec. Each deploy rewrites
+the Secret from the worker's current `EVE_APP_STORAGE_*` (or local
+`EVE_STORAGE_*`) values and stamps a hash of the binding, credentials
+included, on the pod template as `eve.app_bucket_binding_hash`, so a rotated
+key rolls the env's pods on its next deploy. The Secret is deleted when the
+env stops declaring buckets or moves to a keyless mode.
 
 With AWS IRSA, the declaring service gets:
 
@@ -775,15 +792,68 @@ IRSA app pods do not receive `STORAGE_ACCESS_KEY_ID` or
 renders a `ServiceAccount/eve-app` annotated with the env role ARN and sets
 `serviceAccountName: eve-app` on each app/job pod that declares buckets.
 
+With GKE Workload Identity (`isolation: workload-identity`), the declaring
+service gets:
+
+- `STORAGE_ENDPOINT` (default `https://storage.googleapis.com`)
+- `STORAGE_AUTH_MODE=gcp-workload-identity`
+- `GOOGLE_CLOUD_PROJECT`
+- `STORAGE_REGION` when the worker sets one
+- `STORAGE_BUCKET_<NAME>`
+
+No key exists in this mode. Eve renders `ServiceAccount/eve-app-<env id>` in
+the env namespace and runs bucket-declaring pods under it; with Workload
+Identity Federation for GKE that Kubernetes service account is itself an IAM
+principal, and the worker grants it `roles/storage.objectUser` on the env's
+buckets only. Each bucket row records the granted member (`iam_member`), and
+Eve revokes it, before changing or dropping the row, when the env drops the
+bucket, switches mode or is deleted; a failed revocation fails the deploy or
+delete and is retried. The env ID in the name means a re-created env with the
+same names inherits nothing. Apps must use the
+Google Cloud Storage client libraries with Application Default Credentials:
+an S3 SDK cannot sign without an HMAC key, and app code cannot mint V4 signed
+URLs without a Google service account. For browser uploads, start a resumable
+upload session on the server and hand the session URI to the browser. The mode
+changes the app contract, so `auto` never picks it unless the worker sets
+`EVE_APP_BUCKET_AUTH_MODE=workload-identity`. The worker needs
+`EVE_GKE_WORKLOAD_IDENTITY_POOL`
+(`projects/<number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog`)
+and a native GCS storage client (`EVE_STORAGE_BACKEND=gcs` without HMAC keys)
+whose identity may get and set IAM on app buckets. Design:
+[app-object-bucket-gcp-workload-identity-plan.md](../plans/app-object-bucket-gcp-workload-identity-plan.md).
+
 Provisioned buckets are tracked in the `storage_buckets` table and shown by
 `eve env diagnose`, including the resolved isolation mode and IRSA metadata
 when present. Removing a bucket from the manifest prunes the stale
 `storage_buckets` row on the next deploy without deleting the physical bucket.
 Removing all bucket declarations removes the env binding and rows.
 
+Visibility is reconciled both ways. When a bucket Eve made public is declared
+`private` again, or leaves the manifest, the next deploy removes its anonymous
+read grant before updating or pruning its row: GCS drops `allUsers` and
+`allAuthenticatedUsers` from the bucket IAM policy; S3 turns Block Public
+Access back on and removes the public-read statement. If that fails, the
+deploy fails and the next one retries. Deleting an environment un-publishes
+its public buckets best effort. Bucket data is never deleted, and grants added
+outside Eve to buckets Eve never published are left alone.
+
+Physical names are `{prefix}-{orgSlug}-{projectSlug}-{envName}-{bucketName}`.
+Env and bucket names can both contain hyphens, so two environments of one
+project can map to the same name (env `test` with bucket `ab-cd`, env
+`test-ab` with bucket `cd`). A deploy whose physical bucket name is already
+tracked for another environment or project fails before any credentials are
+granted; rename the bucket or the environment.
+
 If the target platform has no configured object storage, if explicit
-`isolation: irsa` is requested on a cluster without IRSA configuration, or if
-bucket creation/policy setup fails, deploy fails before starting the app. Local
+`isolation: irsa` or `isolation: workload-identity` is requested on a cluster
+without that configuration, or if bucket creation/policy setup fails, deploy
+fails before starting the app. A `visibility: public` bucket needs an
+anonymous read grant (GCS `allUsers`, an S3 policy for `*`); when an
+organisation policy (`iam.allowedPolicyMemberDomains`,
+`iam.managed.allowedPolicyMembers`) or S3 Block Public Access refuses it, the
+deploy error names that policy. Either allow the grant for the app bucket
+prefix or keep the bucket private and serve objects through the app,
+presigned URLs (`shared` mode) or a CDN. Local
 k3d MinIO uses server-wide CORS (`MINIO_API_CORS_ALLOW_ORIGIN=*`) because MinIO
 does not reliably support the S3 per-bucket CORS API. Wildcard app bucket CORS
 works for browser presigned URL flows; restrictive origins are recorded in
@@ -797,10 +867,15 @@ per org/project/env, binds it to `ServiceAccount/eve-app`, and fully replaces
 the role's `app-bucket-access` inline policy with the env's declared physical
 bucket names. The role can read/write only those buckets.
 
+On GKE, `isolation: workload-identity` gives the same per-env boundary
+without keys: each env's `ServiceAccount/eve-app` principal holds object
+access on that env's buckets only.
+
 Shared static app-bucket credentials remain available as an explicit fallback
 for non-IRSA clusters. Setting `EVE_APP_BUCKET_AUTH_MODE=shared` on the worker
-forces that fallback even when IRSA env vars are present. Local k3d resolves
-`auto` to `minio-static-key`.
+forces that fallback even when IRSA env vars are present;
+`EVE_APP_BUCKET_AUTH_MODE=workload-identity` makes `auto` prefer GKE Workload
+Identity. Local k3d resolves `auto` to `minio-static-key`.
 
 ## Cloud FS
 

@@ -135,7 +135,28 @@ List results are ordered by `created_at` descending (newest first).
 
 ### 6. Error Responses
 
-Errors currently use NestJS default error shapes. We may add a standardized error envelope later, but it is not enforced yet.
+Errors currently use NestJS default error shapes:
+`{ "statusCode": 404, "error": "Not Found", "message": "..." }`. We may add a
+standardized error envelope later, but it is not enforced yet.
+
+A request body that fails its Zod schema gets a `400` with the same fields plus
+one entry per failed check:
+
+```json
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "errors": [
+    { "path": "slug", "message": "Slug must be 2-12 lowercase alphanumeric characters starting with a letter", "code": "invalid_string" }
+  ]
+}
+```
+
+`path` is the dotted field path (`""` for the body itself) and `code` is the Zod
+issue code. The CLI prints each issue as `path: message` under the error line.
+Body validation goes through `ZodValidationPipe`; endpoints should use it rather
+than calling `Schema.parse()` themselves, which turns a bad request into a 500.
 
 ### 7. Soft Delete
 
@@ -143,6 +164,19 @@ Resources support soft delete via a `deleted` boolean:
 - Deleted resources are excluded from lists by default
 - Include `?include_deleted=true` to show deleted items
 - `PATCH` supports `{ "deleted": true }` to mark deleted
+
+Projects also take `DELETE /projects/:id`, which tears down the
+project's deployments first. Without flags it soft-deletes. `?hard=true`
+removes the project and everything it owns (environments, jobs, events,
+builds, pipeline runs, agents, project-scoped webhook subscriptions) in one
+transaction; billing usage records and org documents are kept with their
+project reference cleared. A hard delete is refused with `409` while the
+project has a managed database that is not destroyed, because removing its
+record would orphan the database; `?force=true` deletes anyway and also
+continues past teardown failures. CLI: `eve project delete <project_id> [--hard] [--force]`.
+
+Agents of a soft-deleted project no longer reserve their org-wide slugs or
+aliases, and chat routing ignores them.
 
 ### 8. Timestamps
 

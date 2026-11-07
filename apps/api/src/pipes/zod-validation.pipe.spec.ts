@@ -21,6 +21,42 @@ describe('ZodValidationPipe', () => {
     expect(() => pipe.transform({}, bodyMeta)).toThrow(BadRequestException);
   });
 
+  it('reports every issue with its path, message and code in the standard error body', () => {
+    const pipe = new ZodValidationPipe(
+      z.object({ slug: z.string().max(12), owner: z.object({ email: z.string().email() }) }),
+    );
+    let thrown: unknown;
+    try {
+      pipe.transform({ slug: 'manualtestorgx', owner: { email: 'nope' } }, bodyMeta);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(BadRequestException);
+    const exception = thrown as BadRequestException;
+    expect(exception.getStatus()).toBe(400);
+    expect(exception.getResponse()).toEqual({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Validation failed',
+      errors: [
+        { path: 'slug', message: 'String must contain at most 12 character(s)', code: 'too_big' },
+        { path: 'owner.email', message: 'Invalid email', code: 'invalid_string' },
+      ],
+    });
+  });
+
+  it('uses an empty path for an issue with the body itself', () => {
+    const pipe = new ZodValidationPipe(schema);
+    try {
+      pipe.transform('not an object', bodyMeta);
+      expect.unreachable();
+    } catch (error) {
+      const body = (error as BadRequestException).getResponse() as { errors: Array<{ path: string; code: string }> };
+      expect(body.errors).toEqual([expect.objectContaining({ path: '', code: 'invalid_type' })]);
+    }
+  });
+
   // Regression: a method-level @UsePipes(ZodValidationPipe) runs against every
   // argument, including @CurrentUser()/@CorrelationId() custom params. Those
   // must pass through untouched, not be parsed against the body schema.

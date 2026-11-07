@@ -61,9 +61,19 @@ gemini --sandbox ...
 
 For production deployments using Kubernetes runner pods:
 - Each job executes in an isolated container
+- No service account token is mounted (`automountServiceAccountToken: false`);
+  set `EVE_RUNNER_SERVICE_ACCOUNT` to an account with no RBAC or cloud identity
+- All Linux capabilities dropped, UID 1000, no privilege escalation
+- Placement on the job pool via `EVE_RUNNER_NODE_SELECTOR_*`,
+  `EVE_RUNNER_TAINT_*` and optional `EVE_RUNNER_POD_AFFINITY_*`, away from the
+  platform's own nodes
 - Network policies restrict pod communication
 - Resource limits prevent DoS attacks
 - Ephemeral storage destroyed after job completion
+
+Runner pods still receive `DATABASE_URL` and `EVE_INTERNAL_API_KEY`, which the
+runner process uses to record logs and resolve secrets. See
+[job-execution-isolation-plan.md](../plans/job-execution-isolation-plan.md).
 
 ## Configuration
 
@@ -103,6 +113,13 @@ Each job has a unique workspace path. Sandboxing prevents traversal to:
 ### Bash Command Execution
 
 CLI sandboxes primarily restrict file system tools (Read, Write, Edit, Glob, etc.). The Bash tool can execute arbitrary commands which may bypass file restrictions.
+
+Bash can also read `/proc`, signal processes and write the shared HOME. The
+agent runtime and worker run as the same UID as the job, so their images start
+them from an execute-only interpreter with `--disable-sigusr1`, and their own
+helpers run from a root-owned PATH with no credentials in their environment
+(see [agent-secret-isolation.md](./agent-secret-isolation.md#layer-1b-the-runtimes-own-environment)).
+This is defence in depth, not a sandbox boundary.
 
 Mitigations:
 1. **Container isolation**: Runner pods provide syscall-level isolation

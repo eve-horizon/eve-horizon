@@ -37,6 +37,7 @@ import {
   isEveRegistry,
   loadConfig,
   mintJobToken,
+  resolveBuildImageRef,
   resolveProjectSecrets,
   expandManifestReferences,
   type RelayDb,
@@ -45,6 +46,7 @@ import {
   toK8sName,
   readPositiveTimeoutSeconds,
 } from '@eve/shared';
+import { serviceGitEnv } from '@eve/shared';
 import * as yaml from 'yaml';
 import { DeployerService } from '../deployer/deployer.service';
 import { ImageBuilderService } from '../builder/image-builder.service.js';
@@ -52,6 +54,7 @@ import { classifyBuildError } from './error-classifier.js';
 import { K8sOperationError } from '../deployer/k8s-error.js';
 import { DeployFailureError, classifyFromSnapshot } from '../deployer/deploy-failure.js';
 import { runStreamingCommand } from '../execution/streaming-command.js';
+import { buildJobCommandEnv } from '../execution/job-command-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -417,6 +420,15 @@ export class ActionExecutorService {
     const registry = getRegistryConfig(parsedManifest);
     const registryHost = registry?.host
       ?? (isEveRegistry(parsedManifest) ? loadConfig().EVE_REGISTRY_HOST ?? null : null);
+    // Where each service's image is pushed: the same rule the image builder
+    // uses (Eve registry images go under the project's prefix).
+    const eveProjectId = isEveRegistry(parsedManifest) ? projectId : undefined;
+    const imageRefFor = (image: string): string =>
+      registryHost ? resolveBuildImageRef(image, registryHost, eveProjectId) : image;
+    const expectedImageRefs: Record<string, string> = {};
+    for (const [serviceName, service] of Object.entries(buildable)) {
+      if (service.image) expectedImageRefs[serviceName] = imageRefFor(service.image);
+    }
 
     const components = input.components ?? [];
     await this.appendLog(attemptId, 'status', {
@@ -434,7 +446,13 @@ export class ActionExecutorService {
 
     const allowReuse = !input.force_rebuild && process.env.EVE_BUILD_REUSE !== 'false';
     if (allowReuse) {
-      const reusable = await this.findReusableBuild(projectId, input.git_sha, input.manifest_hash, services);
+      const reusable = await this.findReusableBuild(
+        projectId,
+        input.git_sha,
+        input.manifest_hash,
+        services,
+        expectedImageRefs,
+      );
       if (reusable) {
         await this.appendLog(attemptId, 'status', {
           message: `Reusing existing build ${reusable.build_id} for ${services.join(', ')}`,
@@ -579,21 +597,7 @@ export class ActionExecutorService {
         const service = buildable[serviceName];
         const image = service?.image;
         if (!image) continue;
-        const imageWithoutDigest = image.split('@')[0];
-        const lastSlashIndex = imageWithoutDigest.lastIndexOf('/');
-        const lastColonIndex = imageWithoutDigest.lastIndexOf(':');
-        const imageName =
-          lastColonIndex > lastSlashIndex
-            ? imageWithoutDigest.slice(0, lastColonIndex)
-            : imageWithoutDigest;
-        const imageFirstSegment = imageName.split('/')[0];
-        const hasRegistry =
-          imageFirstSegment.includes('.') ||
-          imageFirstSegment.includes(':') ||
-          imageFirstSegment === 'localhost';
-        const imageRef = hasRegistry || !registryHost
-          ? image
-          : `${registryHost}/${image}`;
+        const imageRef = imageRefFor(image);
 
         await this.builds.createArtifact({
           id: generateBuildArtifactId(),
@@ -662,6 +666,7 @@ export class ActionExecutorService {
     gitSha: string,
     manifestHash: string,
     services: string[],
+    expectedImageRefs: Record<string, string> = {},
   ): Promise<{ build_id: string; image_digests: Record<string, string> } | null> {
     const requested = new Set(services);
     const specs = await this.builds.listSpecs({ project_id: projectId, limit: 50, offset: 0 });
@@ -683,7 +688,10 @@ export class ActionExecutorService {
 
       const imageDigests: Record<string, string> = {};
       for (const artifact of artifacts) {
-        if (requested.has(artifact.service_name)) {
+        // Only reuse an image that lives where this build would push it (an
+        // older build may have pushed outside the project's registry prefix).
+        const expected = expectedImageRefs[artifact.service_name];
+        if (requested.has(artifact.service_name) && (!expected || artifact.image_ref === expected)) {
           imageDigests[artifact.service_name] = artifact.digest;
         }
       }
@@ -766,7 +774,7 @@ export class ActionExecutorService {
       try {
         await execFileAsync('git', ['tag', '-a', tag, '-m', `Release ${tag}`], {
           cwd: workspace,
-          env: process.env,
+          env: serviceGitEnv(),
           maxBuffer: 1024 * 1024,
         });
       } catch (error) {
@@ -1927,7 +1935,7 @@ export class ActionExecutorService {
 
     try {
       await execFileAsync('git', ['clone', '--no-checkout', cloneUrl, workspace], {
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       });
     } catch (err) {
@@ -1944,7 +1952,7 @@ export class ActionExecutorService {
     onLog?.(`Checking out ${gitSha.substring(0, 8)}...`);
     await execFileAsync('git', ['checkout', gitSha], {
       cwd: workspace,
-      env: process.env,
+      env: serviceGitEnv(),
       maxBuffer: 1024 * 1024,
     });
     onLog?.('Workspace ready');
@@ -2033,7 +2041,7 @@ export class ActionExecutorService {
     try {
       const { stdout } = await execFileAsync('git', ['describe', '--tags', '--abbrev=0', gitSha], {
         cwd: workspace,
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       });
       return stdout.trim() || null;
@@ -2048,7 +2056,7 @@ export class ActionExecutorService {
       ['log', '--no-merges', '--pretty=format:%s%n%b%n----END----', range],
       {
         cwd: workspace,
-        env: process.env,
+        env: serviceGitEnv(),
         maxBuffer: 1024 * 1024,
       },
     );
@@ -2148,21 +2156,13 @@ export class ActionExecutorService {
     runHome: string;
     jobToken?: string;
   }): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: params.runHome,
-      TERM: process.env.TERM,
-      LANG: process.env.LANG,
-      USER: process.env.USER,
-      SHELL: process.env.SHELL,
-      EVE_JOB_ID: params.jobId,
-      EVE_PROJECT_ID: params.projectId,
-      EVE_ATTEMPT_ID: params.attemptId,
-    };
-    if (process.env.EVE_API_URL) env.EVE_API_URL = process.env.EVE_API_URL;
-    if (process.env.EVE_PUBLIC_API_URL) env.EVE_PUBLIC_API_URL = process.env.EVE_PUBLIC_API_URL;
-    if (params.jobToken) env.EVE_JOB_TOKEN = params.jobToken;
-    return env;
+    return buildJobCommandEnv({
+      home: params.runHome,
+      jobId: params.jobId,
+      projectId: params.projectId,
+      attemptId: params.attemptId,
+      jobToken: params.jobToken,
+    });
   }
 
   /**

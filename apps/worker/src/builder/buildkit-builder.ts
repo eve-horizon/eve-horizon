@@ -3,12 +3,14 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { eveRegistryImageRef } from '@eve/shared';
 import {
   BuildAllParams,
   BuildResult,
   BuildServiceParams,
   BuildBackend,
 } from './image-builder.interface.js';
+import { serviceHelperEnv } from '@eve/shared';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
@@ -31,6 +33,23 @@ function parseHostFromImageRef(imageRef: string): string | null {
     return firstSegment;
   }
   return null;
+}
+
+/**
+ * The BuildKit registry cache to use for a build. A cache on the Eve registry
+ * becomes one per project (under the project's prefix): a shared cache would
+ * let one project's build feed layers into another's, and a project's push
+ * credential cannot write outside its prefix anyway.
+ */
+export function resolveBuildkitCacheRepo(
+  cacheRepo: string | undefined,
+  registryHost: string,
+  eveProjectId: string | undefined,
+): string | undefined {
+  if (cacheRepo && eveProjectId && cacheRepo.startsWith(`${registryHost}/`)) {
+    return eveRegistryImageRef(cacheRepo, registryHost, eveProjectId);
+  }
+  return cacheRepo || undefined;
 }
 
 function parseHostFromRegistryRef(ref: string): string | null {
@@ -172,7 +191,11 @@ export class BuildKitBuilder implements BuildBackend {
         params.onLog?.(`buildkit registry transport: insecure for ${params.registryAuth.host}`);
       }
 
-      const cacheRepo = process.env.EVE_BUILDKIT_CACHE_REPO;
+      const cacheRepo = resolveBuildkitCacheRepo(
+        process.env.EVE_BUILDKIT_CACHE_REPO,
+        params.registryAuth.host,
+        params.registryConfig.eveProjectId,
+      );
       if (cacheRepo) {
         const cacheHost = parseHostFromRegistryRef(cacheRepo);
         const insecureCache = shouldUseInsecureRegistryForHost(cacheHost, insecureHosts);
@@ -266,10 +289,8 @@ export class BuildKitBuilder implements BuildBackend {
       onLine?: (line: string) => void;
     },
   ): Promise<{ exitCode: number }> {
-    const env = {
-      ...process.env,
-      ...opts.env,
-    };
+    // Allowlisted env plus the per-build DOCKER_CONFIG; no service credentials.
+    const env = serviceHelperEnv(opts.env);
 
     const proc = spawn('buildctl', args, {
       cwd: opts.cwd,

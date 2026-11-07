@@ -104,6 +104,9 @@ export const configSchema = z.object({
   EVE_BOOTSTRAP_TOKEN: z.string().optional(),
   EVE_BOOTSTRAP_TRIGGER_FILE: z.string().default('/tmp/eve-bootstrap-enable'),
   EVE_BOOTSTRAP_WINDOW_MINUTES: z.coerce.number().default(10),
+  // Dev/test only: once an admin exists, let a repeat bootstrap call re-issue that
+  // admin's token (integration tests, local stacks). Ignored when NODE_ENV=production.
+  EVE_DEV_REBOOTSTRAP: booleanFromEnv.default(false),
   EVE_AUTH_CHALLENGE_TTL_SECONDS: z.coerce.number().default(300),
   EVE_SUPABASE_URL: z.string().optional(),
   SUPABASE_URL: z.string().optional(),
@@ -134,6 +137,10 @@ export const configSchema = z.object({
   EVE_PLATFORM_INGRESS_IP: z.string().optional(), // Platform ingress IP for custom domain DNS verification
   EVE_PLATFORM_INGRESS_HOSTNAME: z.string().optional(), // Platform ingress hostname for CNAME verification
   EVE_MAX_CUSTOM_DOMAINS_PER_PROJECT: z.coerce.number().int().min(1).default(10), // Max custom domains per project
+  // Comma-separated domains no project may claim as a custom domain; each also reserves its
+  // subdomains. Set it to the platform's parent domain when DNS has an apex or wildcard record
+  // pointing at the platform ingress (e.g. example.com). The platform's own hosts are always reserved.
+  EVE_RESERVED_DOMAINS: z.string().optional(),
   EVE_REGISTRY_HOST: z.string().optional(), // Eve-native container registry host (e.g., registry.eve.example.com)
   EVE_REGISTRY_SIGNING_KEY: z.string().optional(), // RSA private key (PEM) for signing registry JWTs
   EVE_CORS_ORIGIN: z.string().default('*'), // CORS origin: '*' (any), 'true' (reflect), or specific URL
@@ -148,11 +155,15 @@ export const configSchema = z.object({
   EVE_STORAGE_ORG_BUCKET_PREFIX: z.string().optional(),
   EVE_STORAGE_APP_BUCKET_PREFIX: z.string().optional(),
   EVE_STORAGE_INTERNAL_BUCKET: z.string().optional(),
+  EVE_STORAGE_GCP_PROJECT_NUMBER: z.string().optional(), // Project that must own existing GCS buckets (default: metadata server)
   EVE_APP_STORAGE_ENDPOINT: z.string().optional(),
   EVE_APP_STORAGE_PUBLIC_ENDPOINT: z.string().optional(),
   EVE_APP_STORAGE_REGION: z.string().optional(),
   EVE_APP_STORAGE_ACCESS_KEY_ID: z.string().optional(),
   EVE_APP_STORAGE_SECRET_ACCESS_KEY: z.string().optional(),
+  // GKE Workload Identity pool for keyless app buckets:
+  // projects/<number>/locations/global/workloadIdentityPools/<project-id>.svc.id.goog
+  EVE_GKE_WORKLOAD_IDENTITY_POOL: z.string().optional(),
 
   // SES mailer hardening. See docs/plans/magic-link-email-silent-drop-plan.md.
   // 'auto' = enabled when GOTRUE_SMTP_HOST is *.amazonaws.com. 'true'/'false' override.
@@ -168,6 +179,17 @@ export const configSchema = z.object({
   // Compute model for the cluster the deployer is targeting. Drives compute-class
   // and stable-egress branching. The worker overlay sets this for managed clusters.
   EVE_COMPUTE_MODEL: z.enum(['k3s', 'gke', 'eks', 'aks', 'ecs']).default('k3s'),
+
+  // App pod placement (docs/plans/app-compute-classes-plan.md): pins app Deployments and
+  // service Jobs to a dedicated node pool on gke/eks/aks. Off unless enabled, so clusters that
+  // already carry the selector/taint variables keep scheduling apps where they do today.
+  EVE_APP_PLACEMENT_ENABLED: booleanFromEnv.default(false),
+  EVE_APP_NODE_SELECTOR_KEY: z.string().optional(),
+  EVE_APP_NODE_SELECTOR_VALUE: z.string().optional(),
+  EVE_APP_TAINT_KEY: z.string().optional(),
+  EVE_APP_TAINT_VALUE: z.string().optional(),
+  // NoSchedule | PreferNoSchedule | NoExecute; validated by the deployer, default NoSchedule.
+  EVE_APP_TAINT_EFFECT: z.string().optional(),
   EVE_TCP_INGRESS_PROVIDER: z.enum(['none', 'aws-nlb', 'klipper']).default('none'),
   EVE_TCP_INGRESS_HOSTED_ZONE: z.string().optional(),
 

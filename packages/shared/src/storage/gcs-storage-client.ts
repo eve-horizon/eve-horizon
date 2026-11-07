@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import type {
+  BucketIamMemberClient,
   ObjectStorageClient,
   StorageGetObjectResult,
   StorageObjectMetadata,
@@ -9,6 +10,17 @@ import type {
 } from './storage-client.js';
 
 const DEFAULT_TTL = 300;
+const METADATA_TIMEOUT_MS = 3000;
+
+export interface GcsStorageClientConfig {
+  region?: string;
+  /**
+   * Numeric ID of the Google Cloud project that must own every bucket this
+   * client creates or adopts. Defaults to EVE_STORAGE_GCP_PROJECT_NUMBER, then
+   * to the project the GKE/GCE metadata server reports.
+   */
+  projectNumber?: string;
+}
 
 /**
  * Native GCS storage client using Application Default Credentials.
@@ -19,12 +31,16 @@ const DEFAULT_TTL = 300;
  * Uses dynamic import so @google-cloud/storage is only loaded at runtime
  * when this code path is actually used. AWS deployments never load it.
  */
-export class GcsStorageClient implements ObjectStorageClient {
+export class GcsStorageClient implements ObjectStorageClient, BucketIamMemberClient {
   private storagePromise: Promise<any>;
   private readonly location: string;
+  private readonly configuredProjectNumber?: string;
+  private projectNumberPromise: Promise<string | null> | null = null;
 
-  constructor(config: { region?: string }) {
+  constructor(config: GcsStorageClientConfig) {
     this.location = config.region ?? 'us';
+    this.configuredProjectNumber =
+      config.projectNumber?.trim() || process.env.EVE_STORAGE_GCP_PROJECT_NUMBER?.trim() || undefined;
     this.storagePromise = this.initStorage();
   }
 
@@ -122,16 +138,67 @@ export class GcsStorageClient implements ObjectStorageClient {
     return url;
   }
 
+  /**
+   * Create a bucket, or adopt an existing one only when this platform's
+   * project owns it. Bucket names are global, so GCS answers 409 both for a
+   * bucket we already own and for a name another project holds; adopting the
+   * latter would let an outsider pre-create a predictable app bucket name and
+   * receive the app's writes.
+   */
   async ensureBucket(name: string): Promise<void> {
     const storage = await this.getStorage();
     try {
       await storage.createBucket(name, { location: this.location });
     } catch (err: unknown) {
-      const code = (err as { code?: number })?.code;
-      // 409 = bucket already exists
-      if (code === 409) return;
+      if (gcsErrorCode(err) !== 409) throw err;
+      await this.assertBucketOwnedByPlatform(storage, name);
+    }
+  }
+
+  private async assertBucketOwnedByPlatform(storage: any, name: string): Promise<void> {
+    let metadata: { projectNumber?: string | number } | undefined;
+    try {
+      [metadata] = await storage.bucket(name).getMetadata();
+    } catch (err: unknown) {
+      const code = gcsErrorCode(err);
+      if (code === 401 || code === 403 || code === 404) {
+        throw new Error(
+          `Bucket name "${name}" already exists but this platform cannot read it (HTTP ${code}); ` +
+            'it belongs to another Google Cloud project. Refusing to use it.',
+        );
+      }
       throw err;
     }
+
+    const expected = await this.resolveProjectNumber();
+    if (!expected) {
+      throw new Error(
+        `Bucket "${name}" already exists and its owner cannot be verified: ` +
+          'set EVE_STORAGE_GCP_PROJECT_NUMBER to the numeric ID of the project that owns Eve buckets ' +
+          '(the GCE/GKE metadata server was not reachable).',
+      );
+    }
+
+    const actual = metadata?.projectNumber == null ? '' : String(metadata.projectNumber);
+    if (actual !== expected) {
+      throw new Error(
+        `Bucket "${name}" already exists in another Google Cloud project ` +
+          `(project number ${actual || 'unknown'}, expected ${expected}). Refusing to use it.`,
+      );
+    }
+  }
+
+  private resolveProjectNumber(): Promise<string | null> {
+    if (this.configuredProjectNumber) {
+      return Promise.resolve(this.configuredProjectNumber);
+    }
+    if (!this.projectNumberPromise) {
+      this.projectNumberPromise = fetchMetadataProjectNumber().then((value) => {
+        if (!value) this.projectNumberPromise = null; // retry on the next call
+        return value;
+      });
+    }
+    return this.projectNumberPromise;
   }
 
   async setBucketCors(name: string, rules: StorageCorsRule[]): Promise<void> {
@@ -146,6 +213,71 @@ export class GcsStorageClient implements ObjectStorageClient {
     );
   }
 
+  async addBucketIamMember(name: string, role: string, member: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    const [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    const bindings: Array<{ role: string; members?: string[]; condition?: unknown }> = policy.bindings || [];
+    const binding = bindings.find((candidate) => candidate.role === role && !candidate.condition);
+    if (binding?.members?.includes(member)) return;
+    if (binding) {
+      binding.members = [...(binding.members ?? []), member];
+    } else {
+      bindings.push({ role, members: [member] });
+    }
+    policy.bindings = bindings;
+    await bucket.iam.setPolicy(policy);
+  }
+
+  async removeBucketIamMember(name: string, role: string, member: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    let policy: any;
+    try {
+      [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 404) return; // bucket gone: no grant left
+      throw err;
+    }
+    const bindings: Array<{ role: string; members?: string[]; condition?: unknown }> = policy.bindings || [];
+    let changed = false;
+    const kept = bindings.flatMap((binding) => {
+      if (binding.role !== role || binding.condition || !binding.members?.includes(member)) return [binding];
+      changed = true;
+      const members = binding.members.filter((candidate) => candidate !== member);
+      return members.length > 0 ? [{ ...binding, members }] : [];
+    });
+    if (!changed) return;
+    policy.bindings = kept;
+    await bucket.iam.setPolicy(policy);
+  }
+
+  async removeBucketPublicReadPolicy(name: string): Promise<void> {
+    const storage = await this.getStorage();
+    const bucket = storage.bucket(name);
+    let policy: any;
+    try {
+      [policy] = await bucket.iam.getPolicy({ requestedPolicyVersion: 3 });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 404) return; // bucket gone: nothing is public
+      throw err;
+    }
+    const bindings: Array<{ role: string; members?: string[] }> = policy.bindings || [];
+    let changed = false;
+    const kept: Array<{ role: string; members?: string[] }> = [];
+    for (const binding of bindings) {
+      const members = binding.members ?? [];
+      const privateMembers = members.filter((member) => member !== 'allUsers' && member !== 'allAuthenticatedUsers');
+      if (privateMembers.length !== members.length) changed = true;
+      if (privateMembers.length > 0 || members.length === 0) {
+        kept.push({ ...binding, members: privateMembers });
+      }
+    }
+    if (!changed) return;
+    policy.bindings = kept;
+    await bucket.iam.setPolicy(policy);
+  }
+
   async setBucketPublicReadPolicy(name: string): Promise<void> {
     const storage = await this.getStorage();
     const bucket = storage.bucket(name);
@@ -156,5 +288,29 @@ export class GcsStorageClient implements ObjectStorageClient {
       members: ['allUsers'],
     });
     await bucket.iam.setPolicy(policy);
+  }
+}
+
+function gcsErrorCode(err: unknown): number | undefined {
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === 'number' ? code : undefined;
+}
+
+/**
+ * Numeric project ID from the GCE/GKE metadata server (Workload Identity
+ * serves it too). Returns null off Google Cloud or on any failure.
+ */
+async function fetchMetadataProjectNumber(): Promise<string | null> {
+  const host = process.env.GCE_METADATA_HOST?.trim() || 'metadata.google.internal';
+  try {
+    const res = await fetch(`http://${host}/computeMetadata/v1/project/numeric-project-id`, {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(METADATA_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = (await res.text()).trim();
+    return /^\d+$/.test(body) ? body : null;
+  } catch {
+    return null;
   }
 }

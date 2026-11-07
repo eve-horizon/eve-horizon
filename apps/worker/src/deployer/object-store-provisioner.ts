@@ -1,5 +1,5 @@
 import type { Logger } from '@nestjs/common';
-import type { Db } from '@eve/db';
+import type { Db, StorageBucket } from '@eve/db';
 import { storageBucketQueries } from '@eve/db';
 import {
   type ObjectStoreBucket,
@@ -9,13 +9,17 @@ import {
   getServiceObjectStoreIsolation,
   generateStorageBucketId,
 } from '@eve/shared';
-import type {
-  AppCredentialProvisioner,
-  AppObjectStoreBinding,
-  AppObjectStoreCredentialMode,
-  AppObjectStoreScope,
+import {
+  APP_STORAGE_CREDENTIALS_SECRET,
+  type AppCredentialProvisioner,
+  type AppObjectStoreBinding,
+  type AppObjectStoreCredentialMode,
+  type AppObjectStoreEnvVar,
+  type AppObjectStoreScope,
 } from './app-credential-provisioner/factory';
+import { GCP_APP_BUCKET_ROLE } from './app-credential-provisioner/gcp-workload-identity';
 import type { BucketProvisioner } from './bucket-provisioner';
+import type { K8sService } from './k8s.service';
 
 export interface ObjectStoreDesiredBucket {
   serviceName: string;
@@ -44,6 +48,7 @@ export class ObjectStoreProvisioner {
     private readonly db: Db,
     private readonly bucketProvisioner: BucketProvisioner,
     private readonly appCredentialProvisioners: AppCredentialProvisioner[],
+    private readonly k8s: Pick<K8sService, 'createSecret' | 'deleteSecret'>,
     private readonly logger: Logger,
     private readonly resolveXeve: (service: Service) => Record<string, unknown> | null,
   ) {
@@ -65,6 +70,9 @@ export class ObjectStoreProvisioner {
 
     if (desired.length === 0) {
       if (typeof this.db === 'function') {
+        const previous = await this.storageBuckets.listByEnv(params.scope.projectId, params.scope.envName);
+        await this.unpublishBuckets(params.scope, previous, new Set());
+        await this.revokeRecordedGrants(params.scope, previous, () => false);
         await this.removeObjectStoreBinding(params.scope);
         await this.storageBuckets.deleteByEnv(params.scope.projectId, params.scope.envName);
       }
@@ -79,13 +87,48 @@ export class ObjectStoreProvisioner {
       );
     }
 
+    // Before any credential grant: a colliding name would hand this env
+    // another env's bucket.
+    await this.assertPhysicalNamesUnclaimed(params.scope, desired);
+
+    // Read what was published before the upserts below overwrite it. A
+    // bucket that turned private or left the manifest loses its public
+    // grant first, so a failure leaves its row in place for the next deploy.
+    const previous = await this.storageBuckets.listByEnv(params.scope.projectId, params.scope.envName);
+    const stillPublic = new Set(
+      desired
+        .filter((entry) => (entry.bucket.visibility ?? 'private') === 'public')
+        .map((entry) => entry.physicalName),
+    );
+    await this.unpublishBuckets(params.scope, previous, stillPublic);
+
     const requestedMode = this.resolveRequestedObjectStoreIsolation(desired, params.scope.envName);
     const provisioner = this.selectObjectStoreCredentialProvisioner(requestedMode, desired);
     const physicalBucketNames = [...new Set(desired.map((entry) => entry.physicalName))].sort();
     const binding = await provisioner.ensureForEnv(params.scope, physicalBucketNames);
+    await this.syncCredentialSecret(params.scope.namespace, binding);
+
+    // Revoke recorded grants the new binding does not keep (bucket dropped,
+    // mode switched, member changed) before the upserts below overwrite them.
+    await this.revokeRecordedGrants(
+      params.scope,
+      previous,
+      (row) => physicalBucketNames.includes(row.physical_name) && row.iam_member === (binding.bucketMember ?? null),
+    );
 
     for (const entry of desired) {
       await this.provisionObjectStoreBucket(entry, params.scope, binding);
+    }
+
+    if (provisioner.grantBucketAccess) {
+      try {
+        await provisioner.grantBucketAccess(params.scope, physicalBucketNames);
+      } catch (error) {
+        throw new Error(
+          `Failed to grant ${binding.mode} access to the object_store buckets of env "${params.scope.envName}": ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
 
     await this.storageBuckets.deleteMissingForEnv(
@@ -131,6 +174,122 @@ export class ObjectStoreProvisioner {
       }
     }
     return desired;
+  }
+
+  /**
+   * Physical names join org, project, env and bucket with hyphens, which env
+   * and bucket names may also contain (env "test" + bucket "a-x" and env
+   * "test-a" + bucket "x" give the same name). Existing names cannot change
+   * without orphaning data, so a name already tracked for another env or
+   * project is refused instead.
+   */
+  private async assertPhysicalNamesUnclaimed(
+    scope: AppObjectStoreScope,
+    desired: ObjectStoreDesiredBucket[],
+  ): Promise<void> {
+    const claims = await this.storageBuckets.listByPhysicalNames(
+      [...new Set(desired.map((entry) => entry.physicalName))],
+    );
+    const conflicts = new Map<string, string>();
+    for (const claim of claims) {
+      if (claim.project_id === scope.projectId && claim.env_name === scope.envName) continue;
+      const entry = desired.find((candidate) => candidate.physicalName === claim.physical_name);
+      if (!entry || conflicts.has(claim.physical_name)) continue;
+      const owner = claim.project_id === scope.projectId
+        ? `env "${claim.env_name}" (bucket "${claim.name}")`
+        : 'another project';
+      conflicts.set(
+        claim.physical_name,
+        `bucket "${entry.bucket.name}" maps to "${claim.physical_name}", which ${owner} already uses`,
+      );
+    }
+    if (conflicts.size === 0) return;
+    throw new Error(
+      `Object-store bucket name collision in env "${scope.envName}": ${[...conflicts.values()].join('; ')}. ` +
+      'Rename the bucket or the environment.',
+    );
+  }
+
+  /**
+   * Remove the public grant from buckets Eve published for this env that
+   * are no longer declared public. Data is never deleted.
+   */
+  private async unpublishBuckets(
+    scope: AppObjectStoreScope,
+    previous: StorageBucket[],
+    stillPublic: Set<string>,
+  ): Promise<void> {
+    const names = [...new Set(
+      previous
+        .filter((row) => row.visibility === 'public' && !stillPublic.has(row.physical_name))
+        .map((row) => row.physical_name),
+    )].sort();
+    const failures: string[] = [];
+    for (const name of names) {
+      try {
+        await this.bucketProvisioner.removeBucketPublicReadPolicy(name);
+        this.logger.log(`Removed public read access from bucket ${name} (no longer declared public)`);
+      } catch (error) {
+        failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `Failed to remove public read access from bucket(s) no longer declared public in env "${scope.envName}": ` +
+        `${failures.join('; ')}`,
+      );
+    }
+  }
+
+  /**
+   * Revoke the bucket grants recorded on the env's rows, by recorded member
+   * and whatever mode the env uses now, unless `keep` holds. Fails with every
+   * error collected; callers revoke before rewriting or dropping rows, so a
+   * failed revocation stays tracked and the next deploy or delete retries it.
+   */
+  private async revokeRecordedGrants(
+    scope: AppObjectStoreScope,
+    rows: StorageBucket[],
+    keep: (row: StorageBucket) => boolean,
+  ): Promise<void> {
+    const grants = new Map<string, { bucket: string; member: string }>();
+    for (const row of rows) {
+      if (!row.iam_member || keep(row)) continue;
+      grants.set(`${row.physical_name} ${row.iam_member}`, { bucket: row.physical_name, member: row.iam_member });
+    }
+    const failures: string[] = [];
+    for (const { bucket, member } of grants.values()) {
+      try {
+        await this.bucketProvisioner.removeBucketIamMember(bucket, GCP_APP_BUCKET_ROLE, member);
+        this.logger.log(`Revoked ${member} from bucket ${bucket}`);
+      } catch (error) {
+        failures.push(`${bucket}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `Failed to revoke object_store bucket access for env "${scope.envName}": ${failures.join('; ')}`,
+      );
+    }
+  }
+
+  /**
+   * Env deletion: revoke every recorded grant of the env. Throws on failure so
+   * the delete can be retried with the rows still in place.
+   */
+  async revokeEnvGrants(scope: AppObjectStoreScope): Promise<void> {
+    const rows = await this.storageBuckets.listByEnv(scope.projectId, scope.envName);
+    await this.revokeRecordedGrants(scope, rows, () => false);
+  }
+
+  /** Best effort for env deletion: un-publish every public bucket of the env. */
+  async unpublishEnvBuckets(scope: AppObjectStoreScope): Promise<void> {
+    try {
+      const previous = await this.storageBuckets.listByEnv(scope.projectId, scope.envName);
+      await this.unpublishBuckets(scope, previous, new Set());
+    } catch (error) {
+      this.logger.warn(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private shouldReconcileObjectStoreService(
@@ -183,23 +342,31 @@ export class ObjectStoreProvisioner {
       return this.requireObjectStoreProvisioner('irsa', requestedMode, desired);
     }
 
+    if (requestedMode === 'workload-identity') {
+      return this.requireObjectStoreProvisioner('gcp-workload-identity', requestedMode, desired);
+    }
+
     if (requestedMode === 'shared') {
       const staticMode: AppObjectStoreCredentialMode =
         this.bucketProvisioner.backend === 'minio' ? 'minio-static-key' : 'shared';
       return this.requireObjectStoreProvisioner(staticMode, requestedMode, desired);
     }
 
-    for (const mode of ['irsa', 'minio-static-key', 'shared'] satisfies AppObjectStoreCredentialMode[]) {
+    const autoModes: AppObjectStoreCredentialMode[] = ['irsa', 'gcp-workload-identity', 'minio-static-key', 'shared'];
+    for (const mode of autoModes) {
       const provisioner = this.appCredentialProvisioners.find((candidate) => candidate.mode === mode);
-      const availability = provisioner?.availability() ?? { available: false, reason: 'provisioner is not registered' };
-      if (availability.available && provisioner) {
+      if (!provisioner || provisioner.autoSelectable === false) {
+        continue;
+      }
+      if (provisioner.availability().available) {
         return provisioner;
       }
     }
 
     throw new Error(
       'No object-store credential isolation mode is available on this cluster. ' +
-      'Configure IRSA or static app storage credentials before deploying services with x-eve.object_store.buckets.',
+      'Configure IRSA, GKE Workload Identity (EVE_GKE_WORKLOAD_IDENTITY_POOL) or static app storage credentials ' +
+      'before deploying services with x-eve.object_store.buckets.',
     );
   }
 
@@ -277,6 +444,7 @@ export class ObjectStoreProvisioner {
         iam_role_name: binding.iamRoleName ?? null,
         service_account_name: binding.serviceAccount?.name ?? null,
         service_account_namespace: binding.serviceAccount?.namespace ?? null,
+        iam_member: binding.bucketMember ?? null,
       });
 
       this.logger.log(
@@ -297,7 +465,7 @@ export class ObjectStoreProvisioner {
       componentName: string;
     },
     objectStorePlan?: EnvObjectStorePlan,
-  ): Promise<Array<{ name: string; value: string }>> {
+  ): Promise<AppObjectStoreEnvVar[]> {
     const buckets = getServiceObjectStoreBuckets(service);
     if (buckets.length === 0) {
       return [];
@@ -322,16 +490,17 @@ export class ObjectStoreProvisioner {
 
   buildObjectStoreServiceAccount(objectStorePlan: EnvObjectStorePlan): Record<string, unknown> | null {
     const serviceAccount = objectStorePlan.binding?.serviceAccount;
-    if (!serviceAccount || objectStorePlan.binding?.mode !== 'irsa') {
+    if (!serviceAccount) {
       return null;
     }
+    const hasAnnotations = Object.keys(serviceAccount.annotations).length > 0;
     return {
       apiVersion: 'v1',
       kind: 'ServiceAccount',
       metadata: {
         name: serviceAccount.name,
         namespace: serviceAccount.namespace,
-        annotations: serviceAccount.annotations,
+        ...(hasAnnotations ? { annotations: serviceAccount.annotations } : {}),
       },
     };
   }
@@ -340,16 +509,33 @@ export class ObjectStoreProvisioner {
     objectStorePlan: EnvObjectStorePlan,
     serviceName: string,
   ): string | undefined {
-    if (objectStorePlan.binding?.mode !== 'irsa') {
-      return undefined;
-    }
     if (!objectStorePlan.bucketsByService.has(serviceName)) {
       return undefined;
     }
-    return objectStorePlan.binding.serviceAccount?.name;
+    return objectStorePlan.binding?.serviceAccount?.name;
+  }
+
+  /**
+   * Keep the namespace credentials Secret equal to the binding: written (and
+   * so rotated) on every deploy for static-key modes, removed for keyless ones.
+   */
+  private async syncCredentialSecret(namespace: string, binding: AppObjectStoreBinding): Promise<void> {
+    if (binding.credentialSecret) {
+      await this.k8s.createSecret(namespace, binding.credentialSecret.name, binding.credentialSecret.stringData);
+    } else {
+      await this.k8s.deleteSecret(namespace, APP_STORAGE_CREDENTIALS_SECRET);
+    }
   }
 
   async removeObjectStoreBinding(scope: AppObjectStoreScope): Promise<void> {
+    try {
+      await this.k8s.deleteSecret(scope.namespace, APP_STORAGE_CREDENTIALS_SECRET);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to remove object-store credentials Secret for ${scope.projectSlug}/${scope.envName}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     for (const provisioner of this.appCredentialProvisioners) {
       if (!provisioner.availability().available) {
         continue;

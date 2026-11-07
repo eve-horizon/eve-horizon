@@ -9,10 +9,9 @@ import {
 } from '@nestjs/common';
 import { GatewayProviderRegistry } from '../providers/provider-registry.js';
 import { formatAgentReply } from '../providers/slack/slack-format.js';
-import { createJsonLogger } from '@eve/shared';
+import { createJsonLogger, INTERNAL_TOKEN_HEADER, internalTokenMatches } from '@eve/shared';
 
 const logger = createJsonLogger('gateway');
-const INTERNAL_HEADER = 'x-eve-internal-token';
 
 interface DeliveryRequest {
   provider: string;
@@ -29,10 +28,10 @@ export class DeliveryController {
   @Post('deliver')
   @HttpCode(HttpStatus.OK)
   async handleDelivery(
-    @Headers(INTERNAL_HEADER) token: string | undefined,
+    @Headers(INTERNAL_TOKEN_HEADER) token: string | undefined,
     @Body() body: DeliveryRequest,
   ) {
-    if (!token || token !== (process.env.EVE_INTERNAL_API_KEY ?? '')) {
+    if (!internalTokenMatches(token, process.env.EVE_INTERNAL_API_KEY)) {
       throw new UnauthorizedException('Missing or invalid internal token');
     }
 

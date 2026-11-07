@@ -16,6 +16,7 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import {
   HARNESS_CANONICAL_NAMES,
   getHarnessAuthStatus,
+  internalAuthHeaders,
   type HarnessCanonicalName,
 } from '@eve/shared';
 
@@ -95,7 +96,7 @@ async function runEve(args: string[]): Promise<string> {
 async function invokeWorker(invocation: HarnessInvocation): Promise<HarnessResult> {
   const response = await fetch(`${workerUrl}/invoke`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
     body: JSON.stringify(invocation),
   });
 

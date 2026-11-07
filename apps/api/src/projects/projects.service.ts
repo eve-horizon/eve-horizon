@@ -1,5 +1,5 @@
 import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { resolveWorkerUrl } from '../common/worker-url';
+import { resolveWorkerUrl, workerRequestHeaders } from '../common/worker-url';
 import type { Db } from '@eve/db';
 import {
   projectQueries,
@@ -14,6 +14,7 @@ import {
   scheduleQueries,
   spendQueries,
   environmentQueries,
+  managedDbQueries,
 } from '@eve/db';
 import {
   generateProjectId,
@@ -89,6 +90,7 @@ export class ProjectsService {
   private schedules: ReturnType<typeof scheduleQueries>;
   private spend: ReturnType<typeof spendQueries>;
   private envs: ReturnType<typeof environmentQueries>;
+  private managedDb: ReturnType<typeof managedDbQueries>;
 
   constructor(
     @Inject('DB') db: Db,
@@ -107,6 +109,7 @@ export class ProjectsService {
     this.schedules = scheduleQueries(db);
     this.spend = spendQueries(db);
     this.envs = environmentQueries(db);
+    this.managedDb = managedDbQueries(db);
   }
 
   async getSpend(
@@ -416,19 +419,21 @@ export class ProjectsService {
       throw new NotFoundException(`Project ${projectId} not found`);
     }
 
-    // Tear down K8s deployments for all environments before deleting records
     const environments = await this.envs.listByProject(projectId);
+    if (hard) {
+      // Check before tearing anything down, so a refused delete changes nothing.
+      await this.assertNoLiveManagedDbs(projectId, environments, force);
+    }
+
+    // Tear down K8s deployments for all environments before deleting records
     for (const env of environments) {
       await this.teardownEnvironmentDeployment(env.id, force);
     }
 
     if (hard) {
-      // Delete all environment records first (handles managed_db_tenants FK, etc.)
-      for (const env of environments) {
-        await this.envs.delete(env.id);
-      }
-
-      // Hard-delete the project — remaining child records cascade via FK constraints
+      // One DELETE removes the project and, through ON DELETE CASCADE, its
+      // environments, jobs, events, builds, agents and the rest. Deleting
+      // environments first would trip the references between those rows.
       const deleted = await this.projects.hardDelete(projectId);
       if (!deleted) {
         throw new NotFoundException(`Project ${projectId} not found during hard delete`);
@@ -797,6 +802,39 @@ export class ProjectsService {
 
   // ── Environment teardown helpers (for project delete) ───────────────
 
+  /**
+   * A managed database is provider-side state that the reconciler destroys
+   * from its tenant row. Hard-deleting the project removes those rows, so a
+   * database that is not yet destroyed would be orphaned: refuse unless forced.
+   */
+  private async assertNoLiveManagedDbs(
+    projectId: string,
+    environments: Array<{ id: string; name: string }>,
+    force: boolean,
+  ): Promise<void> {
+    const live: string[] = [];
+    for (const env of environments) {
+      const tenants = await this.managedDb.listTenantsByEnv(env.id);
+      for (const tenant of tenants) {
+        if (!tenant.deleted_at) live.push(`${env.name} (${tenant.id}, ${tenant.status})`);
+      }
+    }
+    if (live.length === 0) return;
+
+    if (force) {
+      this.logger.warn(
+        `[project-delete] Hard-deleting ${projectId} with managed databases not destroyed (force=true); ` +
+        `provider databases may need manual cleanup: ${live.join(', ')}`,
+      );
+      return;
+    }
+    throw new ConflictException(
+      `Project ${projectId} has managed databases that are not destroyed: ${live.join(', ')}. ` +
+      `Destroy them first (eve db destroy --project ${projectId} --env <name> --force) and retry once they are deleted, ` +
+      `or pass force=true to delete the records and leave the databases for manual cleanup.`,
+    );
+  }
+
   private async teardownEnvironmentDeployment(
     envId: string,
     force = false,
@@ -812,7 +850,7 @@ export class ProjectsService {
     try {
       const response = await fetch(`${workerUrl}/environments/delete`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: workerRequestHeaders(),
         body: JSON.stringify({ env_id: envId }),
       });
 

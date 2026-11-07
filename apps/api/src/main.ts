@@ -12,9 +12,16 @@ import {
 } from '@eve/shared';
 import { AppModule } from './app.module';
 import { attachRegisteredSchemas } from './openapi.js';
+import {
+  listenOnInternalPort,
+  registerInternalRouteGuard,
+  resolveInternalPort,
+} from './common/internal-port.js';
 
 async function bootstrap() {
   const port = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 4747;
+  // Optional: serve /internal/* only on this port (see common/internal-port.ts).
+  const internalPort = resolveInternalPort(process.env.EVE_API_INTERNAL_PORT, port);
 
   const logger = (await initServiceTelemetry('api')) as LoggerService;
 
@@ -58,6 +65,9 @@ async function bootstrap() {
   });
 
   registerCorrelationIdHook(fastify);
+  if (internalPort !== null) {
+    registerInternalRouteGuard(fastify, internalPort);
+  }
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Eve Horizon API')
@@ -75,6 +85,10 @@ async function bootstrap() {
 
   await app.listen(port, '0.0.0.0');
   logger.log(`API listening on port ${port}`);
+  if (internalPort !== null) {
+    await listenOnInternalPort(app.getHttpServer(), internalPort, '0.0.0.0');
+    logger.log(`API internal routes (/internal/*) served only on port ${internalPort}`);
+  }
 }
 
 bootstrap();

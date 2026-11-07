@@ -3,6 +3,7 @@ import {
   ensureCorrelationId,
   getCorrelationContext,
   getCorrelationHeaders,
+  internalAuthHeaders,
   loadConfig,
   withCorrelationContext,
   parseWorkerUrlMapping,
@@ -180,6 +181,7 @@ export async function invokeWorker(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...internalAuthHeaders(config.EVE_INTERNAL_API_KEY),
           ...getCorrelationHeaders(),
         },
         body: JSON.stringify(invocation),
@@ -252,6 +254,7 @@ export async function invokeAgentRuntime(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...internalAuthHeaders(config.EVE_INTERNAL_API_KEY),
           ...getCorrelationHeaders(),
         },
         body: JSON.stringify(invocation),
@@ -284,6 +287,7 @@ export async function invokeAgentRuntime(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              ...internalAuthHeaders(config.EVE_INTERNAL_API_KEY),
               ...getCorrelationHeaders(),
             },
             body: JSON.stringify(invocation),
@@ -358,6 +362,7 @@ export async function invokePipelineRun(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...internalAuthHeaders(config.EVE_INTERNAL_API_KEY),
           ...getCorrelationHeaders(),
         },
         body: JSON.stringify({}),
@@ -436,6 +441,7 @@ async function invokeSubmitAndPollWorkerJob(
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...internalAuthHeaders(config.EVE_INTERNAL_API_KEY),
             ...getCorrelationHeaders(),
           },
           body: JSON.stringify({ jobId, attemptId, projectId }),

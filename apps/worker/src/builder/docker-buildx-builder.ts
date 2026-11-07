@@ -11,6 +11,7 @@ import {
   RegistryAuth,
   BuildBackend,
 } from './image-builder.interface.js';
+import { serviceHelperEnv } from '@eve/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -132,6 +133,7 @@ export class DockerBuildxBuilder implements BuildBackend {
     try {
       const execOptions: Parameters<typeof execFileAsync>[2] = {
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large outputs
+        env: serviceHelperEnv(),
         ...(options?.cwd && { cwd: options.cwd }),
         ...(options?.input && { input: options.input }),
       };

@@ -46,6 +46,20 @@ Runner-pod mode still uses per-toolchain init containers. Both inline and
 runner modes update `runtime_meta.toolchains` with `execution_mode`,
 `requested`, `resolved`, `missing`, and `source`.
 
+## Runner pod isolation
+
+Runner pods (`EVE_AGENT_RUNTIME_EXECUTION_MODE=runner`) share the worker's
+runner settings: no service account token (`automountServiceAccountToken:
+false`), all capabilities dropped, the service account named by
+`EVE_RUNNER_SERVICE_ACCOUNT` (namespace default when unset), and placement
+from `EVE_RUNNER_NODE_SELECTOR_KEY`/`_VALUE` and
+`EVE_RUNNER_TAINT_KEY`/`_VALUE`/`_EFFECT`, plus optional pod affinity
+(`EVE_RUNNER_POD_AFFINITY_KEY`/`_VALUE`) to the node of a labelled pod. Set the
+placement to the pool the agent runtime itself runs on. `EVE_SECRETS_MASTER_KEY` is not forwarded to
+runner pods; only the API decrypts secrets. See
+[pipelines.md](./pipelines.md#where-script-steps-run-and-what-they-can-reach)
+for the full variable list.
+
 ## Cancellation and workspace cleanup
 
 Agent and worker executors check cancellation before starting, poll job phase
@@ -70,6 +84,20 @@ Orchestrator cleanup alone cannot remove files on another pod's filesystem.
 Session workspaces, the configured root itself, paths outside that root, and
 symlink aliases are preserved. Operators must still size local storage for peak
 active attempts and shared toolchain caches.
+
+## Process isolation
+
+Inline harnesses run as the runtime's UID. The image starts the runtime with
+`/usr/local/libexec/eve-node --disable-sigusr1 dist/main.js`: an execute-only
+copy of node, so the kernel marks it non-dumpable and harnesses cannot read its
+environment (`DATABASE_URL`, `EVE_INTERNAL_API_KEY`) from `/proc/1/environ` or
+its memory, and no SIGUSR1 inspector. Helpers it runs (git, crane, kubectl)
+get an allowlisted environment without credentials. The boot log says
+`AGENT-RUNTIME: process is non-dumpable with SIGUSR1 disabled`; a warning means
+the pod is not protected (for example a `command:` override that runs plain
+`node`). Set
+`EVE_REQUIRE_ENVIRON_PROTECTION=true` to refuse to start in that case. See
+[agent-secret-isolation.md](./agent-secret-isolation.md#layer-1b-the-runtimes-own-environment).
 
 ## Data Model
 

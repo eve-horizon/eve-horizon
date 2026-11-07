@@ -10,6 +10,7 @@ Tests pipeline CRUD operations without executing pipeline jobs.
 
 - Smoke tests pass (scenario 01)
 - A project exists with a manifest containing pipelines
+- Scenario 05 (deploy flow) shares this project; see "Shared example project" in `tests/manual/README.md`
 
 ## Setup
 
@@ -19,13 +20,21 @@ Use the stable manual test org:
 export ORG_ID=org_manualtestorg
 export API_URL=$EVE_API_URL
 
-# Create project linked to example repo (has pipelines in manifest)
+# Create (or reuse) the shared project linked to the example repo.
+# The example's agents and packs claim org-wide agent slugs, so only ONE project
+# per org may sync this repo. Scenario 05 uses this same project (slug fstest).
+# Do not delete it between 03 and 05. Both use the same repo URL and branch (a slug
+# re-used with a different branch is refused): the `manual-test-alias` branch of the
+# example when it exists (see scenario 05), otherwise `main`.
+export EXAMPLE_REPO=https://github.com/eve-horizon/eve-horizon-fullstack-example
+export EXAMPLE_BRANCH=manual-test-alias
+git ls-remote --exit-code --heads $EXAMPLE_REPO $EXAMPLE_BRANCH >/dev/null || export EXAMPLE_BRANCH=main
 eve project ensure \
   --org $ORG_ID \
-  --name "pipeline-test-project" \
-  --slug ptest \
-  --repo-url https://github.com/eve-horizon/eve-horizon-fullstack-example \
-  --branch main \
+  --name "fullstack-test-project" \
+  --slug fstest \
+  --repo-url $EXAMPLE_REPO \
+  --branch $EXAMPLE_BRANCH \
   --force \
   --json
 export PROJECT_ID=<id_from_output>
@@ -33,7 +42,7 @@ export PROJECT_ID=<id_from_output>
 # Clone the repo locally and sync manifest
 # (eve project sync reads from local .eve/manifest.yaml, not remote repo)
 TMPDIR=$(mktemp -d)
-git clone --depth 1 https://github.com/eve-horizon/eve-horizon-fullstack-example $TMPDIR/repo
+git clone --depth 1 --branch $EXAMPLE_BRANCH $EXAMPLE_REPO $TMPDIR/repo
 cd $TMPDIR/repo
 eve project sync --project $PROJECT_ID --json
 cd -
@@ -60,8 +69,9 @@ eve pipeline show $PROJECT_ID deploy-test --json
 
 **Expected:**
 - Returns single pipeline object
-- Contains `trigger` configuration
 - Contains `steps` array with step definitions
+- `deploy-test` is environment-driven (the `test` environment points at it) and has no `trigger`;
+  the example's event-driven pipelines (for example the CI ones) do carry a `trigger`
 
 **Note:** Pipeline name depends on manifest. Try `deploy-test` or check list output.
 
@@ -87,8 +97,8 @@ curl -s -X POST "$API_URL/projects/$PROJECT_ID/pipelines/deploy-test/runs" \
 From the expand output:
 
 **Expected:**
-- All jobs have `phase: "ready"` (dry_run mode returns all phases as ready)
-- Relations show `blocks` relationships (dependencies are expressed via relations, not phases)
+- The first job (no `depends_on`) has `phase: "ready"`; jobs that depend on another step have `phase: "backlog"`
+- Relations show `blocks` relationships between the dependent and the step it waits for
 
 ## Success Criteria
 
@@ -99,6 +109,10 @@ From the expand output:
 
 ## Notes
 
+- Agent slugs are unique per org. If `eve project sync` fails with
+  `Agent slug <slug> already used by <project>:<agent>`, another project in the org already synced this
+  repo. Reuse that project instead of creating a second one. On platform releases up to 0.1.321, deleting a project does not free
+  its agent slugs, so do not rely on delete-and-recreate to work around the conflict there.
 - This test does NOT execute pipeline jobs (would take 10+ minutes)
 - The API's `dry_run` or expand endpoint validates job graph generation
 - Actual execution is covered by job execution test (scenario 02)

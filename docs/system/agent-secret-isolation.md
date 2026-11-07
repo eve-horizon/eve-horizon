@@ -64,6 +64,60 @@ under `EVE_JOB_USER_HOME/.claude-runtime/...`, never under `repoPath`. The raw
 setup-token env var and conflicting Claude API-key vars are scrubbed after
 `env_overrides`, before the harness process env is built.
 
+### Layer 1b: The Runtime's Own Environment
+
+An allowlisted harness env is not enough on its own: the harness runs as the
+same UID as the agent runtime (and pipeline scripts as the same UID as the
+worker), and Linux lets a process read `/proc/<pid>/environ` and memory of any
+other process with its UID. `tr '\0' '\n' < /proc/1/environ` would print the
+runtime's `DATABASE_URL` and `EVE_INTERNAL_API_KEY`.
+
+The service images therefore start the service from an execute-only copy of
+node, `/usr/local/libexec/eve-node` (mode `0711`, owned by root), and the worker
+starts PID 1 from `/usr/local/libexec/eve-tini`. The kernel marks a process
+non-dumpable when it executes a binary its user cannot read; its `/proc/<pid>`
+entries become root-owned and same-UID processes can no longer read its
+environment, file descriptors or memory. Harnesses and scripts keep the normal
+`/usr/local/bin/node`.
+
+Same-UID job code has three other routes, each closed in the image or code:
+
+- **Debugger.** SIGUSR1 opens Node's inspector on `127.0.0.1:9229`, and
+  `Runtime.evaluate("process.env")` then reads everything. Both services start
+  with `--disable-sigusr1`.
+- **Helper children.** A child's environ is readable while it runs. Every child
+  a service starts on its own behalf (git, kubectl, crane, tar, buildctl,
+  docker, pg_dump) gets an allowlisted environment with no credentials
+  (`serviceHelperEnv()`), plus only what that call needs (a `PGPASSWORD`, a
+  `GIT_SSH_COMMAND`, a `DOCKER_CONFIG` directory). A static test fails on any
+  service spawn that passes or inherits `process.env`.
+- **Planted programs and config.** Job code can write `~/.local/bin` (first on
+  the image PATH), `~/.gitconfig`, repository `.git/config` and hooks, and the
+  toolchain cache, and it can force a container restart. So helpers resolve
+  through a PATH of root-owned directories only; service git ignores global
+  config (`GIT_CONFIG_GLOBAL=/dev/null`) and runs no hooks or fsmonitor; the
+  worker entrypoint runs by absolute path with a root-owned PATH and sources
+  toolchain `env.sh` only in single-use runner pods; the worker's app code is
+  root-owned; and root-owned guards stop jobs creating `~/.node_modules`,
+  `~/.node_libraries` (Node's global module lookup) or `~/.kube` (read by the
+  Kubernetes client before in-cluster config). The orphan reaper protects
+  processes by PID, not by command line.
+
+At boot the worker and agent runtime log `process is non-dumpable with SIGUSR1
+disabled`, or warn with the fix. `EVE_REQUIRE_ENVIRON_PROTECTION=true` makes
+them refuse to start instead.
+
+This is defence in depth for code that shares the service's container. It does
+not remove the service account token or cloud identity of the pod; production
+should run pipeline scripts in runner pods and keep harness runtimes free of
+cluster RBAC.
+
+Concurrent jobs on one runtime still share a UID, so one job can read another
+job's workspace and harness environment. See
+[harness-process-isolation-plan.md](../plans/harness-process-isolation-plan.md)
+for the options considered, residual risk, the least-privilege database role
+recommendation and the live-cluster checks.
+
 ### Layer 2: Filesystem Sandbox
 
 Each harness CLI restricts the LLM's file tools to the workspace directory:
@@ -112,6 +166,8 @@ Both paths use the same rule set from a single source of truth (`packages/shared
 | Sophisticated prompt injection | Nothing to find | File tools blocked | May bypass | **Strong** |
 | Agent tries to exfiltrate LLM API key | Key is in env (required) | — | Forbidden | **Medium** |
 | Malicious code in repo hooks/scripts | N/A (runs pre-harness) | N/A | N/A | **Out of scope** |
+| Agent reads the runtime's `/proc/1/environ` or memory | Runtime is non-dumpable (1b) | — | Forbidden | **Blocked** (kernel) |
+| Agent reads another concurrent job's files or environ | Same UID | File tools blocked | Forbidden | **Medium** |
 
 \* In K8s runner pods, the agent runs in an ephemeral container. There are no meaningful credentials in `~/.config/` unless explicitly provisioned. In local/docker workers, this path has more content, but the LLM policy discourages access.
 
@@ -167,7 +223,8 @@ The one secret that _must_ remain accessible to the agent process is the LLM pro
 - Security policy prompt preamble (all harnesses).
 - Security CLAUDE.md for Claude-family harnesses.
 - Stopped writing `.eve/secrets.env` to workspace.
-- `EVE_SECRETS_MASTER_KEY` removed from K8s runner pod env.
+- `EVE_SECRETS_MASTER_KEY` removed from K8s runner pod env (worker and agent-runtime runners).
+- Runner pods mount no service account token and drop all capabilities.
 
 ### Phase 2 (Planned): Per-Job HOME + Tool Credential Files
 - Create a per-job `$HOME` directory outside the workspace.
@@ -178,7 +235,9 @@ The one secret that _must_ remain accessible to the agent process is the LLM pro
 
 ### Phase 3 (Planned): Hard Isolation
 - Internal LLM proxy service holds provider keys; agents get short-lived tokens.
-- K8s UID separation: auth config mounted as a volume owned by a different UID.
+- K8s UID separation: auth config mounted as a volume owned by a different UID;
+  per-job UIDs so concurrent jobs cannot read each other (the runtime itself is
+  already non-dumpable, Layer 1b).
 - Network egress policies for agent pods.
 - Server-side log redaction for known secret values.
 

@@ -1,5 +1,5 @@
 import { Injectable, Inject, NotFoundException, ConflictException, ServiceUnavailableException, Logger, BadRequestException } from '@nestjs/common';
-import { resolveWorkerUrl } from '../common/worker-url';
+import { resolveWorkerUrl, workerRequestHeaders } from '../common/worker-url';
 import type { Db } from '@eve/db';
 import { environmentQueries, releaseQueries, projectQueries, projectManifestQueries, orgQueries, managedDbQueries, ingressAliasQueries } from '@eve/db';
 import {
@@ -22,6 +22,7 @@ import {
   getServicesFromManifest,
   toK8sName,
   deriveNamespace,
+  projectNamespacePrefix,
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { ApiRegistrationService } from './api-registration.service.js';
@@ -76,7 +77,9 @@ export class EnvironmentsService {
     // Normalize user-supplied namespace so it matches the actual K8s namespace
     // (which is always lowercased). Sentinel + deployer both query K8s with
     // exact-case matching.
-    const namespace = data.namespace ? toK8sName(data.namespace, 'namespace') : null;
+    const namespace = data.namespace
+      ? await this.assertNamespaceAvailable(projectId, null, data.namespace)
+      : null;
     const environment = await this.environments.create({
       id: environmentId,
       project_id: projectId,
@@ -162,6 +165,52 @@ export class EnvironmentsService {
     return deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
   }
 
+  /**
+   * A user-chosen namespace must stay under the project's own prefix
+   * (`eve-{org}-{project}-`), so it can never name another project's
+   * namespace or a system one, and must not be any other environment's
+   * namespace. Returns the normalized name. The deployer also refuses to
+   * adopt a namespace labelled for another environment.
+   */
+  private async assertNamespaceAvailable(
+    projectId: string,
+    environmentId: string | null,
+    requested: string,
+  ): Promise<string> {
+    let namespace: string;
+    try {
+      namespace = toK8sName(requested, 'namespace');
+    } catch (err) {
+      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+    }
+
+    const project = await this.projects.findById(projectId);
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} not found`);
+    }
+    const org = await this.orgs.findById(project.org_id);
+    if (!org) {
+      throw new NotFoundException(`Org ${project.org_id} not found for project ${projectId}`);
+    }
+
+    const prefix = projectNamespacePrefix(org.slug, project.slug);
+    if (!namespace.startsWith(prefix) || namespace.length === prefix.length) {
+      throw new BadRequestException(
+        `Environment namespace "${namespace}" must start with "${prefix}", this project's namespace prefix`,
+      );
+    }
+
+    const claimedByStoredName = (await this.environments.listByNamespace(namespace))
+      .some((other) => other.id !== environmentId);
+    const claimedByDerivedName = (await this.environments.listByProject(projectId))
+      .some((other) => other.id !== environmentId
+        && deriveNamespace(org.slug, project.slug, other.name, other.namespace) === namespace);
+    if (claimedByStoredName || claimedByDerivedName) {
+      throw new ConflictException(`Namespace "${namespace}" is already used by another environment`);
+    }
+    return namespace;
+  }
+
   private async resolveNamespaceById(environmentId: string): Promise<string> {
     const environment = await this.environments.findById(environmentId);
     if (!environment) {
@@ -196,8 +245,11 @@ export class EnvironmentsService {
       );
     }
 
+    const namespace = data.namespace
+      ? await this.assertNamespaceAvailable(projectId, environment.id, data.namespace)
+      : data.namespace;
     const updated = await this.environments.update(environment.id, {
-      namespace: data.namespace,
+      namespace,
       db_ref: data.db_ref,
       overrides_json: data.overrides,
       labels_json: data.labels,
@@ -324,7 +376,7 @@ export class EnvironmentsService {
     try {
       const response = await fetch(`${workerUrl}/environments/delete`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: workerRequestHeaders(),
         body: JSON.stringify({ env_id: envId }),
       });
 
@@ -1000,7 +1052,7 @@ export class EnvironmentsService {
     }
     const response = await fetch(`${workerUrl}/deploy`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: workerRequestHeaders(),
       body: JSON.stringify(body),
     });
 

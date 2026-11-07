@@ -9,6 +9,7 @@ import {
   getRegistryConfig,
   isRegistryNone,
   hasUsableRegistry,
+  resolveBuildImageRef,
 } from '@eve/shared';
 import {
   BuildAllParams,
@@ -18,6 +19,7 @@ import {
   BuildBackend,
 } from './image-builder.interface.js';
 import { RegistryAuthService } from './registry-auth.service.js';
+import { serviceGitEnv } from '@eve/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -115,22 +117,13 @@ export class ImageBuilderService {
         throw new Error(`Service '${serviceName}' is missing an image name`);
       }
 
-      // Image ref: prefix registry host unless service.image already includes one.
-      const imageWithoutDigest = service.image.split('@')[0];
-      const lastSlashIndex = imageWithoutDigest.lastIndexOf('/');
-      const lastColonIndex = imageWithoutDigest.lastIndexOf(':');
-      const imageName =
-        lastColonIndex > lastSlashIndex
-          ? imageWithoutDigest.slice(0, lastColonIndex)
-          : imageWithoutDigest;
-      const imageFirstSegment = imageName.split('/')[0];
-      const hasRegistry =
-        imageFirstSegment.includes('.') ||
-        imageFirstSegment.includes(':') ||
-        imageFirstSegment === 'localhost';
-      const imageRef = hasRegistry
-        ? service.image
-        : `${registryAuthData.host}/${service.image}`;
+      // Image ref: prefix the registry host unless service.image already names
+      // one; for the Eve registry, always under the project's prefix.
+      const imageRef = resolveBuildImageRef(
+        service.image,
+        registryAuthData.host,
+        registryConfigData.eveProjectId,
+      );
 
       const buildParams: BuildServiceParams = {
         serviceName,
@@ -184,7 +177,7 @@ export class ImageBuilderService {
       const { stdout } = await execFileAsync(
         'git',
         ['remote', 'get-url', 'origin'],
-        { cwd: workspacePath },
+        { cwd: workspacePath, env: serviceGitEnv() },
       );
 
       let url = stdout.trim();

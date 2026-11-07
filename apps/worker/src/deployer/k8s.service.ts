@@ -37,36 +37,69 @@ export class K8sService {
     }
   }
 
-  async createNamespace(name: string, labels?: Record<string, string>): Promise<void> {
+  /**
+   * Create a namespace, or merge labels into an existing one.
+   *
+   * With `ownerLabel`, an existing namespace is adopted only if it already
+   * carries that label with the value in `labels`: a namespace another Eve
+   * environment owns, or one Eve did not create (system, platform or
+   * hand-made namespaces), is refused instead of being taken over.
+   */
+  async createNamespace(
+    name: string,
+    labels?: Record<string, string>,
+    options?: { ownerLabel?: string },
+  ): Promise<void> {
     this.ensureAvailable();
+    let existing: k8s.V1Namespace | null = null;
     try {
-      const existing = await this.coreApi!.readNamespace(name);
-      if (labels && Object.keys(labels).length > 0) {
-        const current = existing.body.metadata?.labels ?? {};
-        const merged = { ...current, ...labels };
-        const body = existing.body as k8s.V1Namespace;
-        body.metadata = body.metadata ?? {};
-        body.metadata.labels = merged;
-        try {
-          await this.coreApi!.replaceNamespace(name, body);
-        } catch (err) {
-          throw wrapK8sError(err, 'replace', { kind: 'Namespace', name });
-        }
-      }
-      return;
-    } catch (err) {
-      if (err instanceof K8sOperationError) throw err;
+      existing = (await this.coreApi!.readNamespace(name)).body;
+    } catch {
       // Fall through: readNamespace failed, try to create
     }
 
-    this.logger.log(`Creating namespace ${name}`);
+    if (!existing) {
+      this.logger.log(`Creating namespace ${name}`);
+      try {
+        await this.coreApi!.createNamespace({
+          metadata: { name, labels },
+        });
+        return;
+      } catch (err) {
+        if (!isK8sConflict(err)) {
+          throw wrapK8sError(err, 'create', { kind: 'Namespace', name });
+        }
+        // Created concurrently: check who owns it before adopting it.
+        try {
+          existing = (await this.coreApi!.readNamespace(name)).body;
+        } catch (readErr) {
+          throw wrapK8sError(readErr, 'read', { kind: 'Namespace', name });
+        }
+      }
+    }
+
+    assertNamespaceOwner(name, existing, labels, options?.ownerLabel);
+    if (labels && Object.keys(labels).length > 0) {
+      const current = existing.metadata?.labels ?? {};
+      existing.metadata = existing.metadata ?? {};
+      existing.metadata.labels = { ...current, ...labels };
+      try {
+        await this.coreApi!.replaceNamespace(name, existing);
+      } catch (err) {
+        throw wrapK8sError(err, 'replace', { kind: 'Namespace', name });
+      }
+    }
+  }
+
+  /** Labels of a namespace, or null when it does not exist. */
+  async getNamespaceLabels(name: string): Promise<Record<string, string> | null> {
+    this.ensureAvailable();
     try {
-      await this.coreApi!.createNamespace({
-        metadata: { name, labels },
-      });
+      const existing = await this.coreApi!.readNamespace(name);
+      return existing.body.metadata?.labels ?? {};
     } catch (err) {
-      if (isK8sConflict(err)) return;
-      throw wrapK8sError(err, 'create', { kind: 'Namespace', name });
+      if (isK8sNotFound(err)) return null;
+      throw wrapK8sError(err, 'read', { kind: 'Namespace', name });
     }
   }
 
@@ -860,4 +893,30 @@ export class K8sService {
       throw new Error('Kubernetes client not available (no active cluster)');
     }
   }
+}
+
+export class NamespaceOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NamespaceOwnershipError';
+  }
+}
+
+function assertNamespaceOwner(
+  name: string,
+  existing: k8s.V1Namespace,
+  labels: Record<string, string> | undefined,
+  ownerLabel: string | undefined,
+): void {
+  if (!ownerLabel) return;
+  const expected = labels?.[ownerLabel];
+  const actual = existing.metadata?.labels?.[ownerLabel];
+  if (expected && actual === expected) return;
+  throw new NamespaceOwnershipError(
+    actual
+      ? `Namespace "${name}" belongs to another Eve environment; refusing to deploy into it. ` +
+        'Choose a different namespace for this environment.'
+      : `Namespace "${name}" already exists and was not created by Eve for this environment ` +
+        `(no ${ownerLabel} label); refusing to deploy into it. Choose a different namespace.`,
+  );
 }

@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import {
   loadConfig,
   isEveRegistry,
+  eveRegistryImageRef,
   getRegistryConfig,
   type Manifest,
   type Service,
@@ -52,6 +53,25 @@ export class ImageResolver {
       return image;
     }
     return `${registryHost}/${image}`;
+  }
+
+  /**
+   * Registry-qualified image for a service at deploy time. With the Eve-native
+   * registry, a project's images live under its repository prefix, so a bare
+   * image, or one naming the Eve registry host, is placed there (matching
+   * where the build pushed it). Anything else follows `prefixRegistryHost`.
+   */
+  resolveServiceImage(image: string, manifest: Manifest, projectId: string): string {
+    const registryHost = this.resolveRegistryHost(manifest);
+    if (registryHost && isEveRegistry(manifest)) {
+      const firstSlash = image.indexOf('/');
+      const firstSegment = firstSlash > 0 ? image.slice(0, firstSlash) : image;
+      const isBare = this.prefixRegistryHost(image, registryHost) !== image;
+      return isBare || firstSegment === registryHost
+        ? eveRegistryImageRef(image, registryHost, projectId)
+        : image;
+    }
+    return this.prefixRegistryHost(image, registryHost);
   }
 
   resolveImageRef(baseImage: unknown, digest?: string, imageTag?: string): string {

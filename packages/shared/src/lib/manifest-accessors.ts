@@ -370,6 +370,65 @@ export function isPlatformDomainHostname(hostname: string, platformDomain: strin
   return normalized.endsWith(`.${pd}`) || normalized === pd;
 }
 
+/** The platform settings that name its own public hosts. */
+export interface PlatformHostConfig {
+  EVE_RESERVED_DOMAINS?: string;
+  EVE_API_URL?: string;
+  EVE_PUBLIC_API_URL?: string;
+  EVE_SSO_URL?: string;
+  SUPABASE_AUTH_EXTERNAL_URL?: string;
+  EVE_REGISTRY_HOST?: string;
+  EVE_PLATFORM_INGRESS_HOSTNAME?: string;
+}
+
+function hostOf(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  try {
+    const host = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname;
+    return host ? host.toLowerCase().replace(/\.$/, '') : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Domains no project may claim as a custom domain, each covering itself and
+ * all its subdomains: the explicit `EVE_RESERVED_DOMAINS` list plus the
+ * platform's own hosts (API, SSO, auth, registry and platform ingress).
+ * A tenant ingress on one of those hosts would capture platform traffic once
+ * DNS has an apex or wildcard record pointing at the shared ingress.
+ */
+export function getReservedPlatformDomains(config: PlatformHostConfig): string[] {
+  const reserved = new Set<string>();
+  for (const entry of (config.EVE_RESERVED_DOMAINS ?? '').split(',')) {
+    const host = hostOf(entry.trim().replace(/^\*\./, ''));
+    if (host) reserved.add(host);
+  }
+  for (const value of [
+    config.EVE_API_URL,
+    config.EVE_PUBLIC_API_URL,
+    config.EVE_SSO_URL,
+    config.SUPABASE_AUTH_EXTERNAL_URL,
+    config.EVE_REGISTRY_HOST,
+    config.EVE_PLATFORM_INGRESS_HOSTNAME,
+  ]) {
+    const host = hostOf(value);
+    if (host) reserved.add(host);
+  }
+  return [...reserved];
+}
+
+/**
+ * The reserved domain a hostname falls under (itself or a parent), or null
+ * when the hostname is free to claim.
+ */
+export function findReservedPlatformDomain(hostname: string, reserved: readonly string[]): string | null {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, '');
+  if (!normalized) return null;
+  return reserved.find((domain) => normalized === domain || normalized.endsWith(`.${domain}`)) ?? null;
+}
+
 export function isReservedAlias(alias: string): boolean {
   return RESERVED_ALIASES.has(alias.trim().toLowerCase());
 }
@@ -495,6 +554,65 @@ export interface ManifestRegistryConfig {
  */
 export function isEveRegistry(manifest: Manifest): boolean {
   return manifest.registry === 'eve';
+}
+
+/**
+ * Repository prefix a project owns in the Eve-native registry. Every image a
+ * project builds into the Eve registry lives under it, and the registry token
+ * endpoint grants a project's credentials nothing outside it. Uses the
+ * project id, which never changes and is never reused (slugs can be reused
+ * once a project is deleted).
+ */
+export function eveRegistryRepositoryPrefix(projectId: string): string {
+  if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(projectId)) {
+    throw new Error(`Project id "${projectId}" cannot be used as an Eve registry repository prefix`);
+  }
+  return `${projectId}/`;
+}
+
+/**
+ * Place an image in the project's namespace of the Eve-native registry:
+ * `<host>/<project id>/<name>[:tag]`. A leading `<host>/` is accepted and not
+ * repeated, and neither is the project prefix, so the result is the same
+ * whatever spelling the manifest used, and the function is idempotent.
+ */
+export function eveRegistryImageRef(image: string, host: string, projectId: string): string {
+  const prefix = eveRegistryRepositoryPrefix(projectId);
+  let rest = image.startsWith(`${host}/`) ? image.slice(host.length + 1) : image;
+  if (!rest.startsWith(prefix)) rest = `${prefix}${rest}`;
+  return `${host}/${rest}`;
+}
+
+/**
+ * Image ref a build pushes to, and a build artifact records, for a buildable
+ * service image.
+ *
+ * - An image whose first path segment names a registry (contains `.` or `:`,
+ *   or is `localhost`) is used as written, except that one naming the Eve
+ *   registry itself is moved into the project's namespace.
+ * - A bare image goes to `registryHost`: into the project's namespace for the
+ *   Eve registry (`eveProjectId` set), as `<host>/<image>` otherwise.
+ */
+export function resolveBuildImageRef(
+  image: string,
+  registryHost: string,
+  eveProjectId?: string,
+): string {
+  const imageWithoutDigest = image.split('@')[0] ?? image;
+  const lastSlash = imageWithoutDigest.lastIndexOf('/');
+  const lastColon = imageWithoutDigest.lastIndexOf(':');
+  const imageName = lastColon > lastSlash ? imageWithoutDigest.slice(0, lastColon) : imageWithoutDigest;
+  const firstSegment = imageName.split('/')[0] ?? '';
+  const hasRegistry =
+    firstSegment.includes('.') || firstSegment.includes(':') || firstSegment === 'localhost';
+
+  if (eveProjectId) {
+    if (!hasRegistry || firstSegment === registryHost) {
+      return eveRegistryImageRef(image, registryHost, eveProjectId);
+    }
+    return image;
+  }
+  return hasRegistry ? image : `${registryHost}/${image}`;
 }
 
 /**
