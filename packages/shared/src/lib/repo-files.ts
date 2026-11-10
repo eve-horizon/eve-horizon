@@ -7,15 +7,21 @@ import path from 'node:path';
  * The path must be relative, must stay inside the checkout after every
  * symlink is resolved (the checkout root is resolved too), and must name a
  * regular file no larger than the given limit. Devices, pipes and sockets
- * are refused before any content is read.
+ * are refused before any content is read. Git metadata (any `.git` path
+ * segment, in any case) is never read: a clone's `.git/config` can hold the
+ * credential it was cloned with.
  */
 
-export type RepoFileErrorCode = 'absolute' | 'outside' | 'not_found' | 'not_regular' | 'too_large';
+export type RepoFileErrorCode = 'absolute' | 'outside' | 'git_metadata' | 'not_found' | 'not_regular' | 'too_large';
 
 export class RepoFileError extends Error {
   constructor(message: string, readonly code: RepoFileErrorCode) {
     super(message);
   }
+}
+
+function hasGitSegment(root: string, candidate: string): boolean {
+  return path.relative(root, candidate).split(path.sep).some((segment) => segment.toLowerCase() === '.git');
 }
 
 function isInside(root: string, candidate: string, allowRoot: boolean): boolean {
@@ -45,6 +51,9 @@ async function resolveInRepo(
   }
   if (!isInside(root, real, allowRoot)) {
     throw new RepoFileError(`${relativePath} leads outside the repository`, 'outside');
+  }
+  if (hasGitSegment(root, lexical) || hasGitSegment(root, real)) {
+    throw new RepoFileError(`${relativePath} is git metadata, which is never read`, 'git_metadata');
   }
   return { root, lexical, real };
 }
@@ -102,6 +111,9 @@ export async function readRepoFiles(
 
   const data: Record<string, string> = {};
   for (const entry of await fs.readdir(real)) {
+    if (entry.toLowerCase() === '.git') {
+      continue;
+    }
     const label = path.join(relativePath, entry);
     let entryReal: string;
     try {
@@ -111,6 +123,9 @@ export async function readRepoFiles(
     }
     if (!isInside(root, entryReal, false)) {
       throw new RepoFileError(`${label} leads outside the repository`, 'outside');
+    }
+    if (hasGitSegment(root, entryReal)) {
+      throw new RepoFileError(`${label} leads into git metadata, which is never read`, 'git_metadata');
     }
     if ((await fs.stat(entryReal)).isDirectory()) {
       continue;
