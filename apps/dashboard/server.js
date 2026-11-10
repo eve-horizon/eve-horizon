@@ -3,7 +3,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { internalRouteProxyHooks, refuseInternalApi } from './server/internal-api-guard.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { contentSecurityPolicy, ssoOriginFromApi } from './server/content-security-policy.js';
+import { contentSecurityPolicy, ssoOriginSource } from './server/content-security-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -32,8 +32,9 @@ app.use('/api', createProxyMiddleware({
 }));
 
 // Pages carry a Content-Security-Policy whose connect-src names the SSO
-// origin the API reports (see server/content-security-policy.js).
-app.use(contentSecurityPolicy(ssoOriginFromApi(apiUrl)));
+// origin: EVE_SSO_URL, or the one the API reports, learned in the background
+// (see server/content-security-policy.js).
+app.use(contentSecurityPolicy(ssoOriginSource({ ssoUrl: process.env.EVE_SSO_URL, apiUrl })));
 
 // Serve static files
 app.use(express.static(join(__dirname, 'dist')));

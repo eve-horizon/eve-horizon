@@ -32,8 +32,11 @@ Legacy routes (`/board`, `/project`, `/environments`, `/spending`) redirect to t
   (`server/content-security-policy.js`): scripts only from the dashboard's own files (so
   `index.html` keeps no inline script; the pre-paint theme script is `public/theme-init.js`),
   Google Fonts for styles and fonts, and `connect-src` limited to the page itself plus the SSO
-  origin. The server learns that origin from the API's `/auth/config`, the same `sso_url` the
-  browser gets, so it needs no extra configuration.
+  origin. That origin is `EVE_SSO_URL` when set (`k8s/base` sets it); otherwise the server
+  learns it from the API's `/auth/config`, the same `sso_url` the browser gets, so it needs no
+  extra configuration. Responses never wait on that lookup: it runs in the background (at start,
+  every minute, and with backoff after failures), and until it first succeeds the policy allows
+  only the page's own origin.
 
 ## Navigation
 

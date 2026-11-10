@@ -26,6 +26,13 @@ spec:
             # proxies browser requests under /api/* to it.
             - name: EVE_API_URL
               value: http://eve-api:4701
+            # The SSO origin the page's Content-Security-Policy allows; without
+            # it the server learns it from the API's /auth/config.
+            - name: EVE_SSO_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: eve-cluster-config
+                  key: EVE_SSO_URL
             - name: PORT
               value: "3200"
           livenessProbe:

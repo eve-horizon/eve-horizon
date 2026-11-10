@@ -39,6 +39,11 @@ beforeAll(async () => {
   });
   await new Promise((resolve) => api.listen(0, '127.0.0.1', resolve));
   dashboard = await startDashboardServer({ EVE_API_URL: `http://127.0.0.1:${api.address().port}` });
+  // The SSO origin is looked up in the background as the server starts.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if ((await dashboard.get('/')).headers['content-security-policy']?.includes(SSO_ORIGIN)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 });
 
 afterAll(() => {
