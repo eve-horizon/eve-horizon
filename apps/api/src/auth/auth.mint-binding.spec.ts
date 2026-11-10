@@ -259,6 +259,21 @@ describe('POST /auth/mint tokens minted by an org or project admin', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('cannot create an org, even when the body names its own org', async () => {
+    const { controller, authService, rbacService } = build();
+    const minted = await controller.mint(
+      { email: 'app-bot@example.com', org_id: 'org_mine', role: 'member' } as AuthMintRequest,
+      orgOwner,
+    );
+    const bot = await authService.verifyAuthorizationHeader(`Bearer ${minted.access_token}`);
+
+    for (const route of ['/orgs', '/orgs/ensure']) {
+      await expect(
+        guardAllows(rbacService, bot, { url: route, route, body: { name: 'side-org', org_id: 'org_mine' } }, ['orgs:create']),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+  });
+
   it("let a bot minted by an org admin work on its own org's project routes", async () => {
     const { controller, authService, rbacService } = build();
     addUser('user_admin', 'admin@example.com');
