@@ -794,6 +794,13 @@ Notes:
 - Requires admin privileges (system admin or org/project admin).
 - The user is created if it doesn't already exist.
 - A membership is added to the org/project you specify.
+- Org and project admins stay within their own reach (system admins are not limited):
+  - `--role` may not be higher than the caller's own role in the org (a project admin
+    whose org role is `member` can mint `member` tokens only);
+  - an existing user must belong to this org and no other (no membership in another
+    org or in another org's project), must not be a system admin, and must hold no
+    role in the org or its projects above the caller's own org role.
+  Anything else returns 403 and nothing is created or minted.
 - `--ttl <days>` sets the token TTL (1-90 days). Capped at the server's `EVE_AUTH_TOKEN_TTL_DAYS`.
 
 ## Challenge-Response Login

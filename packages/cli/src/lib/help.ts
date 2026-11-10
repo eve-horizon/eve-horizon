@@ -945,6 +945,8 @@ for cloud deployments. Credentials are stored globally per API URL.`,
           '--ttl <days>        Token TTL in days (1-90, default: server configured)',
           '',
           'One of --org or --project is required.',
+          'Org/project admins may mint only for a new user, or an existing user who belongs',
+          'to this org alone and holds no role above their own; --role may not exceed it either.',
         ],
         examples: [
           'eve auth mint --email app-bot@example.com --org org_xxx',

@@ -3,6 +3,7 @@ import {
   Logger,
   UnauthorizedException,
   BadRequestException,
+  ForbiddenException,
   Inject,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
@@ -26,6 +27,7 @@ import {
 } from '@eve/db';
 import { AppAuthPolicyService } from './app-auth-policy.service.js';
 import { MagicLinkService } from './magic-link.service.js';
+import { ROLE_RANK } from './rbac.service.js';
 import {
   type KeyEntry,
   loadKeyRing,
@@ -296,13 +298,16 @@ export class AppAuthService {
     };
   }
 
-  async mintUserTokenForAdmin(input: {
-    email: string;
-    org_id?: string;
-    project_id?: string;
-    role?: MembershipRole;
-    ttl_days?: number;
-  }): Promise<{
+  async mintUserTokenForAdmin(
+    input: {
+      email: string;
+      org_id?: string;
+      project_id?: string;
+      role?: MembershipRole;
+      ttl_days?: number;
+    },
+    caller: Pick<AuthUser, 'user_id' | 'is_admin'>,
+  ): Promise<{
     access_token: string;
     token_type: string;
     expires_at: number;
@@ -314,7 +319,13 @@ export class AppAuthService {
   }> {
     const role = input.role ?? 'member';
     const orgId = await this.resolveMintTargetOrg(input);
-    const { user, created } = await this.findOrCreateUser(input.email);
+    const existing = await this.users.findByEmail(input.email);
+    if (!caller.is_admin) {
+      await this.assertMintWithinCallerReach(caller.user_id, orgId, role, existing);
+    }
+    const { user, created } = existing
+      ? { user: existing, created: false }
+      : { user: await this.createMintedUser(input.email), created: true };
     await this.resolveMembership(orgId, user.id, role, input.project_id);
 
     const ttlSeconds = input.ttl_days
@@ -357,20 +368,65 @@ export class AppAuthService {
     return orgId;
   }
 
-  /** Find the user by email or create a non-admin account for them. */
-  private async findOrCreateUser(email: string) {
-    let user = await this.users.findByEmail(email);
-    let created = false;
-    if (!user) {
-      user = await this.users.create({
-        id: generateUserId(),
-        email,
-        display_name: null,
-        is_admin: false,
-      });
-      created = true;
+  /**
+   * A caller who is not a system admin may only mint a token that stays within
+   * their own reach in this org. The requested role may not exceed the caller's
+   * own org role. A user who does not exist yet is created in this org only. An
+   * existing user must not be a system admin, must belong to this org and to no
+   * other org or other org's project, and must hold no role here (in the org or
+   * any of its projects) above the caller's own org role.
+   */
+  private async assertMintWithinCallerReach(
+    callerId: string,
+    orgId: string,
+    role: MembershipRole,
+    target: { id: string; is_admin: boolean } | null,
+  ): Promise<void> {
+    const callerMembership = await this.memberships.findOrgMembership(callerId, orgId);
+    const callerRank = callerMembership ? ROLE_RANK[callerMembership.role] : 0;
+    if (ROLE_RANK[role] > callerRank) {
+      throw new ForbiddenException('Cannot grant a role above your own role in this org');
     }
-    return { user, created };
+
+    if (!target) {
+      return;
+    }
+
+    if (target.is_admin) {
+      throw new ForbiddenException('Cannot mint a token for a system admin');
+    }
+
+    const [orgMemberships, projectMemberships, projectMembershipsHere] = await Promise.all([
+      this.memberships.listOrgMembershipsForUser(target.id),
+      this.memberships.listProjectMembershipsForUser(target.id),
+      this.memberships.listProjectMembershipsForUser(target.id, { org_id: orgId }),
+    ]);
+    const membershipHere = orgMemberships.find((m) => m.org_id === orgId);
+    if (
+      !membershipHere
+      || orgMemberships.some((m) => m.org_id !== orgId)
+      || projectMemberships.length !== projectMembershipsHere.length
+    ) {
+      throw new ForbiddenException('Can only mint a token for a user who belongs to this org alone');
+    }
+
+    const targetRank = Math.max(
+      ROLE_RANK[membershipHere.role],
+      ...projectMembershipsHere.map((m) => ROLE_RANK[m.role]),
+    );
+    if (targetRank > callerRank) {
+      throw new ForbiddenException('Cannot mint a token for a user whose role is above your own');
+    }
+  }
+
+  /** Create a non-admin account for a mint target that does not exist yet. */
+  private async createMintedUser(email: string) {
+    return this.users.create({
+      id: generateUserId(),
+      email,
+      display_name: null,
+      is_admin: false,
+    });
   }
 
   /** Upsert the org membership (and project membership when scoped to a project). */

@@ -252,13 +252,16 @@ export class AuthService {
     return this.appAuth.mintUserToken(userId, email, ttlSeconds);
   }
 
-  async mintUserTokenForAdmin(input: {
-    email: string;
-    org_id?: string;
-    project_id?: string;
-    role?: MembershipRole;
-    ttl_days?: number;
-  }): Promise<{
+  async mintUserTokenForAdmin(
+    input: {
+      email: string;
+      org_id?: string;
+      project_id?: string;
+      role?: MembershipRole;
+      ttl_days?: number;
+    },
+    caller: Pick<AuthUser, 'user_id' | 'is_admin'>,
+  ): Promise<{
     access_token: string;
     token_type: string;
     expires_at: number;
@@ -268,7 +271,7 @@ export class AuthService {
     project_id: string | null;
     role: MembershipRole;
   }> {
-    return this.appAuth.mintUserTokenForAdmin(input);
+    return this.appAuth.mintUserTokenForAdmin(input, caller);
   }
 
   mintJobToken(params: {

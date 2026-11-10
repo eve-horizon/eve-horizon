@@ -5,7 +5,7 @@ import { expandPermissions, type Permission } from './permissions.js';
 import { allPermissions } from '@eve/shared';
 import type { AuthUser } from './auth.service.js';
 
-const ROLE_RANK: Record<MembershipRole, number> = {
+export const ROLE_RANK: Record<MembershipRole, number> = {
   member: 1,
   admin: 2,
   owner: 3,

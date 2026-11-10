@@ -359,7 +359,9 @@ export class AuthController {
       }
     }
 
-    return this.authService.mintUserTokenForAdmin(body);
+    // The service also keeps the minted token within the caller's own reach
+    // (target user, target role and requested role); system admins skip that.
+    return this.authService.mintUserTokenForAdmin(body, user);
   }
 
   /**
