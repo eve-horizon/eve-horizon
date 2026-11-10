@@ -60,6 +60,7 @@ export class AuthInternalController {
       project.org_id,
       job.project_id,
       body.permissions ?? body.scopes ?? [],
+      { userSecretsExcluded: job.user_secrets_excluded },
     );
     let scope: AccessBindingScope | undefined;
     if (body.scope !== undefined) {

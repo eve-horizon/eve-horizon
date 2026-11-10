@@ -124,9 +124,10 @@ export async function jobTokenPermissionsFor(
   orgId: string,
   projectId: string,
   requested: readonly string[],
+  options: WorkStartOptions = {},
 ): Promise<string[]> {
   const hasActor = hasUserActor(actorUserId);
-  const permissions = clampJobTokenPermissions(requested, { hasActor });
+  const permissions = clampJobTokenPermissions(requested, { hasActor, userSecretsExcluded: options.userSecretsExcluded });
   if (!hasActor) {
     return permissions;
   }

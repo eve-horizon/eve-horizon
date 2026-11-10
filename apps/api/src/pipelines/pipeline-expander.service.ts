@@ -19,6 +19,7 @@ import {
   generatePipelineRunId,
   getScriptConfig,
   hasUserActor,
+  isAccountLevelPermission,
   isOrgManagementPermission,
   isValidPermission,
   MINIMAL_JOB_TOKEN_PERMISSIONS,
@@ -345,13 +346,17 @@ export class PipelineExpanderService {
     userId: string | undefined,
     permissions: string[] | null,
     context: string,
+    work: WorkStartOptions = {},
   ): Promise<{ permissions: string[] | null; withheld: string[] }> {
     if (!permissions || permissions.length === 0) {
       return { permissions, withheld: [] };
     }
     if (hasUserActor(userId)) {
-      await this.assertActorCanGrantPermissions(orgId, projectId, userId, permissions, context);
-      return { permissions, withheld: [] };
+      // Work started with an org-bound token never carries account-level permissions.
+      const accountLevel = work.userSecretsExcluded ? permissions.filter(isAccountLevelPermission) : [];
+      const kept = permissions.filter((permission) => !accountLevel.includes(permission));
+      await this.assertActorCanGrantPermissions(orgId, projectId, userId, kept, context);
+      return { permissions: kept.length > 0 ? kept : [...MINIMAL_JOB_TOKEN_PERMISSIONS], withheld: accountLevel };
     }
     const { granted, withheld } = splitNoActorJobPermissions(permissions);
     if (withheld.length > 0) {
@@ -367,7 +372,7 @@ export class PipelineExpanderService {
     permissions: string[] | null,
     context: string,
   ): Promise<void> {
-    if (!userId || !permissions || permissions.length === 0) return;
+    if (!hasUserActor(userId) || !permissions || permissions.length === 0) return;
     for (const permission of permissions) {
       const result = await this.accessService.can({
         org_id: orgId,
@@ -590,6 +595,7 @@ export class PipelineExpanderService {
         userId,
         this.mergeStepTokenPermissions(pipelineTokenPermissions, stepTokenPermissions),
         `Pipeline "${request.pipeline_name}" step "${stepName}" permissions`,
+        options,
       );
 
       // Create the job

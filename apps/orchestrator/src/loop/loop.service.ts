@@ -40,6 +40,7 @@ import {
   OutboundUrlError,
   requestVettedUrl,
   vetOutboundUrl,
+  hasUserActor,
 } from '@eve/shared';
 import {
   accessRoleQueries,
@@ -402,10 +403,11 @@ type JobDispatchOutcome =
 /**
  * The user whose user-scope secrets a job's invocation may resolve: the job's
  * actor, unless the API marked the job (work started with an org-bound token)
- * to resolve none, whoever owns that account later.
+ * to resolve none, whoever owns that account later. The 'system' actor of
+ * internal runs is no user.
  */
 export function secretsUserIdForJob(job: Pick<Job, 'actor_user_id' | 'user_secrets_excluded'>): string | undefined {
-  if (!job.actor_user_id || job.user_secrets_excluded) {
+  if (!hasUserActor(job.actor_user_id) || job.user_secrets_excluded) {
     return undefined;
   }
   return job.actor_user_id;

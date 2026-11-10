@@ -841,7 +841,9 @@ Notes:
   step ceilings judge the bot, and are marked by the API (`jobs.user_secrets_excluded`)
   to never resolve the account's user-scope secrets, even if a person later adopts
   the account. Job tokens for that work carry the mark, so work they start is
-  marked too.
+  marked too. Marked work never carries account-level permissions (`orgs:create`):
+  the step ceiling withholds them and `mint-job-token` and token verification
+  drop them.
   Tokens minted by a system admin are not bound.
 - `--ttl <days>` sets the token TTL (1-90 days; the API refuses other values).
   Without it, the server's `EVE_AUTH_TOKEN_TTL_DAYS` applies.

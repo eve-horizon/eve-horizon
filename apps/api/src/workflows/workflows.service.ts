@@ -1,7 +1,7 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, RequestTimeoutException } from '@nestjs/common';
 import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
-import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isOrgManagementPermission, isValidPermission, MINIMAL_JOB_TOKEN_PERMISSIONS, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
+import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isAccountLevelPermission, isOrgManagementPermission, isValidPermission, MINIMAL_JOB_TOKEN_PERMISSIONS, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
 import type { WorkStartOptions } from '../auth/token-scope.js';
 import { intersectScopes, pathPatternBase } from './scope-algebra.js';
@@ -194,7 +194,7 @@ export class WorkflowsService {
     scope: AccessBindingScope | null,
     context: string,
   ): Promise<void> {
-    if (!userId || !scope) return;
+    if (!hasUserActor(userId) || !scope) return;
     const checks: Array<{ permission: string; resource: { type: 'orgfs' | 'orgdocs' | 'envdb' | 'cloud_fs'; id: string; action: 'read' | 'write' | 'admin' } }> = [];
     for (const prefix of scope.orgfs?.allow_prefixes ?? []) {
       checks.push({ permission: 'orgfs:write', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'write' } });
@@ -279,13 +279,17 @@ export class WorkflowsService {
     userId: string | undefined,
     permissions: string[] | null,
     context: string,
+    work: WorkStartOptions = {},
   ): Promise<{ permissions: string[] | null; withheld: string[] }> {
     if (!permissions || permissions.length === 0) {
       return { permissions, withheld: [] };
     }
     if (hasUserActor(userId)) {
-      await this.assertActorCanGrantPermissions(orgId, projectId, userId, permissions, context);
-      return { permissions, withheld: [] };
+      // Work started with an org-bound token never carries account-level permissions.
+      const accountLevel = work.userSecretsExcluded ? permissions.filter(isAccountLevelPermission) : [];
+      const kept = permissions.filter((permission) => !accountLevel.includes(permission));
+      await this.assertActorCanGrantPermissions(orgId, projectId, userId, kept, context);
+      return { permissions: kept.length > 0 ? kept : [...MINIMAL_JOB_TOKEN_PERMISSIONS], withheld: accountLevel };
     }
     const { granted, withheld } = splitNoActorJobPermissions(permissions);
     if (withheld.length > 0) {
@@ -301,7 +305,7 @@ export class WorkflowsService {
     permissions: string[] | null,
     context: string,
   ): Promise<void> {
-    if (!userId || !permissions || permissions.length === 0) return;
+    if (!hasUserActor(userId) || !permissions || permissions.length === 0) return;
     for (const permission of permissions) {
       const result = await this.accessService.can({
         org_id: orgId,
@@ -1128,6 +1132,7 @@ export class WorkflowsService {
         userId,
         this.mergeStepTokenPermissions(workflowTokenPermissions, stepTokenPermissions, invocationTokenPermissions),
         `Workflow "${workflowName}" step "${stepName}" permissions`,
+        options,
       );
       const {
         resourceRefs: stepResourceRefs,
@@ -1413,6 +1418,7 @@ export class WorkflowsService {
           userId,
           source.token_permissions,
           `${retryContext} permissions`,
+          options,
         );
 
         const retryHints = {

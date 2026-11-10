@@ -545,7 +545,10 @@ export class TokenVerifierService {
       project_id: payload.project_id as string,
       job_id: payload.job_id as string,
       // Held to the job-token rule even if the token was signed before it.
-      permissions: clampJobTokenPermissions(perms as string[], { hasActor: hasUserActor(userId) }),
+      permissions: clampJobTokenPermissions(perms as string[], {
+        hasActor: hasUserActor(userId),
+        userSecretsExcluded: payload.user_secrets_excluded === true,
+      }),
       ...(scope ? { scope } : {}),
       ...(typeof payload.agent_slug === 'string' ? { agent_slug: payload.agent_slug } : {}),
       ...(typeof payload.email === 'string' ? { email: payload.email } : {}),

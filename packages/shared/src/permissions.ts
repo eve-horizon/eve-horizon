@@ -247,11 +247,32 @@ export function splitNoActorJobPermissions(requested: readonly string[]): { gran
 
 /**
  * The permissions a job token may carry, applied when it is minted and again
- * when it is verified: never platform permissions, and permissions that need
- * a user ({@link isUserActorOnlyPermission}) only for a job that a user started.
+ * when it is verified: never platform permissions, permissions that need a
+ * user ({@link isUserActorOnlyPermission}) only for a job that a user started,
+ * and no account-level permissions for work started with an org-bound token.
  */
-export function clampJobTokenPermissions(requested: readonly string[], options: { hasActor: boolean }): string[] {
+export function clampJobTokenPermissions(
+  requested: readonly string[],
+  options: { hasActor: boolean; userSecretsExcluded?: boolean },
+): string[] {
   return [...new Set(requested)].filter(
-    (permission) => !isPlatformPermission(permission) && (options.hasActor || !isUserActorOnlyPermission(permission)),
+    (permission) =>
+      !isPlatformPermission(permission)
+      && (options.hasActor || !isUserActorOnlyPermission(permission))
+      && !(options.userSecretsExcluded && isAccountLevelPermission(permission)),
   );
+}
+
+/**
+ * Permissions that act on the account rather than an org's data (creating
+ * orgs). Org-bound user tokens never hold them, and neither does work they
+ * start (jobs marked `user_secrets_excluded`) or that work's job tokens.
+ */
+export const ACCOUNT_LEVEL_PERMISSIONS: readonly Permission[] = ['orgs:create'];
+
+const ACCOUNT_LEVEL_SET: ReadonlySet<string> = new Set<string>(ACCOUNT_LEVEL_PERMISSIONS);
+
+/** True for a permission in {@link ACCOUNT_LEVEL_PERMISSIONS}. */
+export function isAccountLevelPermission(permission: string): boolean {
+  return ACCOUNT_LEVEL_SET.has(permission);
 }

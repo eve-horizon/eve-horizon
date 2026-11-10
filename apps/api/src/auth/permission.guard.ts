@@ -12,9 +12,7 @@ import { RbacService, type OwnedResourceKind } from './rbac.service.js';
 import { PERMISSION_KEY, SCOPE_NARROWED_KEY } from './permission.decorator.js';
 import { expandPermissions, hasAnyPermission, type Permission } from './permissions.js';
 import { isScopedToken, tokenMayAddressOrg, tokenMayAddressProject } from './token-scope.js';
-
-/** Permissions that act on the account rather than an org's data; org-bound tokens never hold them. */
-const ACCOUNT_LEVEL_PERMISSIONS: ReadonlySet<string> = new Set(['orgs:create']);
+import { isAccountLevelPermission } from '@eve/shared';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -150,7 +148,7 @@ export class PermissionGuard implements CanActivate {
     // never the account-level ones (creating orgs).
     if (boundOrgId) {
       const inOrg = await this.rbacService.getEffectivePermissions(user.user_id, orgId ?? boundOrgId, contextProjectId);
-      return new Set([...inOrg].filter((permission) => !ACCOUNT_LEVEL_PERMISSIONS.has(permission)));
+      return new Set([...inOrg].filter((permission) => !isAccountLevelPermission(permission)));
     }
 
     if (orgId) {
