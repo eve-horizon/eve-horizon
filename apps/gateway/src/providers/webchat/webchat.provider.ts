@@ -130,12 +130,19 @@ export class WebChatGatewayProvider implements GatewayProvider {
     this.orgId = config.integration.org_id;
 
     const port = (config.settings['port'] as number) ?? 4820;
-    this.eveApiUrl =
-      (config.settings['eve_api_url'] as string | undefined) ??
-      process.env.EVE_API_URL ??
-      '';
+    // Connection tokens are verified only against the platform's own keys,
+    // fetched from the gateway's EVE_API_URL. Integration settings are
+    // editable by org admins, so an eve_api_url setting is ignored.
+    if (config.settings['eve_api_url'] !== undefined) {
+      logger.warn({
+        event: 'webchat.setting_ignored',
+        setting: 'eve_api_url',
+        integrationId: config.integration.id,
+      });
+    }
+    this.eveApiUrl = process.env.EVE_API_URL ?? '';
     if (!this.eveApiUrl) {
-      throw new Error('WebChat provider requires eve_api_url setting or EVE_API_URL env');
+      throw new Error('WebChat provider requires EVE_API_URL');
     }
 
     this.httpServer = http.createServer((_req, res) => {

@@ -186,7 +186,7 @@ ws://gateway:4820/?token=<jwt>
 ```
 
 **Features:**
-- JWT auth in WebSocket handshake using Eve JWKS verification (`RS256`, `exp`, `nbf`, `kid`)
+- JWT auth in WebSocket handshake using Eve JWKS verification (`RS256`, `exp`, `nbf`, `kid`); the keys always come from the gateway's own `EVE_API_URL` (an `eve_api_url` integration setting is ignored)
 - Heartbeat ping/pong (30s interval)
 - Thread continuity across reconnections
 - Multi-tab support (same user, multiple connections)
