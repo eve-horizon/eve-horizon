@@ -13,6 +13,10 @@ function createGuard(options: {
   isPublic?: boolean;
   perms?: PermsResolver;
   projectOrg?: Record<string, string>;
+  /** Project slugs, keyed slug -> project id */
+  projectSlugs?: Record<string, string>;
+  /** Org slugs, keyed slug -> org id */
+  orgSlugs?: Record<string, string>;
   jobs?: Record<string, JobContext>;
   /** Other project-owned resources keyed as `<kind>:<id>` */
   resources?: Record<string, JobContext>;
@@ -23,6 +27,17 @@ function createGuard(options: {
       const orgId = options.projectOrg?.[projectId];
       if (!orgId) throw new NotFoundException('Project not found');
       return orgId;
+    }),
+    getProjectScope: vi.fn(async (projectInput: string) => {
+      const id = options.projectSlugs?.[projectInput] ?? projectInput;
+      const orgId = options.projectOrg?.[id];
+      if (!orgId) throw new NotFoundException('Project not found');
+      return { id, org_id: orgId };
+    }),
+    getOrgScopeId: vi.fn(async (orgInput: string) => {
+      const id = options.orgSlugs?.[orgInput] ?? orgInput;
+      if (!Object.values(options.projectOrg ?? {}).includes(id)) throw new NotFoundException('Org not found');
+      return id;
     }),
     getResourceProjectContext: vi.fn(async (kind: string, id: string) => {
       const context = options.resources?.[`${kind}:${id}`] ?? (kind === 'job' ? options.jobs?.[id] : undefined);
@@ -298,6 +313,173 @@ describe('PermissionGuard resource context', () => {
       await expect(
         guard.canActivate(executionContext({ user: foreign, params: { runId: run }, url: `/pipeline-runs/${run}/approve` })),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  describe('job, service and service-principal tokens on project and org routes', () => {
+    const projectOrg = { proj_a: 'org_a', proj_b: 'org_b', proj_a2: 'org_a' };
+    const jobToken: AuthUser = {
+      user_id: 'user_owner',
+      is_job_token: true,
+      job_id: jobA,
+      project_id: 'proj_a',
+      org_id: 'org_a',
+      permissions: ['jobs:write', 'secrets:read', 'envdb:read', 'orgdocs:read', 'projects:create'],
+    };
+    const serviceToken: AuthUser = {
+      user_id: 'service:web',
+      is_service_token: true,
+      project_id: 'proj_a',
+      org_id: 'org_a',
+      service_name: 'web',
+      env_name: 'staging',
+      permissions: ['jobs:write', 'secrets:read'],
+    };
+    const principal: AuthUser = {
+      user_id: 'sp_1',
+      is_service_principal: true,
+      org_id: 'org_a',
+      permissions: ['jobs:write', 'orgdocs:read'],
+    };
+
+    const createJob = (user: AuthUser, project: string) =>
+      executionContext({
+        user,
+        params: { project_id: project },
+        body: { description: 'do the thing' },
+        routeOptions: { url: '/projects/:project_id/jobs' },
+        url: `/projects/${project}/jobs`,
+      });
+
+    it("refuses a job token on another project's route", async () => {
+      const { guard } = createGuard({ required: ['jobs:write'], projectOrg });
+
+      await expect(guard.canActivate(createJob(jobToken, 'proj_b'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses a job token on a sibling project in its own org', async () => {
+      const { guard } = createGuard({ required: ['jobs:write'], projectOrg });
+
+      await expect(guard.canActivate(createJob(jobToken, 'proj_a2'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('allows a job token on its own project, by id or by slug', async () => {
+      const { guard } = createGuard({ required: ['jobs:write'], projectOrg, projectSlugs: { alpha: 'proj_a' } });
+
+      await expect(guard.canActivate(createJob(jobToken, 'proj_a'))).resolves.toBe(true);
+      await expect(guard.canActivate(createJob(jobToken, 'alpha'))).resolves.toBe(true);
+    });
+
+    it('refuses a job token on /projects/:id routes of another project', async () => {
+      const { guard } = createGuard({ required: ['envdb:read'], projectOrg });
+
+      await expect(
+        guard.canActivate(
+          executionContext({
+            user: jobToken,
+            params: { id: 'proj_b', name: 'staging' },
+            routeOptions: { url: '/projects/:id/envs/:name/db/snapshots' },
+            url: '/projects/proj_b/envs/staging/db/snapshots',
+          }),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses a service token on another project and allows its own', async () => {
+      const { guard } = createGuard({ required: ['secrets:read'], projectOrg });
+      const listSecrets = (project: string) =>
+        executionContext({
+          user: serviceToken,
+          params: { project_id: project },
+          routeOptions: { url: '/projects/:project_id/secrets' },
+          url: `/projects/${project}/secrets`,
+        });
+
+      await expect(guard.canActivate(listSecrets('proj_b'))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(guard.canActivate(listSecrets('proj_a'))).resolves.toBe(true);
+    });
+
+    it('allows an org-scoped service principal on projects in its org and refuses other orgs', async () => {
+      const { guard } = createGuard({ required: ['jobs:write'], projectOrg });
+
+      await expect(guard.canActivate(createJob(principal, 'proj_a'))).resolves.toBe(true);
+      await expect(guard.canActivate(createJob(principal, 'proj_a2'))).resolves.toBe(true);
+      await expect(guard.canActivate(createJob(principal, 'proj_b'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses a token that carries neither a project nor an org', async () => {
+      const unscoped: AuthUser = { user_id: 'u', is_job_token: true, job_id: jobA, permissions: ['jobs:write'] };
+      const { guard } = createGuard({ required: ['jobs:write'], projectOrg });
+
+      await expect(guard.canActivate(createJob(unscoped, 'proj_a'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses /orgs/:org_id routes of another org and allows its own', async () => {
+      const { guard } = createGuard({ required: ['orgdocs:read'], projectOrg });
+      const readDocs = (user: AuthUser, org: string) =>
+        executionContext({
+          user,
+          params: { org_id: org },
+          routeOptions: { url: '/orgs/:org_id/docs' },
+          url: `/orgs/${org}/docs`,
+        });
+
+      await expect(guard.canActivate(readDocs(jobToken, 'org_b'))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(guard.canActivate(readDocs(principal, 'org_b'))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(guard.canActivate(readDocs(jobToken, 'org_a'))).resolves.toBe(true);
+      await expect(guard.canActivate(readDocs(principal, 'org_a'))).resolves.toBe(true);
+    });
+
+    it('allows a token on its own org addressed by slug', async () => {
+      const { guard } = createGuard({ required: ['orgdocs:read'], projectOrg, orgSlugs: { acme: 'org_a', other: 'org_b' } });
+      const readDocs = (user: AuthUser, org: string) =>
+        executionContext({ user, params: { org_id: org }, routeOptions: { url: '/orgs/:org_id/docs' }, url: `/orgs/${org}/docs` });
+
+      await expect(guard.canActivate(readDocs(jobToken, 'acme'))).resolves.toBe(true);
+      await expect(guard.canActivate(readDocs(principal, 'acme'))).resolves.toBe(true);
+      await expect(guard.canActivate(readDocs(jobToken, 'other'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses /orgs/:id routes of another org', async () => {
+      const { guard } = createGuard({ required: ['orgdocs:read'], projectOrg });
+
+      await expect(
+        guard.canActivate(
+          executionContext({ user: jobToken, params: { id: 'org_b' }, routeOptions: { url: '/orgs/:id' }, url: '/orgs/org_b' }),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("judges a project-only token on org routes by its project's org", async () => {
+      const projectOnly: AuthUser = { ...jobToken, org_id: undefined };
+      const { guard } = createGuard({ required: ['orgdocs:read'], projectOrg });
+      const readDocs = (org: string) =>
+        executionContext({ user: projectOnly, params: { org_id: org }, routeOptions: { url: '/orgs/:org_id/docs' }, url: `/orgs/${org}/docs` });
+
+      await expect(guard.canActivate(readDocs('org_a'))).resolves.toBe(true);
+      await expect(guard.canActivate(readDocs('org_b'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('holds body.org_id to the token org on routes with no path context', async () => {
+      const { guard } = createGuard({ required: ['projects:create'], projectOrg });
+      const createProject = (org: string) =>
+        executionContext({ user: jobToken, params: {}, body: { org_id: org, name: 'x' }, routeOptions: { url: '/projects' }, url: '/projects' });
+
+      await expect(guard.canActivate(createProject('org_b'))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(guard.canActivate(createProject('org_a'))).resolves.toBe(true);
+    });
+
+    it('leaves user tokens on project and org routes to role resolution', async () => {
+      const { guard, rbacService } = createGuard({
+        required: ['jobs:write'],
+        projectOrg,
+        perms: (_userId, orgId) => (orgId === 'org_b' ? new Set(['jobs:write']) : new Set()),
+      });
+
+      await expect(guard.canActivate(createJob(member, 'proj_b'))).resolves.toBe(true);
+      await expect(guard.canActivate(createJob(member, 'proj_a'))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(rbacService.getProjectScope).not.toHaveBeenCalled();
+      expect(rbacService.getEffectivePermissions).toHaveBeenCalledWith('user_member', 'org_b', 'proj_b');
     });
   });
 

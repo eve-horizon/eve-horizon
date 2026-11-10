@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { UnauthorizedException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { AuthUser } from './auth.service.js';
 import { ScopedAccessService } from './scoped-access.service.js';
 
@@ -171,5 +171,118 @@ describe('ScopedAccessService', () => {
     });
 
     expect(result).toBe(false);
+  });
+});
+
+describe('ScopedAccessService job tokens and the org or project they address', () => {
+  const projectOrg: Record<string, string> = { proj_a: 'org_a', proj_a2: 'org_a', proj_b: 'org_b' };
+  const projectSlugs: Record<string, string> = { alpha: 'proj_a' };
+  const orgSlugs: Record<string, string> = { acme: 'org_a', other: 'org_b' };
+  const jobToken: AuthUser = {
+    user_id: 'user_job',
+    is_job_token: true,
+    job_id: 'demo-abc12345',
+    project_id: 'proj_a',
+    org_id: 'org_a',
+    permissions: ['envdb:read', 'orgdocs:read', 'orgfs:write'],
+  };
+
+  function createService() {
+    const authService = { isEnabled: vi.fn(() => true) };
+    const accessService = {
+      can: vi.fn(async () => ({ allowed: true, source: 'test' })),
+      evaluateScope: vi.fn(() => ({ scope_required: true, scope_matched: true })),
+    };
+    const rbacService = {
+      getProjectScope: vi.fn(async (projectInput: string) => {
+        const id = projectSlugs[projectInput] ?? projectInput;
+        const orgId = projectOrg[id];
+        if (!orgId) throw new NotFoundException('Project not found');
+        return { id, org_id: orgId };
+      }),
+      getOrgScopeId: vi.fn(async (orgInput: string) => {
+        const id = orgSlugs[orgInput] ?? orgInput;
+        if (!Object.values(projectOrg).includes(id)) throw new NotFoundException('Org not found');
+        return id;
+      }),
+    };
+    const service = Reflect.construct(ScopedAccessService, [authService, accessService, rbacService]) as ScopedAccessService;
+    return { service, accessService, rbacService };
+  }
+
+  it('refuses a job token for another org', async () => {
+    const { service } = createService();
+
+    await expect(service.can({ org_id: 'org_b', permission: 'orgdocs:read', user: jobToken })).resolves.toBe(false);
+  });
+
+  it('refuses a job token for another project, in its own org or another', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.can({ org_id: 'org_a', project_id: 'proj_a2', permission: 'envdb:read', user: jobToken }),
+    ).resolves.toBe(false);
+    await expect(
+      service.can({ org_id: 'org_b', project_id: 'proj_b', permission: 'envdb:read', user: jobToken }),
+    ).resolves.toBe(false);
+  });
+
+  it('allows a job token on its own org and project, by id or by slug', async () => {
+    const { service } = createService();
+
+    await expect(service.can({ org_id: 'org_a', permission: 'orgdocs:read', user: jobToken })).resolves.toBe(true);
+    await expect(
+      service.can({ org_id: 'org_a', project_id: 'proj_a', permission: 'envdb:read', user: jobToken }),
+    ).resolves.toBe(true);
+    await expect(
+      service.can({ org_id: 'org_a', project_id: 'alpha', permission: 'envdb:read', user: jobToken }),
+    ).resolves.toBe(true);
+    await expect(service.can({ org_id: 'acme', permission: 'orgdocs:read', user: jobToken })).resolves.toBe(true);
+  });
+
+  it('refuses a job token for another org addressed by slug', async () => {
+    const { service } = createService();
+
+    await expect(service.can({ org_id: 'other', permission: 'orgdocs:read', user: jobToken })).resolves.toBe(false);
+  });
+
+  it("judges a job token without an org claim by its project's org", async () => {
+    const { service } = createService();
+    const projectOnly: AuthUser = { ...jobToken, org_id: undefined };
+
+    await expect(service.can({ org_id: 'org_a', permission: 'orgdocs:read', user: projectOnly })).resolves.toBe(true);
+    await expect(service.can({ org_id: 'org_b', permission: 'orgdocs:read', user: projectOnly })).resolves.toBe(false);
+  });
+
+  it('refuses a job token that carries neither a project nor an org', async () => {
+    const { service } = createService();
+    const unscoped: AuthUser = { user_id: 'user_job', is_job_token: true, permissions: ['orgdocs:read'] };
+
+    await expect(service.can({ org_id: 'org_a', permission: 'orgdocs:read', user: unscoped })).resolves.toBe(false);
+  });
+
+  it('refuses a scoped job token for another org before its scope claim is evaluated', async () => {
+    const { service, accessService } = createService();
+    const scoped: AuthUser = { ...jobToken, scope: { orgfs: { allow_prefixes: ['/groups/**'] } } };
+
+    await expect(
+      service.can({
+        org_id: 'org_b',
+        permission: 'orgfs:write',
+        user: scoped,
+        resource: { type: 'orgfs', id: '/groups/x.yaml', action: 'write' },
+      }),
+    ).resolves.toBe(false);
+    expect(accessService.evaluateScope).not.toHaveBeenCalled();
+  });
+
+  it('leaves user tokens to AccessService', async () => {
+    const { service, accessService, rbacService } = createService();
+
+    await expect(
+      service.can({ org_id: 'org_b', project_id: 'proj_b', permission: 'envdb:read', user: { user_id: 'user_123' } }),
+    ).resolves.toBe(true);
+    expect(accessService.can).toHaveBeenCalledWith(expect.objectContaining({ org_id: 'org_b', project_id: 'proj_b' }));
+    expect(rbacService.getProjectScope).not.toHaveBeenCalled();
   });
 });
