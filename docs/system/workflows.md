@@ -118,10 +118,19 @@ When a workflow is invoked, the API compiles it into a job tree:
 
 When a step runs, the results of its completed dependencies are appended to its
 prompt under "Prior Step Results", and a step `condition` reads the status of
-the step it names. Both read only steps of the same run (children of the same
-root). A dependency added to a step later, for example with
-`POST /jobs/{job_id}/dependencies`, still gates when it runs but never feeds it
-another job's output.
+the step it names (matched on the step name the workflow gave it). A step takes
+input only from steps the workflow compiled for the same run: children of the
+same root that carry a step name set by the workflow (jobs created through the
+jobs API never carry one, even under a run root), and that run as the step's
+own actor or as the user who invoked the run. A retrier's replacement steps
+therefore still read the run's original steps, but a step that someone else
+has since become the actor of feeds no step that runs as another person, and a
+condition that names such a step is not met (the step is skipped with a reason
+saying so).
+
+A dependency added to a step later, for example with
+`POST /jobs/{job_id}/dependencies`, still gates when the step runs, but feeds
+it nothing unless it names a step that may feed it under these rules.
 
 ### Job Tree
 

@@ -401,13 +401,34 @@ type JobDispatchOutcome =
     };
 
 /**
- * True when `other` is a step of the same workflow run as `step` (both
- * children of one root). A step's prompt and its condition read only these,
- * so a dependency added to a step later, by anyone, cannot feed it another
- * job's output.
+ * True when `source` is a step the workflow compiled for the same run as
+ * `step`: a child of the same root that carries the step name the workflow
+ * expander gave it. Jobs created through the jobs API never carry one, even
+ * when created under a run root.
  */
-export function isStepOfSameRun(step: Pick<Job, 'parent_id'>, other: Pick<Job, 'parent_id'>): boolean {
-  return Boolean(step.parent_id) && other.parent_id === step.parent_id;
+export function isCompiledStepOfRun(
+  step: Pick<Job, 'parent_id'>,
+  source: Pick<Job, 'parent_id' | 'step_name'>,
+): boolean {
+  return Boolean(step.parent_id) && source.parent_id === step.parent_id && Boolean(source.step_name);
+}
+
+/**
+ * True when `source` may feed workflow step `step` (its Prior Step Results and
+ * its condition): a compiled step of the same run that runs as the step's own
+ * actor or as the run's (whoever invoked it, read from the run root). A
+ * retrier's steps therefore read the run's original steps, while a step that
+ * now runs as someone else feeds no step that runs as another person.
+ */
+export function mayFeedStep(
+  step: Pick<Job, 'parent_id' | 'actor_user_id'>,
+  run: Pick<Job, 'actor_user_id'> | null,
+  source: Pick<Job, 'parent_id' | 'step_name' | 'actor_user_id'>,
+): boolean {
+  if (!isCompiledStepOfRun(step, source)) return false;
+  const sourceActor = source.actor_user_id ?? null;
+  return sourceActor === (step.actor_user_id ?? null)
+    || (run !== null && sourceActor === (run.actor_user_id ?? null));
 }
 
 /**
@@ -1080,14 +1101,24 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
     // Prefer the concrete dependency edge for this generation. Workflow retry
     // creates replacement jobs with the same step_name, so sibling lookup alone
-    // can accidentally read a superseded earlier attempt.
-    const dependencies = (await jobs.getDependencies(job.id)).filter((dep) => isStepOfSameRun(job, dep));
+    // can accidentally read a superseded earlier attempt. Only compiled steps
+    // of this run count, matched on the step_name the workflow gave them.
+    const dependencies = (await jobs.getDependencies(job.id)).filter((dep) => isCompiledStepOfRun(job, dep));
     const siblingJob =
-      dependencies.find((dep) => dep.step_name === refStepName || dep.hints?.step_name === refStepName)
+      dependencies.find((dep) => dep.step_name === refStepName)
       ?? await jobs.findSiblingByStepName(job.parent_id, refStepName);
     if (!siblingJob) {
       this.logger.warn(`[workflow] Job ${job.id} condition references step "${refStepName}" but sibling not found — running unconditionally`);
       return null;
+    }
+
+    // A step that now runs as someone other than this step's actor or the
+    // run's does not decide whether this step runs.
+    const run = await jobs.findById(job.parent_id);
+    if (!mayFeedStep(job, run, siblingJob)) {
+      const reason = `Condition "${condition}" not met: step "${refStepName}" (${siblingJob.id}) runs as someone other than this step's actor or the run's`;
+      this.logger.warn(`[workflow] Step "${job.step_name}" (${job.id}): ${reason} — skipping`);
+      return { shouldRun: false, reason };
     }
 
     // The referenced step must be done for us to evaluate the condition
@@ -1623,8 +1654,8 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
   /**
    * Step 5a of processJob: enrich workflow step jobs with prior step results.
    * Returns the job description, appending the results of completed
-   * dependencies from the same workflow run (best-effort — enrichment failures
-   * fall back to the plain description).
+   * dependencies that may feed it (see mayFeedStep; best-effort — enrichment
+   * failures fall back to the plain description).
    */
   private async enrichWorkflowStep(
     job: Job,
@@ -1634,15 +1665,16 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     if (job.hints?.workflow_name) {
       try {
         const deps = await jobs.getDependencies(job.id);
+        const run = job.parent_id ? await jobs.findById(job.parent_id) : null;
         const priorResults: string[] = [];
         for (const dep of deps) {
-          if (dep.phase === 'done' && isStepOfSameRun(job, dep)) {
+          if (dep.phase === 'done' && mayFeedStep(job, run, dep)) {
             const depAttempt = await jobs.getLatestAttempt(dep.id);
             if (depAttempt?.result_text) {
               const resultText = depAttempt.result_text.length > 50_000
                 ? depAttempt.result_text.slice(0, 50_000) + '\n\n[truncated — result exceeded 50KB]'
                 : depAttempt.result_text;
-              const stepName = dep.hints?.step_name ?? dep.id;
+              const stepName = dep.step_name ?? dep.id;
               priorResults.push(`### Step: ${stepName} (${dep.id})\n\n${resultText}`);
             }
           }
