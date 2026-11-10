@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as yaml from 'yaml';
 import {
   DEFAULT_SKILL_AGENTS,
@@ -159,7 +159,7 @@ function installSkill(skillsBin: string, skill: SkillSource, projectRoot: string
           const rel = path.relative(projectRoot, dir);
           const installSource = rel.startsWith('.') ? rel : `./${rel}`;
           for (const agent of agents) {
-            execSync(`${skillsBin} add ${JSON.stringify(installSource)} -a ${agent} -s '*' -y --full-depth`, {
+            execFileSync(skillsBin, ['add', installSource, '-a', agent, '-s', '*', '-y', '--full-depth'], {
               cwd: projectRoot,
               stdio: 'inherit',
               timeout: 120000,
@@ -171,7 +171,7 @@ function installSkill(skillsBin: string, skill: SkillSource, projectRoot: string
     }
 
     for (const agent of agents) {
-      execSync(`${skillsBin} add ${JSON.stringify(skill.source)} -a ${agent} -s '*' -y --full-depth`, {
+      execFileSync(skillsBin, ['add', skill.source, '-a', agent, '-s', '*', '-y', '--full-depth'], {
         cwd: projectRoot,
         stdio: 'inherit',
         timeout: 120000,

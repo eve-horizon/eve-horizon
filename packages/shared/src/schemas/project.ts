@@ -2,9 +2,17 @@ import { z } from 'zod';
 import { PaginationSchema, MemberRoleSchema } from './common.js';
 import { EnvironmentResponseSchema } from './environment.js';
 
-const SSH_GIT_URL_RE = /^[\w.-]+@[\w.-]+:[\w./-]+$/;
+// scp-style SSH (e.g. git@github.com:org/repo.git); user and host start with a word character.
+const SSH_GIT_URL_RE = /^\w[\w.-]*@\w[\w.-]*:[\w./-]+$/;
 
-const RepoUrlSchema = z.string().refine((value) => {
+// repo_url reaches git (and, on developer machines, other tools) as a command
+// argument, so it may not contain whitespace, control characters, quotes,
+// backslashes or the shell characters $ ` ; | & < > ( ), nor start with '-'.
+// Percent-encode such characters in a URL path instead (git decodes them).
+const REPO_URL_FORBIDDEN_RE = /[\s\x00-\x1f\x7f$`;|&<>()'"\\]/;
+
+const RepoUrlSchema = z.string().trim().refine((value) => {
+  if (value.startsWith('-') || REPO_URL_FORBIDDEN_RE.test(value)) return false;
   // Accept SSH git URLs (e.g. git@github.com:org/repo.git)
   if (SSH_GIT_URL_RE.test(value)) return true;
   try {
@@ -13,7 +21,7 @@ const RepoUrlSchema = z.string().refine((value) => {
   } catch {
     return false;
   }
-}, 'repo_url must be an http(s), file://, or SSH git URL');
+}, 'repo_url must be an http(s), file://, or SSH git URL without spaces, quotes or shell characters ($ ` ; | & < > ( ) \\)');
 const RepoUrlOrUnsetSchema = z.union([RepoUrlSchema, z.literal('')]);
 
 // Slug: 4-8 chars, starts with letter, alphanumeric only

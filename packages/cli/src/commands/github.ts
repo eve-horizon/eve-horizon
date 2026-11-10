@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import type { FlagValue } from '../lib/args';
 import { getStringFlag, getBooleanFlag } from '../lib/args';
 import type { ResolvedContext } from '../lib/context';
@@ -151,38 +151,34 @@ function tryGhWebhook(
   secret: string,
   events: string[],
 ): boolean {
+  // Every value goes to gh as its own argument; nothing passes through a shell.
+  const gh = (args: string[]): string =>
+    execFileSync('gh', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000 });
+
   // Check if gh CLI is available and authenticated
   try {
-    execSync('gh auth status', { stdio: 'pipe', timeout: 10000 });
+    execFileSync('gh', ['auth', 'status'], { stdio: 'pipe', timeout: 10000 });
   } catch {
     return false;
   }
 
-  // Check for existing Eve webhook to avoid duplicates
+  const hooksPath = `repos/${ownerRepo}/hooks`;
+  const hookFields = [
+    '-f', `config[url]=${webhookUrl}`,
+    '-f', 'config[content_type]=json',
+    '-f', `config[secret]=${secret}`,
+    '-f', 'config[insecure_ssl]=0',
+    ...events.flatMap((event) => ['-f', `events[]=${event}`]),
+    '-f', 'active=true',
+  ];
+
+  // Update an existing Eve webhook rather than adding a duplicate
   try {
-    const existing = execSync(
-      `gh api repos/${ownerRepo}/hooks --jq '[.[] | select(.config.url == "${webhookUrl}")] | length'`,
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000 },
-    ).trim();
-    if (existing !== '0') {
-      // Update existing webhook
-      const hookId = execSync(
-        `gh api repos/${ownerRepo}/hooks --jq '[.[] | select(.config.url == "${webhookUrl}")][0].id'`,
-        { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000 },
-      ).trim();
-      if (hookId) {
-        execSync(
-          `gh api repos/${ownerRepo}/hooks/${hookId} -X PATCH ` +
-            `-f config[url]="${webhookUrl}" ` +
-            `-f config[content_type]=json ` +
-            `-f config[secret]="${secret}" ` +
-            `-f config[insecure_ssl]=0 ` +
-            events.map((e) => `-f events[]=${e}`).join(' ') +
-            ` -f active=true`,
-          { stdio: 'pipe', timeout: 15000 },
-        );
-        return true;
-      }
+    const hooks = JSON.parse(gh(['api', hooksPath])) as Array<{ id?: number; config?: { url?: string } }>;
+    const existing = hooks.find((hook) => hook.config?.url === webhookUrl);
+    if (existing?.id !== undefined) {
+      gh(['api', `${hooksPath}/${existing.id}`, '-X', 'PATCH', ...hookFields]);
+      return true;
     }
   } catch {
     // Can't check existing hooks — try creating
@@ -190,17 +186,7 @@ function tryGhWebhook(
 
   // Create new webhook
   try {
-    execSync(
-      `gh api repos/${ownerRepo}/hooks -X POST ` +
-        `-f name=web ` +
-        `-f config[url]="${webhookUrl}" ` +
-        `-f config[content_type]=json ` +
-        `-f config[secret]="${secret}" ` +
-        `-f config[insecure_ssl]=0 ` +
-        events.map((e) => `-f events[]=${e}`).join(' ') +
-        ` -f active=true`,
-      { stdio: 'pipe', timeout: 15000 },
-    );
+    gh(['api', hooksPath, '-X', 'POST', '-f', 'name=web', ...hookFields]);
     return true;
   } catch {
     return false;

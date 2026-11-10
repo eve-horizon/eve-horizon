@@ -75,7 +75,7 @@ export async function handleInit(
   try {
     // Clone template
     console.log('Downloading template...');
-    const cloneResult = spawnSync('git', ['clone', '--depth=1', `--branch=${branch}`, template, tempDir], {
+    const cloneResult = spawnSync('git', ['clone', '--depth=1', `--branch=${branch}`, '--', template, tempDir], {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });

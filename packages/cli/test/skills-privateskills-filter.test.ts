@@ -3,8 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const { execSyncMock, spawnSyncMock } = vi.hoisted(() => ({
-  execSyncMock: vi.fn(),
+const { execFileSyncMock, spawnSyncMock } = vi.hoisted(() => ({
+  execFileSyncMock: vi.fn(),
   spawnSyncMock: vi.fn(),
 }));
 
@@ -12,7 +12,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
-    execSync: execSyncMock,
+    execFileSync: execFileSyncMock,
     spawnSync: spawnSyncMock,
   };
 });
@@ -37,7 +37,7 @@ function writeSkillsTxt(root: string, line: string): void {
 }
 
 beforeEach(() => {
-  execSyncMock.mockReset();
+  execFileSyncMock.mockReset();
   spawnSyncMock.mockReset();
   spawnSyncMock.mockReturnValue({ status: 0 } as never);
 });
@@ -53,7 +53,7 @@ describe('eve skills install manifest glob filtering', () => {
 
       await handleSkills('install', [], {});
 
-      const commands = execSyncMock.mock.calls.map((call) => call[0] as string);
+      const commands = execFileSyncMock.mock.calls.map((call) => [call[0], ...(call[1] as string[])].join(' '));
       expect(commands.some((command) => command.includes('public-skill'))).toBe(true);
       expect(commands.some((command) => command.includes('sync-horizon'))).toBe(false);
     } finally {
@@ -72,7 +72,7 @@ describe('eve skills install manifest glob filtering', () => {
 
       await handleSkills('install', [], {});
 
-      const commands = execSyncMock.mock.calls.map((call) => call[0] as string);
+      const commands = execFileSyncMock.mock.calls.map((call) => [call[0], ...(call[1] as string[])].join(' '));
       expect(commands.some((command) => command.includes('private-skills/sync-horizon'))).toBe(true);
     } finally {
       process.chdir(originalCwd);

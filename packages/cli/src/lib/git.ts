@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 import type { ResolvedContext } from './context.js';
@@ -23,6 +23,9 @@ export async function resolveGitRef(
 ): Promise<string> {
   if (isGitSha(ref)) {
     return ref;
+  }
+  if (ref.startsWith('-')) {
+    throw new Error(`Invalid git ref '${ref}': a ref cannot start with '-'.`);
   }
 
   const resolvedRepoDir = repoDir ?? getGitRoot();
@@ -49,7 +52,7 @@ export async function resolveGitRef(
   // Try local resolution first
   if (useLocal && resolvedRepoDir) {
     try {
-      return execSync(`git rev-parse ${ref}`, {
+      return execFileSync('git', ['rev-parse', ref], {
         cwd: resolvedRepoDir,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -81,7 +84,7 @@ export async function resolveGitRef(
 
   // Local repo, no project context, local rev-parse
   try {
-    return execSync(`git rev-parse ${ref}`, {
+    return execFileSync('git', ['rev-parse', ref], {
       cwd: resolvedRepoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -96,7 +99,7 @@ export async function resolveGitRef(
 
 export function getGitRoot(repoDir?: string): string | null {
   try {
-    return execSync('git rev-parse --show-toplevel', {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: repoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -108,7 +111,7 @@ export function getGitRoot(repoDir?: string): string | null {
 
 export function isGitDirty(repoDir: string): boolean {
   try {
-    const status = execSync('git status --porcelain', {
+    const status = execFileSync('git', ['status', '--porcelain'], {
       cwd: repoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -121,7 +124,7 @@ export function isGitDirty(repoDir: string): boolean {
 
 export function getGitBranch(repoDir: string): string | null {
   try {
-    const branch = execSync('git branch --show-current', {
+    const branch = execFileSync('git', ['branch', '--show-current'], {
       cwd: repoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -137,7 +140,7 @@ export function resolveGitBranch(repoDir: string, ref: string): string | null {
     return null;
   }
   try {
-    execSync(`git show-ref --verify --quiet refs/heads/${ref}`, {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${ref}`], {
       cwd: repoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -150,7 +153,7 @@ export function resolveGitBranch(repoDir: string, ref: string): string | null {
 
 function resolveRefRemote(repoUrl: string, ref: string): string | null {
   try {
-    const output = execSync(`git ls-remote ${repoUrl} ${ref}`, {
+    const output = execFileSync('git', ['ls-remote', '--', repoUrl, ref], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 15_000,
@@ -176,7 +179,7 @@ function resolveRefRemote(repoUrl: string, ref: string): string | null {
 
 function getGitOriginUrl(repoDir: string): string | null {
   try {
-    const url = execSync('git config --get remote.origin.url', {
+    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
       cwd: repoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],

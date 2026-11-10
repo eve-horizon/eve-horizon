@@ -1,7 +1,7 @@
 # Job Git Controls
 
 > Status: Current (Implemented)
-> Last Updated: 2026-01-27
+> Last Updated: 2026-11-10
 > Purpose: Document job-level git controls for ref selection, branch creation, commit/push behavior, and workspace configuration.
 
 ## Current (Implemented)
@@ -59,9 +59,16 @@ If `git.ref` is not provided and `ref_policy=auto`:
 ## Repo URL Formats + Auth (Current)
 
 Accepted `repo_url` formats:
-- HTTPS: `https://github.com/org/repo`
+- HTTPS: `https://github.com/org/repo` (also `http://`, ports, and
+  `https://<user>:<token>@host/...`)
 - SSH: `git@github.com:org/repo.git`
 - File: `file:///absolute/path` (local/dev only)
+
+The API trims surrounding whitespace and rejects a `repo_url` that starts with
+`-` or contains whitespace, control characters, quotes, a backslash or any of
+`` $ ` ; | & < > ( ) ``. Percent-encode such characters in a path (for example
+`file:///Users/me/My%20Repo`); git decodes them. The CLI passes `repo_url` and
+refs to git as separate arguments, never through a shell.
 
 Auth behavior:
 - HTTPS clones use `github_token` secrets (e.g., `GITHUB_TOKEN`).

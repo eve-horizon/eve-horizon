@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import { PackYamlSchema } from '../schemas/pack.js';
 import type { PackEntry, ResolvedPack, GatewayPolicy } from '../schemas/pack.js';
@@ -146,22 +146,12 @@ async function fetchPackSource(entry: PackEntry, repoRoot?: string): Promise<str
   fs.mkdirSync(cacheDir, { recursive: true });
   try {
     const gitUrl = resolveGitUrl(source);
-    execSync(
-      `git init ${JSON.stringify(cacheDir)}`,
-      { stdio: 'pipe', timeout: 60_000 },
-    );
-    execSync(
-      `git -C ${JSON.stringify(cacheDir)} remote add origin ${JSON.stringify(gitUrl)}`,
-      { stdio: 'pipe', timeout: 30_000 },
-    );
-    execSync(
-      `git -C ${JSON.stringify(cacheDir)} fetch --depth 1 origin ${JSON.stringify(ref)}`,
-      { stdio: 'pipe', timeout: 60_000 },
-    );
-    execSync(
-      `git -C ${JSON.stringify(cacheDir)} checkout --detach FETCH_HEAD`,
-      { stdio: 'pipe', timeout: 30_000 },
-    );
+    // Arguments go to git directly (no shell); `--` keeps the URL and ref positional.
+    const git = (args: string[], timeout: number) => execFileSync('git', args, { stdio: 'pipe', timeout });
+    git(['init', '--', cacheDir], 60_000);
+    git(['-C', cacheDir, 'remote', 'add', '--', 'origin', gitUrl], 30_000);
+    git(['-C', cacheDir, 'fetch', '--depth', '1', '--', 'origin', ref], 60_000);
+    git(['-C', cacheDir, 'checkout', '--detach', 'FETCH_HEAD'], 30_000);
   } catch (err) {
     // Clean up failed clone
     fs.rmSync(cacheDir, { recursive: true, force: true });
@@ -336,7 +326,7 @@ export function discoverSkillPaths(packDir: string): string[] {
  */
 function resolveLocalRef(dir: string): string {
   try {
-    return execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf-8' }).trim();
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf-8' }).trim();
   } catch {
     return 'local';
   }
