@@ -401,6 +401,16 @@ type JobDispatchOutcome =
     };
 
 /**
+ * True when `other` is a step of the same workflow run as `step` (both
+ * children of one root). A step's prompt and its condition read only these,
+ * so a dependency added to a step later, by anyone, cannot feed it another
+ * job's output.
+ */
+export function isStepOfSameRun(step: Pick<Job, 'parent_id'>, other: Pick<Job, 'parent_id'>): boolean {
+  return Boolean(step.parent_id) && other.parent_id === step.parent_id;
+}
+
+/**
  * The user whose user-scope secrets a job's invocation may resolve: the job's
  * actor, unless the API marked the job (work started with an org-bound token)
  * to resolve none, whoever owns that account later. The 'system' actor of
@@ -1071,7 +1081,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     // Prefer the concrete dependency edge for this generation. Workflow retry
     // creates replacement jobs with the same step_name, so sibling lookup alone
     // can accidentally read a superseded earlier attempt.
-    const dependencies = await jobs.getDependencies(job.id);
+    const dependencies = (await jobs.getDependencies(job.id)).filter((dep) => isStepOfSameRun(job, dep));
     const siblingJob =
       dependencies.find((dep) => dep.step_name === refStepName || dep.hints?.step_name === refStepName)
       ?? await jobs.findSiblingByStepName(job.parent_id, refStepName);
@@ -1612,9 +1622,9 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Step 5a of processJob: enrich workflow step jobs with prior step results.
-   * Returns the job description, appending completed dependency results for
-   * workflow steps (best-effort — enrichment failures fall back to the plain
-   * description).
+   * Returns the job description, appending the results of completed
+   * dependencies from the same workflow run (best-effort — enrichment failures
+   * fall back to the plain description).
    */
   private async enrichWorkflowStep(
     job: Job,
@@ -1626,7 +1636,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
         const deps = await jobs.getDependencies(job.id);
         const priorResults: string[] = [];
         for (const dep of deps) {
-          if (dep.phase === 'done') {
+          if (dep.phase === 'done' && isStepOfSameRun(job, dep)) {
             const depAttempt = await jobs.getLatestAttempt(dep.id);
             if (depAttempt?.result_text) {
               const resultText = depAttempt.result_text.length > 50_000

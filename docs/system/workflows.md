@@ -116,6 +116,13 @@ When a workflow is invoked, the API compiles it into a job tree:
 3. `depends_on` references are wired as `blocks`-type job relations
 4. The scheduler moves child jobs to `ready` only when all blockers are `done`
 
+When a step runs, the results of its completed dependencies are appended to its
+prompt under "Prior Step Results", and a step `condition` reads the status of
+the step it names. Both read only steps of the same run (children of the same
+root). A dependency added to a step later, for example with
+`POST /jobs/{job_id}/dependencies`, still gates when it runs but never feeds it
+another job's output.
+
 ### Job Tree
 
 ```

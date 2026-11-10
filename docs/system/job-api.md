@@ -337,6 +337,13 @@ the actor.
 The body is validated against `UpdateJobRequest` (for example `title` is at
 most 500 characters and `priority` is 0-4); an invalid body is refused with 400.
 
+An update is applied in one transaction: the actor, the phase and the fields
+change together, or, when any part fails (an invalid phase transition, say),
+nothing changes. An edit that changes what the job runs is judged against the
+actor the job had when it was read; if the actor changed before the edit is
+applied, the edit is refused with 409 and the caller should read the job again
+and retry.
+
 ## Dependency Model
 
 Dependencies are stored as relations between jobs (`blocks`, `conditional_blocks`, `waits_for`, etc.).

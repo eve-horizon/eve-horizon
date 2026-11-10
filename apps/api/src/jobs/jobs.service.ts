@@ -969,93 +969,111 @@ export class JobsService {
       throw new NotFoundException(`Job ${jobId} not found`);
     }
 
-    await this.takeOverChangedJob(currentJob, updates, caller);
+    const judgedForCaller = Boolean(caller) && changesWhatRuns(currentJob, updates);
+    const nextActor = caller && judgedForCaller ? await this.actorForChange(currentJob, caller) : null;
 
-    // Handle phase transitions through updatePhase for validation
-    if (updates.phase && updates.phase !== currentJob.phase) {
-      if (updates.phase === 'cancelled') {
-        const cancelled = await this.jobs.cancelJob(jobId, updates.close_reason ?? undefined);
-        if (!cancelled) {
-          throw new NotFoundException(`Job ${jobId} not found`);
-        }
-      } else {
-        const result = await this.jobs.updatePhase(jobId, updates.phase);
-        if (!result.success) {
-          throw new BadRequestException(result.error);
+    // One transaction: the actor, phase and fields change together or not at all.
+    await this.db.begin(async (rawTx) => {
+      const tx = rawTx as unknown as Db;
+      const txJobs = jobQueries(tx);
+
+      if (judgedForCaller) {
+        await this.lockJudgedActor(tx, currentJob);
+      }
+      if (nextActor) {
+        await tx`
+          UPDATE jobs
+          SET actor_user_id = ${nextActor.actorUserId}, user_secrets_excluded = ${nextActor.userSecretsExcluded}, updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+      }
+
+      // Handle phase transitions through updatePhase for validation
+      if (updates.phase && updates.phase !== currentJob.phase) {
+        if (updates.phase === 'cancelled') {
+          const cancelled = await txJobs.cancelJob(jobId, updates.close_reason ?? undefined);
+          if (!cancelled) {
+            throw new NotFoundException(`Job ${jobId} not found`);
+          }
+        } else {
+          const result = await txJobs.updatePhase(jobId, updates.phase);
+          if (!result.success) {
+            throw new BadRequestException(result.error);
+          }
         }
       }
-    }
 
-    // Check if there are any non-phase updates to apply
-    const hasUpdates =
-      updates.title !== undefined ||
-      updates.description !== undefined ||
-      updates.labels !== undefined ||
-      updates.priority !== undefined ||
-      updates.assignee !== undefined ||
-      updates.review_required !== undefined ||
-      updates.defer_until !== undefined ||
-      updates.due_at !== undefined ||
-      updates.close_reason !== undefined ||
-      updates.harness !== undefined ||
-      updates.harness_profile !== undefined ||
-      updates.harness_options !== undefined ||
-      updates.hints !== undefined ||
-      updates.git !== undefined ||
-      updates.workspace !== undefined ||
-      updates.env_name !== undefined ||
-      updates.execution_mode !== undefined;
+      // Check if there are any non-phase updates to apply
+      const hasUpdates =
+        updates.title !== undefined ||
+        updates.description !== undefined ||
+        updates.labels !== undefined ||
+        updates.priority !== undefined ||
+        updates.assignee !== undefined ||
+        updates.review_required !== undefined ||
+        updates.defer_until !== undefined ||
+        updates.due_at !== undefined ||
+        updates.close_reason !== undefined ||
+        updates.harness !== undefined ||
+        updates.harness_profile !== undefined ||
+        updates.harness_options !== undefined ||
+        updates.hints !== undefined ||
+        updates.git !== undefined ||
+        updates.workspace !== undefined ||
+        updates.env_name !== undefined ||
+        updates.execution_mode !== undefined;
 
-    if (hasUpdates) {
-      // Use COALESCE pattern for optional updates - null means "keep existing"
-      // For fields where we want to allow explicit null, we handle specially
-      const title = updates.title ?? null;
-      const description = updates.description !== undefined ? updates.description : null;
-      const labels = updates.labels ?? null;
-      const priority = updates.priority ?? null;
-      const assignee = updates.assignee !== undefined ? updates.assignee : null;
-      const reviewRequired = updates.review_required ?? null;
-      const deferUntil = updates.defer_until !== undefined
-        ? (updates.defer_until ? new Date(updates.defer_until) : null)
-        : null;
-      const dueAt = updates.due_at !== undefined
-        ? (updates.due_at ? new Date(updates.due_at) : null)
-        : null;
-      const closeReason = updates.close_reason !== undefined ? updates.close_reason : null;
-      const harness = updates.harness !== undefined ? updates.harness : null;
-      const harnessProfile = updates.harness_profile !== undefined ? updates.harness_profile : null;
-      const harnessOptions = updates.harness_options !== undefined
-        ? (updates.harness_options as Parameters<typeof this.db.json>[0])
-        : null;
+      if (hasUpdates) {
+        // Use COALESCE pattern for optional updates - null means "keep existing"
+        // For fields where we want to allow explicit null, we handle specially
+        const title = updates.title ?? null;
+        const description = updates.description !== undefined ? updates.description : null;
+        const labels = updates.labels ?? null;
+        const priority = updates.priority ?? null;
+        const assignee = updates.assignee !== undefined ? updates.assignee : null;
+        const reviewRequired = updates.review_required ?? null;
+        const deferUntil = updates.defer_until !== undefined
+          ? (updates.defer_until ? new Date(updates.defer_until) : null)
+          : null;
+        const dueAt = updates.due_at !== undefined
+          ? (updates.due_at ? new Date(updates.due_at) : null)
+          : null;
+        const closeReason = updates.close_reason !== undefined ? updates.close_reason : null;
+        const harness = updates.harness !== undefined ? updates.harness : null;
+        const harnessProfile = updates.harness_profile !== undefined ? updates.harness_profile : null;
+        const harnessOptions = updates.harness_options !== undefined
+          ? (updates.harness_options as Parameters<typeof tx.json>[0])
+          : null;
 
-      // For fields that might be explicitly set to null, we need conditional SQL
-      // Using a simpler approach: just update what was provided
-      await this.db`
-        UPDATE jobs
-        SET
-          title = COALESCE(${title}, title),
-          description = ${updates.description !== undefined ? description : this.db`description`},
-          labels = COALESCE(${labels}, labels),
-          priority = COALESCE(${priority}, priority),
-          assignee = ${updates.assignee !== undefined ? assignee : this.db`assignee`},
-          review_required = COALESCE(${reviewRequired}, review_required),
-          defer_until = ${updates.defer_until !== undefined ? deferUntil : this.db`defer_until`},
-          due_at = ${updates.due_at !== undefined ? dueAt : this.db`due_at`},
-          close_reason = ${updates.close_reason !== undefined ? closeReason : this.db`close_reason`},
-          harness = ${updates.harness !== undefined ? harness : this.db`harness`},
-          harness_profile = ${updates.harness_profile !== undefined ? harnessProfile : this.db`harness_profile`},
-          harness_options = ${updates.harness_options !== undefined
-            ? this.db.json(harnessOptions)
-            : this.db`harness_options`},
-          hints = ${updates.hints !== undefined ? this.db.json(updates.hints as never) : this.db`hints`},
-          git_json = ${updates.git !== undefined ? this.db.json(updates.git) : this.db`git_json`},
-          workspace_json = ${updates.workspace !== undefined ? this.db.json(updates.workspace) : this.db`workspace_json`},
-          env_name = ${updates.env_name !== undefined ? updates.env_name : this.db`env_name`},
-          execution_mode = ${updates.execution_mode !== undefined ? updates.execution_mode : this.db`execution_mode`},
-          updated_at = NOW()
-        WHERE id = ${jobId}
-      `;
-    }
+        // For fields that might be explicitly set to null, we need conditional SQL
+        // Using a simpler approach: just update what was provided
+        await tx`
+          UPDATE jobs
+          SET
+            title = COALESCE(${title}, title),
+            description = ${updates.description !== undefined ? description : tx`description`},
+            labels = COALESCE(${labels}, labels),
+            priority = COALESCE(${priority}, priority),
+            assignee = ${updates.assignee !== undefined ? assignee : tx`assignee`},
+            review_required = COALESCE(${reviewRequired}, review_required),
+            defer_until = ${updates.defer_until !== undefined ? deferUntil : tx`defer_until`},
+            due_at = ${updates.due_at !== undefined ? dueAt : tx`due_at`},
+            close_reason = ${updates.close_reason !== undefined ? closeReason : tx`close_reason`},
+            harness = ${updates.harness !== undefined ? harness : tx`harness`},
+            harness_profile = ${updates.harness_profile !== undefined ? harnessProfile : tx`harness_profile`},
+            harness_options = ${updates.harness_options !== undefined
+              ? tx.json(harnessOptions)
+              : tx`harness_options`},
+            hints = ${updates.hints !== undefined ? tx.json(updates.hints as never) : tx`hints`},
+            git_json = ${updates.git !== undefined ? tx.json(updates.git) : tx`git_json`},
+            workspace_json = ${updates.workspace !== undefined ? tx.json(updates.workspace) : tx`workspace_json`},
+            env_name = ${updates.env_name !== undefined ? updates.env_name : tx`env_name`},
+            execution_mode = ${updates.execution_mode !== undefined ? updates.execution_mode : tx`execution_mode`},
+            updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+      }
+    });
 
     // Re-fetch the updated job
     const updatedJob = await this.jobs.findById(jobId);
@@ -1074,17 +1092,20 @@ export class JobsService {
    * they could grant and hold, otherwise 400 before anything changes. The
    * actor's own edits, and cosmetic ones (priority, due date, review setting,
    * close reason, or moving it anywhere but ready or active), keep the actor.
+   *
+   * Returns the actor (and marker) the job should have after the change, or
+   * null when they stay as they are.
    */
-  private async takeOverChangedJob(job: Job, updates: UpdateJobRequest, caller?: AuthUser): Promise<void> {
-    if (!caller || !changesWhatRuns(job, updates)) {
-      return;
-    }
+  private async actorForChange(
+    job: Job,
+    caller: AuthUser,
+  ): Promise<{ actorUserId: string; userSecretsExcluded: boolean } | null> {
     const { userSecretsExcluded } = workStartOptions(caller);
     const sameActor = job.actor_user_id === caller.user_id;
     // The marker is sticky for the same actor and never loosened by an edit.
     const nextExcluded = sameActor ? job.user_secrets_excluded || userSecretsExcluded : userSecretsExcluded;
     if (sameActor && nextExcluded === job.user_secrets_excluded) {
-      return;
+      return null;
     }
 
     const project = await this.projects.findById(job.project_id);
@@ -1105,12 +1126,26 @@ export class JobsService {
       scope: this.storedTokenScope(job, caller),
       context: `Job ${job.id} token scope`,
     });
+    return { actorUserId: caller.user_id, userSecretsExcluded: nextExcluded };
+  }
 
-    await this.db`
-      UPDATE jobs
-      SET actor_user_id = ${caller.user_id}, user_secrets_excluded = ${nextExcluded}, updated_at = NOW()
+  /**
+   * Locks the job row for the rest of the transaction, provided its actor and
+   * marker are still the ones the change was judged against; otherwise 409.
+   * Concurrent edits are applied one at a time, so one caller's checks never
+   * stand for another caller's content.
+   */
+  private async lockJudgedActor(tx: Db, job: Job): Promise<void> {
+    const [row] = await tx<Array<{ id: string }>>`
+      SELECT id FROM jobs
       WHERE id = ${job.id}
+        AND actor_user_id IS NOT DISTINCT FROM ${job.actor_user_id}
+        AND user_secrets_excluded IS NOT DISTINCT FROM ${job.user_secrets_excluded}
+      FOR UPDATE
     `;
+    if (!row) {
+      throw new ConflictException(`Job ${job.id} changed while it was being updated; read it again and retry`);
+    }
   }
 
   /**
