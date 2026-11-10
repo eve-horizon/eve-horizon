@@ -833,7 +833,8 @@ Notes:
   `body.org_id` and the `GET /jobs` / `GET /projects` listings are held to it;
   its permissions are the user's in that org. Routes with no project, org or
   resource context, and identity or account routes (`/auth/identities`,
-  `/auth/mint`, user secrets, creating orgs), refuse it. Jobs, workflows,
+  `/auth/mint`, user secrets), refuse it, and it never holds `orgs:create`
+  (creating orgs), even when the body names its org. Jobs, workflows,
   pipeline runs and deploys it starts record no user actor, so they never resolve
   the account's user-scope secrets (even if a person later adopts the account).
   Tokens minted by a system admin are not bound.

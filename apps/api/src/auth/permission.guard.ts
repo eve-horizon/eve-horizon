@@ -13,6 +13,9 @@ import { PERMISSION_KEY, SCOPE_NARROWED_KEY } from './permission.decorator.js';
 import { expandPermissions, hasAnyPermission, type Permission } from './permissions.js';
 import { isScopedToken, tokenMayAddressOrg, tokenMayAddressProject } from './token-scope.js';
 
+/** Permissions that act on the account rather than an org's data; org-bound tokens never hold them. */
+const ACCOUNT_LEVEL_PERMISSIONS: ReadonlySet<string> = new Set(['orgs:create']);
+
 @Injectable()
 export class PermissionGuard implements CanActivate {
   constructor(
@@ -143,8 +146,12 @@ export class PermissionGuard implements CanActivate {
       orgId = extractPathOrgId(request) ?? extractBodyOrgId(request);
     }
 
-    // An org-bound token holds only the user's permissions in its org.
-    orgId ??= boundOrgId;
+    // An org-bound token holds only the user's permissions in its org, and
+    // never the account-level ones (creating orgs).
+    if (boundOrgId) {
+      const inOrg = await this.rbacService.getEffectivePermissions(user.user_id, orgId ?? boundOrgId, contextProjectId);
+      return new Set([...inOrg].filter((permission) => !ACCOUNT_LEVEL_PERMISSIONS.has(permission)));
+    }
 
     if (orgId) {
       return this.rbacService.getEffectivePermissions(user.user_id, orgId, contextProjectId);
