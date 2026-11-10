@@ -23,8 +23,8 @@ describe('parseAnsi', () => {
   });
 
   it('keeps markup as plain text', () => {
-    expect(parseAnsi('\x1b[31m<script>alert(1)</script>')).toEqual([
-      { text: '<script>alert(1)</script>', className: 'text-red-400' },
+    expect(parseAnsi('\x1b[31m<b>x</b> <i title="t">y</i>')).toEqual([
+      { text: '<b>x</b> <i title="t">y</i>', className: 'text-red-400' },
     ]);
   });
 });

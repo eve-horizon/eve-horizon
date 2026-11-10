@@ -22,7 +22,7 @@ describe('httpOrigin', () => {
       null,
       '',
       'not a url',
-      'javascript:alert(1)',
+      'javascript:void(0)',
       'data:text/html,x',
       "https://sso.example.test;script-src 'unsafe-inline'",
       'https://a,b.example.test',

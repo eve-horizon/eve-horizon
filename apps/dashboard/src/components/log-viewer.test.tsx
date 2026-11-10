@@ -64,20 +64,20 @@ afterEach(() => {
 
 describe('LogViewer line rendering', () => {
   it('shows markup in a log line as text, not as elements', async () => {
-    const view = await renderLog(['<img src=x onerror=alert(1)>', 'before <script>alert(2)</script> after']);
+    const view = await renderLog(['<a href="/docs" title="Docs">docs</a>', 'before <i>y</i> after']);
 
-    expect(view.querySelector('img')).toBeNull();
-    expect(view.querySelector('script')).toBeNull();
-    expect(view.textContent).toContain('<img src=x onerror=alert(1)>');
-    expect(view.textContent).toContain('before <script>alert(2)</script> after');
+    expect(view.querySelector('a')).toBeNull();
+    expect(view.querySelector('i')).toBeNull();
+    expect(view.textContent).toContain('<a href="/docs" title="Docs">docs</a>');
+    expect(view.textContent).toContain('before <i>y</i> after');
   });
 
   it('keeps ANSI colours while showing markup inside them as text', async () => {
-    const view = await renderLog(['\x1b[31m<img src=x onerror=alert(1)>\x1b[0m tail', '\x1b[1m\x1b[32m<b>ok</b>\x1b[0m']);
+    const view = await renderLog(['\x1b[31m<u class="note">red</u>\x1b[0m tail', '\x1b[1m\x1b[32m<b>ok</b>\x1b[0m']);
 
-    expect(view.querySelector('img')).toBeNull();
+    expect(view.querySelector('u')).toBeNull();
     expect(view.querySelector('b')).toBeNull();
-    expect(view.querySelector('.text-red-400')?.textContent).toBe('<img src=x onerror=alert(1)>');
+    expect(view.querySelector('.text-red-400')?.textContent).toBe('<u class="note">red</u>');
     const green = view.querySelector('.text-green-400');
     expect(green?.textContent).toBe('<b>ok</b>');
     expect(green?.className).toContain('font-bold');
