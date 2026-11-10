@@ -334,6 +334,11 @@ changes. The actor's own edits, and cosmetic edits (`priority`, `due_at`,
 `review_required`, `close_reason`, or moving the job to any other phase), keep
 the actor.
 
+No actor and the `system` actor that job tokens carry for work no user started
+are the same actor. An edit by such a token to a job no user started keeps the
+job as it is, and work no user started that becomes the actor of a person's job
+is recorded as no actor, never as `system`.
+
 The body is validated against `UpdateJobRequest` (for example `title` is at
 most 500 characters and `priority` is 0-4); an invalid body is refused with 400.
 

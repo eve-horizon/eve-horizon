@@ -220,6 +220,14 @@ export function hasUserActor(userId: string | null | undefined): userId is strin
   return typeof userId === 'string' && userId.length > 0 && userId !== SYSTEM_ACTOR_ID;
 }
 
+/**
+ * True when two recorded actors are the same: the same user, or both no user
+ * (no actor and {@link SYSTEM_ACTOR_ID} are the same no-user actor).
+ */
+export function isSameActor(a: string | null | undefined, b: string | null | undefined): boolean {
+  return hasUserActor(a) || hasUserActor(b) ? a === b : true;
+}
+
 /** True for platform permissions (`system:*`), which no job token carries. */
 export function isPlatformPermission(permission: string): boolean {
   return permission.startsWith('system:');

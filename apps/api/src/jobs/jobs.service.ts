@@ -3,7 +3,7 @@ import { Observable } from 'rxjs';
 import type { Db } from '@eve/db';
 import { jobQueries, projectQueries, executionLogQueries, gateQueries, projectManifestQueries, threadMessageQueries, environmentQueries, agentQueries, projectApiSourceQueries, orgQueries, agentConfigQueries, appLinkSubscriptionQueries, type Job, type JobAttempt, type JobHints, type AttemptResultData, type JobWorkspaceConfig, type JobAttemptGitMeta } from '@eve/db';
 import type { AccessBindingScope, JobGit, JobWorkspace, JobHarnessOptions, JobCompareResponse, JobTarget, ResourceRef, CreateBatchRequest, CreateBatchResponse, BatchValidateResponse, InlineProfileBundle } from '@eve/shared';
-import { AccessBindingScopeSchema, hasUserActor, deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
+import { AccessBindingScopeSchema, hasUserActor, isSameActor, deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
 import * as yaml from 'yaml';
 import { buildApiError } from '../system/api-errors.js';
 import { JobLogsService } from './job-logs.service.js';
@@ -1117,9 +1117,10 @@ export class JobsService {
   private async actorForChange(
     job: Job,
     caller: AuthUser,
-  ): Promise<{ actorUserId: string; userSecretsExcluded: boolean } | null> {
+  ): Promise<{ actorUserId: string | null; userSecretsExcluded: boolean } | null> {
     const { userSecretsExcluded } = workStartOptions(caller);
-    const sameActor = job.actor_user_id === caller.user_id;
+    // No actor and the 'system' actor of a no-user job token are the same actor.
+    const sameActor = isSameActor(job.actor_user_id, caller.user_id);
     // The marker is sticky for the same actor and never loosened by an edit.
     const nextExcluded = sameActor ? job.user_secrets_excluded || userSecretsExcluded : userSecretsExcluded;
     if (sameActor && nextExcluded === job.user_secrets_excluded) {
@@ -1144,7 +1145,9 @@ export class JobsService {
       scope: this.storedTokenScope(job, caller),
       context: `Job ${job.id} token scope`,
     });
-    return { actorUserId: caller.user_id, userSecretsExcluded: nextExcluded };
+    // Work no user started is recorded as no actor, never as 'system'.
+    const actorUserId = sameActor ? job.actor_user_id : hasUserActor(caller.user_id) ? caller.user_id : null;
+    return { actorUserId, userSecretsExcluded: nextExcluded };
   }
 
   /**

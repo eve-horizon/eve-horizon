@@ -41,6 +41,7 @@ import {
   requestVettedUrl,
   vetOutboundUrl,
   hasUserActor,
+  isSameActor,
 } from '@eve/shared';
 import {
   accessRoleQueries,
@@ -418,7 +419,8 @@ export function isCompiledStepOfRun(
  * its condition): a compiled step of the same run that runs as the step's own
  * actor or as the run's (whoever invoked it, read from the run root). A
  * retrier's steps therefore read the run's original steps, while a step that
- * now runs as someone else feeds no step that runs as another person.
+ * now runs as someone else feeds no step that runs as another person. No
+ * actor and the 'system' actor are the same no-user actor.
  */
 export function mayFeedStep(
   step: Pick<Job, 'parent_id' | 'actor_user_id'>,
@@ -426,9 +428,8 @@ export function mayFeedStep(
   source: Pick<Job, 'parent_id' | 'step_name' | 'actor_user_id'>,
 ): boolean {
   if (!isCompiledStepOfRun(step, source)) return false;
-  const sourceActor = source.actor_user_id ?? null;
-  return sourceActor === (step.actor_user_id ?? null)
-    || (run !== null && sourceActor === (run.actor_user_id ?? null));
+  return isSameActor(source.actor_user_id, step.actor_user_id)
+    || (run !== null && isSameActor(source.actor_user_id, run.actor_user_id));
 }
 
 /**

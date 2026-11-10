@@ -122,7 +122,8 @@ the step it names (matched on the step name the workflow gave it). A step takes
 input only from steps the workflow compiled for the same run: children of the
 same root that carry a step name set by the workflow (jobs created through the
 jobs API never carry one, even under a run root), and that run as the step's
-own actor or as the user who invoked the run. A retrier's replacement steps
+own actor or as the user who invoked the run (steps no user started count as
+one actor, whether recorded with no actor or as `system`). A retrier's replacement steps
 therefore still read the run's original steps, but a step that someone else
 has since become the actor of feeds no step that runs as another person, and a
 condition that names such a step is not met (the step is skipped with a reason
