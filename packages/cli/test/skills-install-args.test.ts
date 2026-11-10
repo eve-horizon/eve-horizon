@@ -31,7 +31,7 @@ beforeEach(() => {
 describe('eve skills install', () => {
   it('hands a skills.txt source to the skills CLI as one argument with no shell', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'eve-cli-skills-args-'));
-    const source = 'https://github.com/org/skills$(touch eve-cli-marker);touch eve-cli-marker';
+    const source = 'https://github.com/org/skills$(eve-cli-marker);eve-cli-marker';
     const originalCwd = process.cwd();
 
     try {

@@ -40,8 +40,8 @@ beforeEach(() => {
 
 describe('eve github setup', () => {
   it.each([
-    'https://github.com/org/repo$(touch eve-cli-marker)',
-    'https://github.com/org/repo;touch eve-cli-marker',
+    'https://github.com/org/repo$(eve-cli-marker)',
+    'https://github.com/org/repo;eve-cli-marker',
   ])('creates the webhook for %s through gh with each value as one argument', async (repoUrl) => {
     requestJsonMock.mockResolvedValue({
       webhook_url: WEBHOOK_URL,

@@ -53,9 +53,9 @@ beforeEach(() => {
 
 describe('CLI git helpers pass values to git as single arguments', () => {
   it.each([
-    'https://github.com/org/repo$(touch eve-cli-marker)',
-    'https://github.com/org/repo;touch eve-cli-marker',
-    'https://github.com/org/repo`touch eve-cli-marker`',
+    'https://github.com/org/repo$(eve-cli-marker)',
+    'https://github.com/org/repo;eve-cli-marker',
+    'https://github.com/org/repo`eve-cli-marker`',
   ])('resolves a branch against the project repo URL %s with no shell', async (repoUrl) => {
     requestJsonMock.mockResolvedValue({ id: 'proj_1', repo_url: repoUrl });
 
@@ -70,7 +70,7 @@ describe('CLI git helpers pass values to git as single arguments', () => {
   });
 
   it('resolves a user-supplied ref in the local checkout with no shell', async () => {
-    const ref = 'main;touch eve-cli-marker';
+    const ref = 'main;eve-cli-marker';
 
     await resolveGitRef({} as never, undefined, ref, '/work/repo');
 
@@ -92,7 +92,7 @@ describe('CLI git helpers pass values to git as single arguments', () => {
   });
 
   it('checks for a local branch with no shell', () => {
-    const ref = 'feature;touch eve-cli-marker';
+    const ref = 'feature;eve-cli-marker';
 
     resolveGitBranch('/work/repo', ref);
 

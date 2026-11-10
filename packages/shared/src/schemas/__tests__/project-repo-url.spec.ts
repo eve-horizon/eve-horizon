@@ -41,27 +41,27 @@ describe('project repo_url', () => {
   });
 
   it.each([
-    ['a command substitution', 'https://github.com/org/repo$(id)'],
+    ['a command substitution', 'https://github.com/org/repo$(x)'],
     ['a variable', 'https://github.com/org/$HOME'],
-    ['a backtick', 'https://github.com/org/repo`id`'],
-    ['a semicolon', 'https://github.com/org/repo;id'],
-    ['a pipe', 'https://github.com/org/repo|id'],
-    ['an ampersand', 'https://github.com/org/repo&id'],
-    ['a less-than sign', 'https://github.com/org/repo<id'],
-    ['a greater-than sign', 'https://github.com/org/repo>id'],
+    ['a backtick', 'https://github.com/org/repo`x`'],
+    ['a semicolon', 'https://github.com/org/repo;x'],
+    ['a pipe', 'https://github.com/org/repo|x'],
+    ['an ampersand', 'https://github.com/org/repo&x'],
+    ['a less-than sign', 'https://github.com/org/repo<x'],
+    ['a greater-than sign', 'https://github.com/org/repo>x'],
     ['parentheses', 'https://github.com/org/(repo)'],
-    ['a single quote', "https://github.com/org/repo'id"],
-    ['a double quote', 'https://github.com/org/repo"id'],
-    ['a backslash', 'https://github.com/org/repo\\id'],
+    ['a single quote', "https://github.com/org/repo'x"],
+    ['a double quote', 'https://github.com/org/repo"x'],
+    ['a backslash', 'https://github.com/org/repo\\x'],
     ['an inner space', 'https://github.com/org/my repo'],
     ['an inner tab', 'https://github.com/org/my\trepo'],
-    ['an inner newline', 'https://github.com/org/repo\nid'],
-    ['a NUL character', 'https://github.com/org/repo\u0000id'],
-    ['a DEL character', 'https://github.com/org/repo\u007fid'],
-    ['a file URL with a semicolon', 'file:///tmp/repo;id'],
+    ['an inner newline', 'https://github.com/org/repo\nx'],
+    ['a NUL character', 'https://github.com/org/repo\u0000x'],
+    ['a DEL character', 'https://github.com/org/repo\u007fx'],
+    ['a file URL with a semicolon', 'file:///tmp/repo;x'],
     ['a leading dash', '--upload-pack@host:org/repo'],
     ['an SSH host starting with a dash', 'git@-oProxyCommand:org/repo'],
-    ['an SSH URL with a command substitution', 'git@github.com:org/repo$(id)'],
+    ['an SSH URL with a command substitution', 'git@github.com:org/repo$(x)'],
     ['an unsupported scheme', 'ftp://example.com/org/repo.git'],
     ['a bare owner/repo', 'org/repo'],
   ])('rejects %s', (_label, repoUrl) => {
@@ -69,7 +69,7 @@ describe('project repo_url', () => {
   });
 
   it('applies the same rule to ensure, update and bootstrap requests', () => {
-    const bad = 'https://github.com/org/repo$(id)';
+    const bad = 'https://github.com/org/repo$(x)';
     expect(EnsureProjectRequestSchema.safeParse({ ...base, repo_url: bad }).success).toBe(false);
     expect(UpdateProjectRequestSchema.safeParse({ repo_url: bad }).success).toBe(false);
     expect(BootstrapProjectRequestSchema.safeParse({ ...base, repo_url: bad }).success).toBe(false);

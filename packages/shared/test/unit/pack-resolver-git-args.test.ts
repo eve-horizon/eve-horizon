@@ -41,8 +41,8 @@ afterAll(() => {
 
 describe('pack-resolver: remote pack sources reach git as single arguments', () => {
   test('passes the pack URL and ref to git with no shell', async () => {
-    const source = 'https://github.com/org/pack$(touch eve-pack-marker);touch eve-pack-marker';
-    const ref = 'ref$(touch eve-pack-marker)';
+    const source = 'https://github.com/org/pack$(eve-pack-marker);eve-pack-marker';
+    const ref = 'ref$(eve-pack-marker)';
 
     // The fake git fetches nothing, so resolving the empty checkout may fail; only the git calls matter.
     await resolvePack({ source, ref }, 'proj').catch(() => undefined);
