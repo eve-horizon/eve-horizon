@@ -28,6 +28,19 @@ type GatewaySimulateResponse = {
   } | null;
 };
 
+const LOCAL_API_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1', 'lvh.me']);
+
+/** True when the API URL points at a local development stack. */
+export function isLocalApiUrl(apiUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(apiUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return LOCAL_API_HOSTS.has(host) || host.endsWith('.lvh.me') || host.endsWith('.localhost');
+}
+
 export async function handleChat(
   subcommand: string | undefined,
   positionals: string[],
@@ -113,8 +126,15 @@ export async function handleChat(
       }
 
       // The gateway simulate route is development-only and needs the stack's
-      // internal service token, read from EVE_INTERNAL_API_KEY.
+      // internal service token, read from EVE_INTERNAL_API_KEY. The token is
+      // sent only to a local API.
       const internalKey = process.env.EVE_INTERNAL_API_KEY;
+      if (internalKey && !isLocalApiUrl(context.apiUrl)) {
+        throw new Error(
+          `EVE_INTERNAL_API_KEY is only sent to a local API (localhost, 127.0.0.1, ::1, *.lvh.me, *.localhost); ` +
+          `${context.apiUrl} is not local. Point the CLI at your local stack, or unset EVE_INTERNAL_API_KEY.`,
+        );
+      }
       const response = await requestJson<GatewaySimulateResponse>(
         context,
         '/gateway/providers/simulate',
