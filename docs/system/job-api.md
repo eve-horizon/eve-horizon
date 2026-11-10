@@ -317,6 +317,12 @@ interface UpdateJobRequest {
 Dependencies are stored as relations between jobs (`blocks`, `conditional_blocks`, `waits_for`, etc.).
 The CLI uses `job dep add|remove|list` to manage these relations.
 
+Jobs are linked only within one project: a `parent_id` on create, or a
+`related_job_id` on `POST /jobs/{job_id}/dependencies`, must name a job in the
+same project (403 otherwise, 404 if it does not exist). Dependencies, context
+(parent, siblings, children) and the tree only ever list jobs from the job's own
+project.
+
 Workflow invocation creates every step in `backlog`, wires all blocking
 relations, then releases the complete graph to `ready`. A wiring failure does
 not release any steps. Independent steps can then start while dependent steps

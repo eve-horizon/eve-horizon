@@ -1,4 +1,4 @@
-import { Injectable, Inject, NotFoundException, BadRequestException, ConflictException, MessageEvent } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException, ConflictException, ForbiddenException, MessageEvent } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import type { Db } from '@eve/db';
 import { jobQueries, projectQueries, executionLogQueries, gateQueries, projectManifestQueries, threadMessageQueries, environmentQueries, agentQueries, projectApiSourceQueries, orgQueries, agentConfigQueries, appLinkSubscriptionQueries, type Job, type JobAttempt, type JobHints, type AttemptResultData, type JobWorkspaceConfig, type JobAttemptGitMeta } from '@eve/db';
@@ -256,6 +256,21 @@ export class JobsService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Load a job named in a request body (a parent or a dependency) and require it
+   * to belong to `projectId`. Jobs are only ever linked within one project.
+   */
+  private async requireJobInProject(jobId: string, projectId: string): Promise<Job> {
+    const job = await this.jobs.findById(jobId);
+    if (!job) {
+      throw new NotFoundException(`Job ${jobId} not found`);
+    }
+    if (job.project_id !== projectId) {
+      throw new ForbiddenException(`Job ${jobId} is not in this project`);
+    }
+    return job;
   }
 
   private validateResourceRefs(resourceRefs: ResourceRef[], requestId?: string): void {
@@ -555,6 +570,10 @@ export class JobsService {
     const project = await this.projects.findById(resolvedProjectId);
     if (!project) {
       throw new NotFoundException(`Project ${projectId} not found`);
+    }
+
+    if (data.parent_id) {
+      await this.requireJobInProject(data.parent_id, resolvedProjectId);
     }
 
     // Look up latest manifest to apply defaults
@@ -1021,7 +1040,10 @@ export class JobsService {
    * Get job hierarchy (tree)
    */
   async getTree(jobId: string): Promise<JobTreeNode> {
-    const jobs = await this.jobs.getHierarchy(jobId);
+    const hierarchy = await this.jobs.getHierarchy(jobId);
+    const rootProjectId = hierarchy.find((job) => job.id === jobId)?.project_id;
+    // Only jobs from the root's own project belong to its tree.
+    const jobs = hierarchy.filter((job) => job.project_id === rootProjectId);
     if (jobs.length === 0) {
       throw new NotFoundException(`Job ${jobId} not found`);
     }
@@ -1069,7 +1091,12 @@ export class JobsService {
       throw new NotFoundException(`Job ${jobId} not found`);
     }
 
-    const parentPromise = job.parent_id ? this.jobs.findById(job.parent_id) : Promise.resolve(null);
+    // Only jobs from this job's own project are part of its context.
+    const sameProject = <T extends { project_id: string }>(rows: T[]): T[] =>
+      rows.filter((row) => row.project_id === job.project_id);
+    const parentPromise = job.parent_id
+      ? this.jobs.findById(job.parent_id).then((p) => (p?.project_id === job.project_id ? p : null))
+      : Promise.resolve(null);
 
     // Fetch siblings if this is a child job
     const siblingsPromise = job.parent_id
@@ -1080,7 +1107,7 @@ export class JobsService {
           SELECT j.id, j.title, j.phase, j.assignee,
             (SELECT result_summary FROM job_attempts WHERE job_id = j.id ORDER BY attempt_number DESC LIMIT 1) as result_summary
           FROM jobs j
-          WHERE j.parent_id = ${job.parent_id} AND j.id != ${jobId}
+          WHERE j.parent_id = ${job.parent_id} AND j.id != ${jobId} AND j.project_id = ${job.project_id}
           ORDER BY j.created_at
         `
       : Promise.resolve([]);
@@ -1096,11 +1123,11 @@ export class JobsService {
       latestRejectionReason,
     ] = await Promise.all([
       parentPromise,
-      this.jobs.getChildren(jobId),
+      this.jobs.getChildren(jobId).then(sameProject),
       siblingsPromise,
-      this.jobs.getDependencies(jobId),
-      this.jobs.getDependents(jobId),
-      this.jobs.getBlockingJobs(jobId),
+      this.jobs.getDependencies(jobId).then(sameProject),
+      this.jobs.getDependents(jobId).then(sameProject),
+      this.jobs.getBlockingJobs(jobId).then(sameProject),
       this.jobs.getLatestAttempt(jobId),
       this.jobs.getLatestRejectionReason(jobId),
     ]);
@@ -1199,7 +1226,7 @@ export class JobsService {
       }>>`
         SELECT id, title, phase, assignee, updated_at
         FROM jobs
-        WHERE parent_id = ${jobId}
+        WHERE parent_id = ${jobId} AND project_id = ${job.project_id}
         ORDER BY updated_at DESC
       `;
 
@@ -1264,7 +1291,7 @@ export class JobsService {
     }>>`
       SELECT id, title, phase, assignee
       FROM jobs
-      WHERE parent_id = ${jobId}
+      WHERE parent_id = ${jobId} AND project_id = ${job.project_id}
       ORDER BY updated_at DESC
     `;
     return {
@@ -1288,6 +1315,11 @@ export class JobsService {
    * Add a dependency to a job
    */
   async addDependency(jobId: string, data: AddDependencyRequest): Promise<{ success: boolean; message: string }> {
+    const job = await this.jobs.findById(jobId);
+    if (!job) {
+      throw new NotFoundException(`Job ${jobId} not found`);
+    }
+    await this.requireJobInProject(data.related_job_id, job.project_id);
     await this.jobs.addDependency(jobId, data.related_job_id, data.relation_type ?? 'blocks');
     return { success: true, message: `Added dependency: ${jobId} depends on ${data.related_job_id}` };
   }
@@ -1307,10 +1339,17 @@ export class JobsService {
    * Get all dependencies for a job
    */
   async getDependencies(jobId: string): Promise<DependenciesResponse> {
+    const job = await this.jobs.findById(jobId);
+    if (!job) {
+      throw new NotFoundException(`Job ${jobId} not found`);
+    }
+    // Only jobs from this job's own project are reported.
+    const sameProject = <T extends { project_id: string }>(rows: T[]): T[] =>
+      rows.filter((row) => row.project_id === job.project_id);
     const [dependencies, dependents, blocking] = await Promise.all([
-      this.jobs.getDependencies(jobId),
-      this.jobs.getDependents(jobId),
-      this.jobs.getBlockingJobs(jobId),
+      this.jobs.getDependencies(jobId).then(sameProject),
+      this.jobs.getDependents(jobId).then(sameProject),
+      this.jobs.getBlockingJobs(jobId).then(sameProject),
     ]);
 
     return {
