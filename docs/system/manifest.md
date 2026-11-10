@@ -674,7 +674,11 @@ Notes:
   own URL are refused with `400`. Redirects are not followed, and a fetch
   times out after 15s or fails above 10 MiB. At deploy a refused or failed
   fetch is logged as a registration failure and the deploy continues.
-- `spec_path` is local-only (`file://` repo URLs).
+- `spec_path` is local-only (`file://` repo URLs, which the API accepts only
+  with `EVE_ALLOW_FILE_REPO_URLS=true`; the local k3d overlay, the CLI's local
+  stack, docker compose and `./bin/eh start local` set it, hosted deployments
+  do not). The path must name a regular file inside the checkout after
+  symlinks are resolved, at most 10 MiB.
 
 ### Files Mount
 

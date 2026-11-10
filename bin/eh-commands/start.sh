@@ -209,6 +209,8 @@ do_start_local() {
   export EVE_WORKER_URLS="default-worker=http://localhost:$EVE_WORKER_PORT"
   export EVE_AGENT_RUNTIME_URL="http://localhost:$EVE_AGENT_RUNTIME_PORT"
   export WORKSPACE_ROOT="/tmp/eve/workspaces"
+  # Local development and integration tests use file:// repo URLs.
+  export EVE_ALLOW_FILE_REPO_URLS="${EVE_ALLOW_FILE_REPO_URLS:-true}"
   export ORCH_LOOP_INTERVAL_MS="${ORCH_LOOP_INTERVAL_MS:-1000}"
   export EVE_WORKER_POLL_INTERVAL_MS="${EVE_WORKER_POLL_INTERVAL_MS:-1000}"
   export EVE_AGENT_RUNTIME_POLL_INTERVAL_MS="${EVE_AGENT_RUNTIME_POLL_INTERVAL_MS:-200}"

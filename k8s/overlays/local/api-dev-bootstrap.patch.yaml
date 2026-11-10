@@ -2,6 +2,8 @@
 # `eve auth bootstrap --token <EVE_BOOTSTRAP_TOKEN>` re-issues the existing
 # admin's token. The published API image defaults to NODE_ENV=production,
 # which refuses this; never apply this patch to a hosted deployment.
+# EVE_ALLOW_FILE_REPO_URLS lets local projects use file:// repo URLs (manual
+# scenarios and `eve local mesh` do); hosted deployments leave it off.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,4 +18,6 @@ spec:
             - name: NODE_ENV
               value: "development"
             - name: EVE_DEV_REBOOTSTRAP
+              value: "true"
+            - name: EVE_ALLOW_FILE_REPO_URLS
               value: "true"

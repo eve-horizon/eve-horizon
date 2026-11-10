@@ -1,0 +1,16 @@
+# Local stack only: `eve local mesh` registers projects with file:// repo
+# URLs, which the API accepts only with EVE_ALLOW_FILE_REPO_URLS=true.
+# Hosted deployments leave it off.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-api
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: EVE_ALLOW_FILE_REPO_URLS
+              value: "true"

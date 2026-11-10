@@ -27,7 +27,7 @@ import {
 import * as yaml from 'yaml';
 import { ApiRegistrationService } from './api-registration.service.js';
 import { componentInClusterBaseUrl, isServiceDeployedInCluster } from '../common/api-spec-fetch.js';
-import { fileURLToPath } from 'node:url';
+import { localRepoPath } from '../common/local-repo.js';
 import { PipelineRunsService } from '../pipelines/pipeline-runs.service.js';
 import { EnvDiagnosticsService } from './env-diagnostics.service.js';
 import { ensureManifestEnvironment } from './manifest-environment.js';
@@ -938,15 +938,9 @@ export class EnvironmentsService {
     return deployedBaseUrl;
   }
 
+  /** The local checkout of a file:// repo, only under the local development setting. */
   private extractLocalRepoPath(repoUrl: string | null | undefined): string | undefined {
-    if (!repoUrl) return undefined;
-    try {
-      const url = new URL(repoUrl);
-      if (url.protocol !== 'file:') return undefined;
-      return fileURLToPath(url);
-    } catch {
-      return undefined;
-    }
+    return localRepoPath(repoUrl);
   }
 
   private toReleaseResponse(

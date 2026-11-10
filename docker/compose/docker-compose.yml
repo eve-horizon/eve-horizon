@@ -37,6 +37,8 @@ services:
       EVE_BOOTSTRAP_TOKEN: ${EVE_BOOTSTRAP_TOKEN:-}
       # Booleans must not be empty strings (the config parser rejects "").
       EVE_DEV_REBOOTSTRAP: ${EVE_DEV_REBOOTSTRAP:-false}
+      # Local stack: integration tests use file:// repo URLs.
+      EVE_ALLOW_FILE_REPO_URLS: ${EVE_ALLOW_FILE_REPO_URLS:-true}
       # This service builds the Dockerfile's development stage; pass NODE_ENV
       # through so integration runs (.env.test: NODE_ENV=test) keep their mode.
       NODE_ENV: ${NODE_ENV:-development}

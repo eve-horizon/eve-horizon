@@ -1,5 +1,6 @@
 import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { resolveWorkerUrl, workerRequestHeaders } from '../common/worker-url';
+import { assertRepoUrlAllowed } from '../common/local-repo';
 import type { Db } from '@eve/db';
 import {
   projectQueries,
@@ -149,6 +150,7 @@ export class ProjectsService {
   }
 
   async create(data: CreateProjectRequest, actorUserId?: string): Promise<ProjectResponse> {
+    assertRepoUrlAllowed(data.repo_url);
     // Validate org exists
     const org = await this.orgs.findById(data.org_id);
     if (!org) {
@@ -180,6 +182,7 @@ export class ProjectsService {
   async ensure(data: EnsureProjectRequest, actorUserId?: string): Promise<ProjectResponse> {
     const requestedRepoUrl = (data.repo_url ?? '').trim();
     const repoProvided = requestedRepoUrl.length > 0;
+    assertRepoUrlAllowed(requestedRepoUrl);
 
     // Check if project already exists by name
     const existingByName = await this.projects.findByOrgAndName(data.org_id, data.name, {
@@ -395,6 +398,7 @@ export class ProjectsService {
     ) {
       throw new BadRequestException('No updates provided');
     }
+    assertRepoUrlAllowed(updates.repo_url);
 
     const updated = await this.projects.update(id, {
       name: updates.name,

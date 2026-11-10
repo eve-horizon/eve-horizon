@@ -1,10 +1,9 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import type { Db } from '@eve/db';
 import { projectApiSourceQueries } from '@eve/db';
 import { type ApiSpec, getDefaultSpecUrl } from '@eve/shared';
-import { fetchApiSpec } from '../common/api-spec-fetch.js';
+import { API_SPEC_MAX_BYTES, fetchApiSpec } from '../common/api-spec-fetch.js';
+import { readRepoFile } from '../common/local-repo.js';
 
 /** Where a component lives, as the deploy resolved it. */
 export interface ComponentApiLocation {
@@ -133,15 +132,13 @@ export class ApiRegistrationService {
       throw new Error('spec_path requires local repo path');
     }
 
-    const repoRoot = path.resolve(repoPath);
-    const resolved = path.resolve(repoRoot, specPath);
-    const relative = path.relative(repoRoot, resolved);
-
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(`spec_path ${specPath} escapes repo root`);
+    try {
+      return await readRepoFile(repoPath, specPath, API_SPEC_MAX_BYTES);
+    } catch (error) {
+      throw new BadRequestException(
+        `spec_path not readable: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-
-    return fs.readFile(resolved, 'utf-8');
   }
 
   /**

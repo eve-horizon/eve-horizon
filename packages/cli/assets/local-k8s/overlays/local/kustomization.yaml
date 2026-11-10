@@ -8,3 +8,4 @@ patchesStrategicMerge:
   - agent-runtime-org-id.patch.yaml
   - managed-db.patch.yaml
   - worker-registry.patch.yaml
+  - api-file-repos.patch.yaml
