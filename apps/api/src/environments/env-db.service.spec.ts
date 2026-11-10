@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { EnvDbService } from './env-db.service';
 import type { SecretsService } from '../secrets/secrets.service';
 
@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   orgs: { findById: vi.fn() },
   managedDb: { findReadyTenantByEnv: vi.fn(), listTenantsByOrg: vi.fn() },
   accessGroups: { listGroupIdsForPrincipal: vi.fn() },
+  // What a role-privilege query on a fresh connection reports.
+  privileged: false,
 }));
 
 vi.mock('@eve/db', async (importOriginal) => ({
@@ -35,18 +37,36 @@ vi.mock('node:dns/promises', () => ({
 // Host name -> addresses, as dns.lookup(host, { all: true }) would answer.
 const DNS: Record<string, string[]> = {
   'eve-db.internal': ['10.20.0.5'],
+  'dev-db.eve-acme-shop-dev.svc.cluster.local': ['10.43.0.20'],
+  'db.tenant.example': ['203.0.113.40'],
 };
 
 function fakeClient() {
   const tx = Object.assign(vi.fn(async () => []), {
     unsafe: vi.fn(async () => []),
   });
-  return {
+  // Queries outside the transaction (the client used as a tagged template)
+  // are answered as a role-privilege check.
+  return Object.assign(vi.fn(async () => [{ privileged: mocks.privileged }]), {
     tx,
+    unsafe: vi.fn(async () => []),
     begin: vi.fn(async (callback: (t: typeof tx) => unknown) => callback(tx)),
     end: vi.fn(async () => {}),
-  };
+  });
 }
+
+const CONTAINER_DB_MANIFEST = [
+  'services:',
+  '  db:',
+  '    image: postgres:16',
+  '    ports: [5432]',
+  '    environment:',
+  '      POSTGRES_USER: postgres',
+  '      POSTGRES_PASSWORD: pw',
+  '      POSTGRES_DB: app',
+  '    x-eve:',
+  '      role: database',
+].join('\n');
 
 const MANAGED_MANIFEST = [
   'services:',
@@ -66,6 +86,7 @@ describe('EnvDbService database target', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv('DATABASE_URL', PLATFORM_DATABASE_URL);
+    mocks.privileged = false;
 
     environment = {
       id: 'env_1',
@@ -183,5 +204,61 @@ describe('EnvDbService database target', () => {
     await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
     await expect(runReset()).resolves.toMatchObject({ reset: true });
     expect(mocks.createDb).toHaveBeenCalledWith(managedUrl);
+  });
+  describe('the platform database server', () => {
+    for (const database of ['postgres', 'template1']) {
+      it(`refuses the platform user on its ${database} database`, async () => {
+        environment.overrides_json = {
+          db: { url: `postgres://eve:platform-pass@eve-db.internal:5432/${database}` },
+        };
+
+        await expect(runSql()).rejects.toBeInstanceOf(ForbiddenException);
+        await expect(runReset()).rejects.toBeInstanceOf(ForbiddenException);
+        expect(mocks.createDb).not.toHaveBeenCalled();
+      });
+    }
+
+    it('refuses the platform user chosen by a startup parameter', async () => {
+      environment.overrides_json = {
+        db: { url: 'postgres://someone:x@10.20.0.5:5432/postgres?user=eve' },
+      };
+
+      await expect(runSql()).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mocks.createDb).not.toHaveBeenCalled();
+    });
+
+    it('refuses a superuser login before running anything', async () => {
+      mocks.privileged = true;
+      environment.overrides_json = {
+        db: { url: 'postgres://admin2:x@eve-db.internal:5432/tenant_db' },
+      };
+
+      await expect(runSql()).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(runReset()).rejects.toBeInstanceOf(ForbiddenException);
+      for (const result of mocks.createDb.mock.results) {
+        const client = result.value as ReturnType<typeof fakeClient>;
+        expect(client.begin).not.toHaveBeenCalled();
+        expect(client.unsafe).not.toHaveBeenCalled();
+        expect(client.end).toHaveBeenCalled();
+      }
+    });
+
+    it('allows a superuser on a container database in the tenant namespace', async () => {
+      mocks.privileged = true;
+      mocks.manifests.findLatestByProject.mockResolvedValue({ manifest_yaml: CONTAINER_DB_MANIFEST });
+
+      await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
+      expect(mocks.createDb).toHaveBeenCalledWith(
+        'postgres://postgres:pw@dev-db.eve-acme-shop-dev.svc.cluster.local:5432/app',
+      );
+    });
+
+    it('refuses every target when the platform host does not resolve', async () => {
+      vi.stubEnv('DATABASE_URL', 'postgres://eve:platform-pass@eve-db.unresolvable:5432/eve');
+      environment.overrides_json = { db: { url: 'postgres://app:pw@db.tenant.example:5432/app' } };
+
+      await expect(runSql()).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(mocks.createDb).not.toHaveBeenCalled();
+    });
   });
 });
