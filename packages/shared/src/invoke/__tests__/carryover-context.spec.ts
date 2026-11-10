@@ -225,4 +225,55 @@ describe('writeCarryoverContext', () => {
       }
     });
   });
+
+  // ------------------------------------------------------------------
+  // Parent attachments
+  // ------------------------------------------------------------------
+  describe('parent attachments', () => {
+    /** The lead job's attachments: one by the invoker, one by a teammate, one by work no user started. */
+    const LEAD_ATTACHMENTS: Record<string, { content: string; created_by: string | null }> = {
+      'brief.md': { content: 'Owner brief', created_by: 'user_owner' },
+      'notes.md': { content: 'Teammate notes', created_by: 'user_mate' },
+      'plan.md': { content: 'Step plan', created_by: 'system' },
+    };
+
+    function childOfLead(actor: string | null) {
+      return makeDb({
+        findJobById: vi.fn().mockResolvedValue({
+          actor_user_id: actor,
+          hints: { agent_context: { parent_attachments: { names: ['brief.md', 'notes.md', 'plan.md'] } } },
+        }),
+        findProjectById: vi.fn().mockResolvedValue({ org_id: 'org_test' }),
+        findJobAttachment: vi.fn().mockImplementation((jobId: string, name: string) =>
+          Promise.resolve(jobId === 'lead_job' ? LEAD_ATTACHMENTS[name] : undefined)),
+      });
+    }
+
+    async function copied(): Promise<string[]> {
+      return (await fs.readdir(path.join(tmpDir, '.eve', 'context', 'parent'))).sort();
+    }
+
+    it("copies only the parent's attachments the child's actor created", async () => {
+      await setup();
+      try {
+        await writeCarryoverContext(makeInvocation({ parentJobId: 'lead_job' as any }), tmpDir, childOfLead('user_owner'));
+
+        expect(await copied()).toEqual(['brief.md']);
+        await expect(fs.readFile(path.join(tmpDir, '.eve', 'context', 'parent', 'brief.md'), 'utf-8')).resolves.toBe('Owner brief');
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('copies into a child no user started only what work no user started attached', async () => {
+      await setup();
+      try {
+        await writeCarryoverContext(makeInvocation({ parentJobId: 'lead_job' as any }), tmpDir, childOfLead(null));
+
+        expect(await copied()).toEqual(['plan.md']);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
 });
