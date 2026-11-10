@@ -157,11 +157,12 @@ or MinIO is not accepting path-style requests (check `forcePathStyle`).
 ### Step 5 — Ingest event with storage_key
 
 ```bash
-# POST the event to the internal ingest endpoint
+# POST the event to the internal ingest endpoint (EVE_INTERNAL_API_URL: see
+# "Internal API Routes" in the main README)
 EVENT_RESP=$(curl -sf -X POST \
   -H "x-eve-internal-token: $LINK_TOKEN" \
   -H "Content-Type: application/json" \
-  "$EVE_API_URL/internal/orgs/$ORG_ID/fs/events" \
+  "$EVE_INTERNAL_API_URL/internal/orgs/$ORG_ID/fs/events" \
   -d "{
     \"event_type\": \"file.updated\",
     \"path\": \"/test/scenario-26.md\",

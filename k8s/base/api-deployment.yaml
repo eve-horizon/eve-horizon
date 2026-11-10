@@ -35,6 +35,11 @@ spec:
                   key: DATABASE_URL
             - name: API_PORT
               value: "4701"
+            # /internal/* answers only on this port; the public port (the
+            # Ingress) answers 404 for it, except the registry token realm.
+            # Platform services reach the API here via EVE_API_URL.
+            - name: EVE_API_INTERNAL_PORT
+              value: "4791"
             - name: WORKER_URL
               value: http://eve-worker.eve.svc.cluster.local:4749
             # --- Web Auth (Supabase) ---
@@ -112,3 +117,5 @@ spec:
           ports:
             - name: http
               containerPort: 4701
+            - name: internal
+              containerPort: 4791

@@ -1,5 +1,6 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { refuseInternalApi } from './server/internal-api-guard.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { contentSecurityPolicy, ssoOriginFromApi } from './server/content-security-policy.js';
@@ -8,6 +9,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = process.env.PORT || 3200;
 const apiUrl = process.env.EVE_API_URL || 'http://eve-api:4701';
+
+// The API's /internal/* routes are for platform services only: 404 for
+// /api/internal and anything under it, however spelled (server/internal-api-guard.js).
+app.use(refuseInternalApi);
 
 // Proxy /api/* to the Eve API
 app.use('/api', createProxyMiddleware({

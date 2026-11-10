@@ -123,12 +123,13 @@ Verify the internal PATCH endpoint works (simulates what the worker does after t
 # First confirm it exists
 eve secrets show CODEX_AUTH_JSON_B64 --user --json
 
-# Test the write-back endpoint via curl (requires EVE_INTERNAL_API_KEY)
+# Test the write-back endpoint via curl (requires EVE_INTERNAL_API_KEY, and
+# EVE_INTERNAL_API_URL: see "Internal API Routes" in the main README)
 # Note: this is platform-internal, not exposed to end users
 USER_ID=$(eve auth whoami --json | jq -r '.user_id')
 NEW_VALUE=$(echo -n '{"updated_by":"test"}' | base64)
 curl -s -X PATCH \
-  "$EVE_API_URL/internal/secrets/user/$USER_ID/CODEX_AUTH_JSON_B64" \
+  "$EVE_INTERNAL_API_URL/internal/secrets/user/$USER_ID/CODEX_AUTH_JSON_B64" \
   -H "Content-Type: application/json" \
   -H "x-eve-internal-token: $(cat system-secrets.env.local | grep EVE_INTERNAL_API_KEY | cut -d= -f2)" \
   -d "{\"value\": \"$NEW_VALUE\"}" \
@@ -140,7 +141,7 @@ Expected: HTTP 204 (No Content)
 Try to update a secret that doesn't exist — should 404:
 ```bash
 curl -s -X PATCH \
-  "$EVE_API_URL/internal/secrets/user/$USER_ID/NONEXISTENT_SECRET_XYZ" \
+  "$EVE_INTERNAL_API_URL/internal/secrets/user/$USER_ID/NONEXISTENT_SECRET_XYZ" \
   -H "Content-Type: application/json" \
   -H "x-eve-internal-token: $(cat system-secrets.env.local | grep EVE_INTERNAL_API_KEY | cut -d= -f2)" \
   -d '{"value": "test"}' \
@@ -152,7 +153,7 @@ Expected: HTTP 404
 Try with wrong internal token — should 401:
 ```bash
 curl -s -X PATCH \
-  "$EVE_API_URL/internal/secrets/user/$USER_ID/CODEX_AUTH_JSON_B64" \
+  "$EVE_INTERNAL_API_URL/internal/secrets/user/$USER_ID/CODEX_AUTH_JSON_B64" \
   -H "Content-Type: application/json" \
   -H "x-eve-internal-token: wrong-token" \
   -d '{"value": "test"}' \

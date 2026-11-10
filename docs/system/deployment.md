@@ -202,12 +202,12 @@ eve env diagnose <project> <env>
 eve env diagnose <project> <env> --json | jq '.http_ingress'
 ```
 
-### Internal API Port (optional)
+### Internal API Port
 
 The API's `/internal/*` routes are for platform services, authenticated by
-`EVE_INTERNAL_API_KEY`. By default they share the public port with every other
-route, so the ingress exposes them. Set `EVE_API_INTERNAL_PORT` on `eve-api` to
-take them off the public port:
+`EVE_INTERNAL_API_KEY`. Without `EVE_API_INTERNAL_PORT` they share the public
+port with every other route, so the ingress exposes them. Set it on `eve-api`
+to take them off the public port (`k8s/base` does, with `4791`):
 
 - The API also listens on `EVE_API_INTERNAL_PORT` (for example `4791`). That
   port serves every route, `/internal/*` included.
@@ -233,12 +233,22 @@ rollout, or in-cluster calls to `/internal/*` fail:
    requests under `/api/*` to `EVE_API_URL`, so pointing it at the internal
    port would publish `/internal/*` through the dashboard host. (For the same
    reason, an ingress rule that blocks `/internal` on the API host alone does
-   not cover the dashboard host; this port split does.)
+   not cover the dashboard host; this port split does. The dashboard server
+   also answers `404` itself for `/api/internal` and anything under it, in
+   any spelling.)
 4. Allow the internal port wherever NetworkPolicies restrict traffic to
    `eve-api`, including from app namespaces.
 
-Unset (the default), nothing changes. Local stacks (`./bin/eh`, docker
-compose, `eve local`) leave it unset.
+In `k8s/base` (and so the local k3d stack from `./bin/eh k8s deploy`) this is
+already done: `eve-api` sets `EVE_API_INTERNAL_PORT=4791`, the `eve-api`
+Service carries an `internal` port, `eve-cluster-config`'s `EVE_API_URL` is
+`http://eve-api:4791`, and the dashboard sets `EVE_API_URL=http://eve-api:4701`
+inline. To reach `/internal/*` from a workstation, port-forward
+`svc/eve-api 4791`. A deployment that takes its manifests from elsewhere needs
+steps 1-4 itself.
+
+Unset (the API's default), nothing changes. Docker compose, local pnpm dev and
+`eve local` (the CLI's bundled manifests) leave it unset.
 
 ### Ingress TLS (Apps)
 

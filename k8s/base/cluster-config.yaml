@@ -21,7 +21,11 @@ data:
   # --- Database ---
   DATABASE_URL: postgres://eve:eve@postgres.eve.svc.cluster.local:5432/eve
   # --- Service URLs ---
-  EVE_API_URL: http://eve-api:4701
+  # In-cluster callers use the API's internal port (EVE_API_INTERNAL_PORT on
+  # eve-api), which serves every route and is the only one serving
+  # /internal/*. The dashboard does not read this key: it proxies browser
+  # requests and stays on the public port (4701).
+  EVE_API_URL: http://eve-api:4791
   EVE_PUBLIC_API_URL: http://api.eve.lvh.me
   EVE_SSO_URL: http://sso.eve.lvh.me
   EVE_DEFAULT_DOMAIN: lvh.me

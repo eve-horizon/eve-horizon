@@ -22,11 +22,10 @@ spec:
           ports:
             - containerPort: 3200
           env:
+            # The API's public port, never the internal one: this server
+            # proxies browser requests under /api/* to it.
             - name: EVE_API_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: eve-cluster-config
-                  key: EVE_API_URL
+              value: http://eve-api:4701
             - name: PORT
               value: "3200"
           livenessProbe:

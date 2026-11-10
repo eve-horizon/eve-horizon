@@ -12,3 +12,7 @@ spec:
     - name: http
       port: 4701
       targetPort: http
+    # In-cluster only: never route an Ingress to this port.
+    - name: internal
+      port: 4791
+      targetPort: internal

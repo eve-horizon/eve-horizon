@@ -38,6 +38,20 @@ eve secrets import --org org_manualtestorg --file ./manual-tests.secrets
 # Ask Claude: "Run the manual test scenarios in parallel"
 ```
 
+## Internal API Routes
+
+A few scenarios call the API's `/internal/*` routes directly. When the API runs
+with `EVE_API_INTERNAL_PORT` (`k8s/base`, and so local k3d, uses `4791`), those
+routes answer only on that in-cluster port; the public URL answers `404`. Reach
+it with a port-forward:
+
+```bash
+kubectl -n eve port-forward svc/eve-api 4791:4791 &
+export EVE_INTERNAL_API_URL=http://localhost:4791
+```
+
+On a cluster without the internal port, use `export EVE_INTERNAL_API_URL=$EVE_API_URL`.
+
 ## Secrets Setup
 
 Manual tests require secrets to be set on the test org. Create a `manual-tests.secrets` file **in the repo root** (gitignored) with:

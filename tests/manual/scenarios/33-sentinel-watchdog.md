@@ -217,12 +217,12 @@ $EVE system env-health --json | jq '.environments[] | {environment_slug, status,
 
 ## Optional Appendix: Internal Responder Check
 
-This does not require Slack. It validates the responder endpoint directly using the in-cluster internal API key.
+This does not require Slack. It validates the responder endpoint directly using the in-cluster internal API key, on the API's internal port (`EVE_INTERNAL_API_URL`: see "Internal API Routes" in the main README).
 
 ```bash
 INTERNAL_TOKEN=$(kubectl -n eve get secret eve-app -o jsonpath='{.data.EVE_INTERNAL_API_KEY}' | base64 -d)
 
-curl -s -X POST http://api.eve.lvh.me/internal/platform-respond \
+curl -s -X POST "$EVE_INTERNAL_API_URL/internal/platform-respond" \
   -H "Content-Type: application/json" \
   -H "x-eve-internal-token: $INTERNAL_TOKEN" \
   -d '{"text":"health","channel_id":"C_TEST","thread_ts":"1234.5678"}' | jq .

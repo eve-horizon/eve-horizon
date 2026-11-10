@@ -26,6 +26,8 @@ Verifies the gateway plugin architecture: provider registry with factories, webh
 ```bash
 export ORG_ID=org_manualtestorg
 export EVE_API_URL=${EVE_API_URL:?Set EVE_API_URL before running (see main README)}
+# /internal/* routes (Step 3): see "Internal API Routes" in the main README
+export EVE_INTERNAL_API_URL=${EVE_INTERNAL_API_URL:?Set EVE_INTERNAL_API_URL (see main README)}
 # Gateway URL — derive from EVE_API_URL or set explicitly
 # Local k3d: http://gateway.eve.lvh.me  |  Staging: https://gateway.eve.example.com
 export GATEWAY_URL=${GATEWAY_URL:?Set GATEWAY_URL for your cluster (see note above)}
@@ -90,14 +92,14 @@ Verify the internal chat route API enforces auth and validates schemas. These en
 ```bash
 # Org-level route rejects empty body (validation fires before auth in NestJS pipeline)
 curl -s -o /dev/null -w "%{http_code}" \
-  -X POST "$EVE_API_URL/internal/orgs/$ORG_ID/chat/route" \
+  -X POST "$EVE_INTERNAL_API_URL/internal/orgs/$ORG_ID/chat/route" \
   -H "Content-Type: application/json" \
   -d '{}'
 # Expected: 400 (schema validation rejects empty body before auth guard runs)
 
 # Schema validation rejects invalid payloads (returns 400)
 curl -s -o /dev/null -w "%{http_code}" \
-  -X POST "$EVE_API_URL/internal/orgs/$ORG_ID/chat/route" \
+  -X POST "$EVE_INTERNAL_API_URL/internal/orgs/$ORG_ID/chat/route" \
   -H "Content-Type: application/json" \
   -H "x-eve-internal-token: invalid-token" \
   -d '{"bad": "payload"}'
@@ -105,7 +107,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 # GET on POST-only route returns 404 (route not registered for GET method)
 curl -s -o /dev/null -w "%{http_code}" \
-  "$EVE_API_URL/internal/orgs/$ORG_ID/chat/route"
+  "$EVE_INTERNAL_API_URL/internal/orgs/$ORG_ID/chat/route"
 # Expected: 404 (route only accepts POST)
 ```
 
