@@ -10,30 +10,30 @@
 //    404. (http-proxy skips this hook for requests with an Expect header;
 //    point 1 still covers those.)
 //
-// Paths are compared however they are spelled: percent-decoded (repeatedly),
-// backslashes read as slashes, empty and "." segments dropped, letter case
-// ignored, and with ".." segments both kept and resolved. A path that cannot
-// be decoded is refused.
+// Paths are compared however they are spelled: percent-escapes of ASCII
+// characters decoded (repeatedly), backslashes read as slashes, empty and "."
+// segments dropped, letter case ignored, and with ".." segments both kept and
+// resolved. A malformed or non-ASCII escape cannot spell a route name, so it
+// stays as it is and the path is judged on the rest (a path holding "%25"
+// therefore still passes). A path still changing after five rounds of
+// decoding is refused.
 
 const MAX_DECODE_ROUNDS = 5;
 const REFUSED = 'EVE_DASHBOARD_INTERNAL_ROUTE';
 
-/** `path` percent-decoded until stable; null if undecodable or still changing. */
+const ASCII_ESCAPE = /%([0-7][0-9a-f])/gi;
+
+/** `path` with ASCII percent-escapes decoded until stable; null if still changing. */
 function decodeFully(path) {
   for (let round = 0; ; round += 1) {
-    let decoded;
-    try {
-      decoded = decodeURIComponent(path);
-    } catch {
-      return null;
-    }
+    const decoded = path.replace(ASCII_ESCAPE, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
     if (decoded === path) return path;
     if (round === MAX_DECODE_ROUNDS) return null;
     path = decoded;
   }
 }
 
-/** Lower-case segments of `path` with ".." kept, and with ".." resolved; null if undecodable. */
+/** Lower-case segments of `path` with ".." kept, and with ".." resolved; null if it never settles. */
 function segmentViews(path) {
   const decoded = decodeFully(path.split('?', 1)[0]);
   if (decoded === null) return null;
@@ -48,13 +48,13 @@ function segmentViews(path) {
   return [kept, resolved];
 }
 
-/** True when `path` is `prefix` (a segment list) or under it in either view, or cannot be read. */
+/** True when `path` is `prefix` (a segment list) or under it in either view, or never settles. */
 function isUnder(path, prefix) {
   const views = segmentViews(path);
   return views === null || views.some((segments) => prefix.every((part, i) => segments[i] === part));
 }
 
-/** True when `target` names /api/internal or a path under it, or cannot be read. */
+/** True when `target` names /api/internal or a path under it, or never settles. */
 export function isInternalApiPath(target) {
   return isUnder(target, ['api', 'internal']);
 }
