@@ -5,9 +5,10 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Db } from '@eve/db';
-import { createDb, environmentQueries, projectManifestQueries, projectQueries, orgQueries, managedDbQueries, accessGroupQueries } from '@eve/db';
+import { createDb, describeConnectionTarget, environmentQueries, projectManifestQueries, projectQueries, orgQueries, managedDbQueries, accessGroupQueries } from '@eve/db';
 import {
   getServicesFromManifest,
   loadConfig,
@@ -24,7 +25,7 @@ import {
 import * as crypto from 'crypto';
 import * as yaml from 'yaml';
 import { SecretsService } from '../secrets/secrets.service.js';
-import { isSameDatabase } from './env-db-target.js';
+import { compareWithPlatformDatabase, PlatformHostUnresolvedError } from './env-db-target.js';
 
 type DbContext = {
   user_id?: string;
@@ -49,7 +50,25 @@ type DbContextDiagnostics = {
 type EnvDbConfig = {
   url: string;
   schema: string | null;
+  /**
+   * Set once the target is vetted: whether it is on the platform's Postgres
+   * server. Anything but `false` gets the login privilege check.
+   */
+  onPlatformServer?: boolean;
 };
+
+/**
+ * Roles that make a login an administrator of the server it is on: real
+ * superusers, the cloud providers' admin roles, and server file access.
+ */
+const ADMIN_ROLE_NAMES = [
+  'cloudsqlsuperuser',
+  'rds_superuser',
+  'azure_pg_admin',
+  'pg_execute_server_program',
+  'pg_read_server_files',
+  'pg_write_server_files',
+];
 
 type ResolvedEnvDb = {
   config: EnvDbConfig;
@@ -490,9 +509,12 @@ export class EnvDbService {
   }
 
   /**
-   * The database every env-db operation runs against. An environment with no
-   * database of its own gets a 409, and a target that is Eve's own database
-   * (however it is spelled or reached) gets a 403, before any connection.
+   * The database every env-db operation runs against. Before any connection:
+   * an environment with no database of its own gets a 409; a target that is
+   * Eve's own database, or that logs in as Eve's own role on Eve's database
+   * server, gets a 403; and if the platform database host cannot be resolved
+   * to tell, a 503. Targets on Eve's database server are also refused (403)
+   * after connecting if the login is a superuser (see withClient).
    */
   private async resolveEnvDb(projectId: string, envName: string): Promise<ResolvedEnvDb> {
     const target = await this.resolveEnvDbTarget(projectId, envName);
@@ -502,22 +524,60 @@ export class EnvDbService {
         '(x-eve.role: database or managed_db), or set a database override on the environment.',
       );
     }
-    await this.assertNotPlatformDatabase(target.config.url);
-    return target;
+    const onPlatformServer = await this.assertNotPlatformDatabase(target.config.url);
+    return { ...target, config: { ...target.config, onPlatformServer } };
   }
 
-  private async assertNotPlatformDatabase(url: string): Promise<void> {
-    const platformUrl = loadConfig().DATABASE_URL;
-    let platform: boolean;
+  /** Refuses the platform database and the platform role; says whether the target shares its server. */
+  private async assertNotPlatformDatabase(url: string): Promise<boolean> {
     try {
-      platform = await isSameDatabase(url, platformUrl);
+      describeConnectionTarget(url);
     } catch {
       throw new BadRequestException('The environment database URL is not a valid Postgres connection string');
     }
-    if (platform) {
+
+    let comparison: Awaited<ReturnType<typeof compareWithPlatformDatabase>>;
+    try {
+      comparison = await compareWithPlatformDatabase(url, loadConfig().DATABASE_URL);
+    } catch (err) {
+      if (err instanceof PlatformHostUnresolvedError) {
+        throw new ServiceUnavailableException(
+          'Cannot confirm the environment database is separate from the Eve platform database ' +
+          '(the platform database host does not resolve). Try again shortly.',
+        );
+      }
+      throw err;
+    }
+
+    if (comparison.sameDatabase) {
       throw new ForbiddenException(
         'The environment database resolves to the Eve platform database. ' +
         "Env-db commands run only against the environment's own database.",
+      );
+    }
+    if (comparison.sameUser) {
+      throw new ForbiddenException(
+        'The environment database logs in as the Eve platform role on the platform database server. ' +
+        "Use a role of the environment's own.",
+      );
+    }
+    return comparison.onPlatformServer;
+  }
+
+  /** On the platform database server, refuse a login with superuser or equivalent admin rights. */
+  private async assertUnprivilegedLogin(client: DbClient): Promise<void> {
+    const [row] = await client<{ privileged: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_roles r
+        WHERE pg_has_role(current_user, r.oid, 'MEMBER')
+          AND (r.rolsuper OR r.rolname = ANY(${ADMIN_ROLE_NAMES}))
+      ) AS privileged
+    `;
+    if (row?.privileged !== false) {
+      throw new ForbiddenException(
+        'The environment database login has superuser or equivalent admin rights on the Eve platform ' +
+        "database server. Use a role with only the environment's own privileges.",
       );
     }
   }
@@ -779,6 +839,9 @@ export class EnvDbService {
   ): Promise<T> {
     const client = createDb(config.url);
     try {
+      if (config.onPlatformServer !== false) {
+        await this.assertUnprivilegedLogin(client);
+      }
       return await client.begin(async (tx) => {
         const transaction = tx as unknown as DbClient;
         if (!allowWrite) {

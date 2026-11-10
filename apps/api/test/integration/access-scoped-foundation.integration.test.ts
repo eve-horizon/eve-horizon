@@ -3,13 +3,16 @@ import type { ProjectResponse } from '@eve/shared';
 
 const apiUrl = process.env.EVE_API_URL || 'http://localhost:4701';
 const databaseUrl = process.env.DATABASE_URL;
-// Env-db commands never run against the platform database, so these tests
-// point the environment at the same server's maintenance database instead.
-const envDatabaseUrl = databaseUrl ? withDatabaseName(databaseUrl, 'postgres') : undefined;
+// Env-db commands refuse the platform database, the platform role and
+// superusers on the platform's server, so these tests point the environment
+// at a database owned by a plain role on the same server. `./bin/eh test
+// integration` creates both (eve_envdb_test, same password as DATABASE_URL).
+const envDatabaseUrl = databaseUrl ? withLogin(databaseUrl, 'eve_envdb_test') : undefined;
 
-function withDatabaseName(url: string, database: string): string {
+function withLogin(url: string, roleAndDatabase: string): string {
   const parsed = new URL(url);
-  parsed.pathname = `/${database}`;
+  parsed.username = roleAndDatabase;
+  parsed.pathname = `/${roleAndDatabase}`;
   return parsed.toString();
 }
 

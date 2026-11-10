@@ -15,6 +15,8 @@ export type ConnectionTarget = {
   endpoints: Array<{ host: string; port: number }>;
   /** Database named in the startup message. */
   database: string;
+  /** Role named in the startup message. */
+  user: string;
 };
 
 /**
@@ -25,6 +27,7 @@ export type ConnectionTarget = {
 export function describeConnectionTarget(connectionString: string): ConnectionTarget {
   const { options } = postgres(connectionString);
   const startupDatabase = options.connection?.database;
+  const startupUser = options.connection?.user;
   return {
     endpoints: options.host.map((host, index) => ({
       host,
@@ -33,5 +36,6 @@ export function describeConnectionTarget(connectionString: string): ConnectionTa
     database: typeof startupDatabase === 'string' && startupDatabase.length > 0
       ? startupDatabase
       : options.database,
+    user: typeof startupUser === 'string' && startupUser.length > 0 ? startupUser : options.user,
   };
 }

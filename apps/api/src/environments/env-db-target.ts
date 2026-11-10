@@ -4,45 +4,59 @@ import { describeConnectionTarget } from '@eve/db';
 
 const LOOPBACK = 'loopback';
 
+/** The platform database host is a name that does not resolve right now. */
+export class PlatformHostUnresolvedError extends Error {}
+
+export type PlatformComparison = {
+  /** Same host (by name, shared address or loopback) and port as the platform database. */
+  onPlatformServer: boolean;
+  /** On the platform server and naming the platform's own database. */
+  sameDatabase: boolean;
+  /** On the platform server and logging in as the platform's own role. */
+  sameUser: boolean;
+};
+
 /**
- * True when `candidateUrl` reaches the same Postgres database as
- * `referenceUrl`: the same database name, on a server with the same port and
- * the same host. Hosts match by name (ignoring case and a trailing dot), by
- * any address they both resolve to, or by both being loopback. Credentials
- * play no part, so another role on the same database still matches, while
- * another database on the same server does not.
+ * Compare where `candidateUrl` points with the platform database
+ * (`platformUrl`). Hosts match by name (ignoring case and a trailing dot), by
+ * any address they both resolve to, or by both being loopback; ports must be
+ * equal. Throws PlatformHostUnresolvedError when the platform host is a name
+ * that cannot be resolved, so callers refuse rather than match by name only.
  */
-export async function isSameDatabase(candidateUrl: string, referenceUrl: string): Promise<boolean> {
+export async function compareWithPlatformDatabase(
+  candidateUrl: string,
+  platformUrl: string,
+): Promise<PlatformComparison> {
   const candidate = describeConnectionTarget(candidateUrl);
-  const reference = describeConnectionTarget(referenceUrl);
+  const platform = describeConnectionTarget(platformUrl);
 
-  if (!sameDatabaseName(candidate.database, reference.database)) {
-    return false;
+  const platformIdentities = new Map<string, Set<string>>();
+  for (const endpoint of platform.endpoints) {
+    if (!platformIdentities.has(endpoint.host)) {
+      platformIdentities.set(endpoint.host, await hostIdentities(endpoint.host, { required: true }));
+    }
   }
 
-  const identities = new Map<string, Promise<Set<string>>>();
-  const identify = (host: string) => {
-    let pending = identities.get(host);
-    if (!pending) {
-      pending = hostIdentities(host);
-      identities.set(host, pending);
-    }
-    return pending;
-  };
-
+  let onPlatformServer = false;
   for (const a of candidate.endpoints) {
-    for (const b of reference.endpoints) {
-      if (a.port !== b.port) continue;
-      const [left, right] = await Promise.all([identify(a.host), identify(b.host)]);
-      for (const token of left) {
-        if (right.has(token)) return true;
-      }
+    const matchingPorts = platform.endpoints.filter((b) => b.port === a.port);
+    if (matchingPorts.length === 0) continue;
+    const left = await hostIdentities(a.host, { required: false });
+    if (matchingPorts.some((b) => [...left].some((token) => platformIdentities.get(b.host)!.has(token)))) {
+      onPlatformServer = true;
+      break;
     }
   }
-  return false;
+
+  return {
+    onPlatformServer,
+    sameDatabase: onPlatformServer && sameName(candidate.database, platform.database),
+    sameUser: onPlatformServer && sameName(candidate.user, platform.user),
+  };
 }
 
-function sameDatabaseName(a: string, b: string): boolean {
+/** Case-insensitive, and a percent-encoded spelling counts as the same name. */
+function sameName(a: string, b: string): boolean {
   const names = (value: string) => {
     const set = new Set([value.toLowerCase()]);
     try {
@@ -56,22 +70,33 @@ function sameDatabaseName(a: string, b: string): boolean {
   return [...names(a)].some((name) => right.has(name));
 }
 
-/** The host's normalised name plus every address it resolves to. */
-async function hostIdentities(host: string): Promise<Set<string>> {
+/**
+ * The host's normalised name plus every address it resolves to. With
+ * `required`, a name that does not resolve is an error instead of matching
+ * by name only.
+ */
+async function hostIdentities(host: string, options: { required: boolean }): Promise<Set<string>> {
   const name = host.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.+$/, '');
   const tokens = new Set<string>([normaliseAddress(name)]);
   if (name === 'localhost' || name.endsWith('.localhost')) {
     tokens.add(LOOPBACK);
+    return tokens;
   }
   if (isIP(name) || name.includes('/') || name.length === 0) {
     return tokens;
   }
+  let answers: Array<{ address: string }> = [];
   try {
-    for (const entry of await lookup(name, { all: true })) {
-      tokens.add(normaliseAddress(entry.address));
-    }
+    answers = await lookup(name, { all: true });
   } catch {
-    // An unresolvable host can only match by name.
+    answers = [];
+  }
+  if (answers.length === 0 && options.required) {
+    throw new PlatformHostUnresolvedError(`${name} did not resolve`);
+  }
+  // An unresolvable candidate host can only match by name.
+  for (const entry of answers) {
+    tokens.add(normaliseAddress(entry.address));
   }
   return tokens;
 }

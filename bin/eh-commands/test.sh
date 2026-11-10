@@ -85,6 +85,21 @@ reset_test_db() {
   echo "Test database reset complete"
 }
 
+ensure_envdb_test_database() {
+  # Env-db integration tests need a database of their own on the test server,
+  # owned by a plain (non-superuser) role: env-db commands refuse the platform
+  # role and superusers there. Same password as the platform user.
+  local role="eve_envdb_test"
+  PGPASSWORD="$EVE_DB_PASSWORD" psql -h localhost -p "$EVE_DB_PORT" -U "$EVE_DB_USER" -d postgres \
+    -v ON_ERROR_STOP=1 -v role="$role" -v pw="$EVE_DB_PASSWORD" -q >/dev/null 2>&1 <<'SQL' \
+    || echo "Warning: could not prepare the $role database for env-db integration tests" >&2
+SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD %L', :'role', :'pw')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
+SELECT format('CREATE DATABASE %I OWNER %I', :'role', :'role')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'role') \gexec
+SQL
+}
+
 ensure_test_db() {
   # Create test database if it doesn't exist
   PGPASSWORD="$EVE_DB_PASSWORD" psql -h localhost -p "$EVE_DB_PORT" -U "$EVE_DB_USER" -d postgres -tc \
@@ -390,6 +405,10 @@ elif [[ "$ENV_TARGET" == "docker" ]]; then
     pnpm --filter @eve/db migrate >/dev/null 2>&1
 elif [[ "$ENV_TARGET" == "stack" ]]; then
   echo "Using existing stack at $EVE_API_URL"
+fi
+
+if [[ "$ENV_TARGET" == "dev" || "$ENV_TARGET" == "docker" ]]; then
+  ensure_envdb_test_database
 fi
 
 # Export API URL for tests to use

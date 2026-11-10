@@ -39,12 +39,25 @@ An environment with none of these has no database: every env-db command
 `wipe`) answers `409` and opens no connection. Declare a database service or
 set an override first.
 
-Env-db commands never run against Eve's own platform database. A resolved
-target with the same host, port and database name as the platform's
-`DATABASE_URL` is refused with `403`, whatever credentials it carries; hosts
-match by name (case-insensitive), by resolved address, or as loopback. A
-different database on the same Postgres server, such as a managed tenant
-database, is allowed.
+Env-db commands never run against Eve's own platform database. A target is
+"on the platform server" when its host and port match the platform's
+`DATABASE_URL` (hosts match by name, case-insensitive, by resolved address,
+or as loopback). On the platform server:
+
+- the platform database itself is refused with `403`, whatever credentials
+  the target carries;
+- the platform's own role is refused with `403` on any database
+  (`postgres`, `template1`, ...);
+- after connecting and before running anything, a login that is a superuser
+  or holds equivalent admin rights (membership in `cloudsqlsuperuser`,
+  `rds_superuser`, `azure_pg_admin` or the `pg_*_server_*` file roles) is
+  refused with `403`.
+
+A plain role on another database of that server, such as a managed tenant
+database, is allowed. Container databases in the environment's own namespace
+are a different server and are not subject to these checks. If the platform
+database host cannot be resolved, env-db commands answer `503` rather than
+guess.
 
 The env DB routes (`/projects/:id/envs/:name/db/...`) address the project by id.
 A job token sent in the optional `eve-job-token` header lends its permissions
