@@ -47,6 +47,7 @@ vi.mock('@eve/db', () => ({
   orgInviteQueries: vi.fn(() => mocks.orgInvites),
   servicePrincipalQueries: vi.fn(() => ({})),
   magicLinkWrapQueries: vi.fn(() => mocks.magicLinkWraps),
+  secretQueries: vi.fn(() => ({})),
 }));
 
 describe('AuthService app magic-link login', () => {

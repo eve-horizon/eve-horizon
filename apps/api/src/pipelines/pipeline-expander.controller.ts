@@ -23,6 +23,7 @@ import {
   type PipelineRunWithJobsResponse,
 } from './pipeline-expander.service.js';
 import { CurrentUser } from '../common/request-decorators.js';
+import { actorUserId } from '../auth/token-scope.js';
 import type { AuthUser } from '../auth/auth.types.js';
 
 // ============================================================================
@@ -145,7 +146,7 @@ export class PipelineExpanderController {
       dedupe_key: body.dedupe_key,
       dry_run: body.dry_run,
     };
-    return this.pipelineExpanderService.expandPipeline(projectId, request, caller?.user_id);
+    return this.pipelineExpanderService.expandPipeline(projectId, request, actorUserId(caller));
   }
 
   @RequirePermission('pipelines:read')

@@ -137,3 +137,13 @@ export async function jobTokenPermissionsFor(
   }
   return kept;
 }
+
+/**
+ * The user to record as the actor of work a caller starts (jobs, workflows,
+ * pipeline runs, deploys). An org-bound user token acts as an org-level
+ * principal, not as the person behind the account, so work it starts has no
+ * user actor and never resolves that user's private secrets or bindings.
+ */
+export function actorUserId(caller: AuthUser | undefined): string | undefined {
+  return caller && !caller.bound_org_id ? caller.user_id : undefined;
+}

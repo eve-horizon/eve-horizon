@@ -23,6 +23,8 @@ import {
   projectQueries,
   appLinkSubscriptionQueries,
   orgInviteQueries,
+  identityQueries,
+  secretQueries,
   type MembershipRole,
 } from '@eve/db';
 import { AppAuthPolicyService } from './app-auth-policy.service.js';
@@ -53,6 +55,8 @@ export class AppAuthService {
   private readonly projects: ReturnType<typeof projectQueries>;
   private readonly appLinkSubscriptions: ReturnType<typeof appLinkSubscriptionQueries>;
   private readonly orgInvites: ReturnType<typeof orgInviteQueries>;
+  private readonly identities: ReturnType<typeof identityQueries>;
+  private readonly secrets: ReturnType<typeof secretQueries>;
   private readonly userTokenTtlSeconds: number;
   private readonly orgsClaimLimit: number;
 
@@ -69,6 +73,8 @@ export class AppAuthService {
     this.projects = projectQueries(db);
     this.appLinkSubscriptions = appLinkSubscriptionQueries(db);
     this.orgInvites = orgInviteQueries(db);
+    this.identities = identityQueries(db);
+    this.secrets = secretQueries(db);
     this.userTokenTtlSeconds = config.EVE_AUTH_TOKEN_TTL_DAYS * 24 * 60 * 60;
     this.orgsClaimLimit = config.EVE_AUTH_ORGS_CLAIM_LIMIT;
   }
@@ -391,7 +397,9 @@ export class AppAuthService {
    * own org role. A user who does not exist yet is created in this org only. An
    * existing user must not be a system admin, must belong to this org and to no
    * other org or other org's project, and must hold no role here (in the org or
-   * any of its projects) above the caller's own org role.
+   * any of its projects) above the caller's own org role. It must also be a bot:
+   * no login identity (SSH, web or Nostr) and no user-scope secrets, so a token
+   * never stands in for a person.
    */
   private async assertMintWithinCallerReach(
     callerId: string,
@@ -411,6 +419,16 @@ export class AppAuthService {
 
     if (target.is_admin) {
       throw new ForbiddenException('Cannot mint a token for a system admin');
+    }
+
+    const [identities, userSecrets] = await Promise.all([
+      this.identities.listByUser(target.id),
+      this.secrets.listByScope('user', target.id, { limit: 1, offset: 0 }),
+    ]);
+    if (identities.length > 0 || userSecrets.length > 0) {
+      throw new ForbiddenException(
+        'Can only mint a token for a bot user: this user signs in or keeps personal secrets',
+      );
     }
 
     const [orgMemberships, projectMemberships, projectMembershipsHere] = await Promise.all([

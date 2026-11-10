@@ -25,6 +25,7 @@ import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { WorkflowsService } from './workflows.service.js';
 import { CurrentUser } from '../common/request-decorators.js';
+import { actorUserId } from '../auth/token-scope.js';
 
 @ApiTags('workflows')
 @ApiBearerAuth()
@@ -97,7 +98,7 @@ export class WorkflowsController {
     }
 
     const shouldWait = wait === 'true';
-    return this.workflowsService.invoke(projectId, name, body, shouldWait, caller?.user_id);
+    return this.workflowsService.invoke(projectId, name, body, shouldWait, actorUserId(caller));
   }
 
   @RequirePermission('workflows:write')
@@ -112,6 +113,6 @@ export class WorkflowsController {
     @Body(new ZodValidationPipe(WorkflowRetryRequestSchema)) body: WorkflowRetryRequest,
     @CurrentUser() caller: AuthUser | undefined,
   ): Promise<WorkflowRetryResponse> {
-    return this.workflowsService.retry(projectId, body, caller?.user_id);
+    return this.workflowsService.retry(projectId, body, actorUserId(caller));
   }
 }

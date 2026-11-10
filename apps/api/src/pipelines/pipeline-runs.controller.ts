@@ -34,6 +34,7 @@ import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { PipelineRunsService } from './pipeline-runs.service.js';
 import { CurrentUser } from '../common/request-decorators.js';
+import { actorUserId } from '../auth/token-scope.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import type { FastifyReply } from 'fastify';
 import type { Observable } from 'rxjs';
@@ -74,7 +75,7 @@ export class PipelineRunsController {
       pipelineName,
       body,
       runMode,
-      { actorUserId: caller?.user_id },
+      { actorUserId: actorUserId(caller) },
     );
 
     if (!wait) {

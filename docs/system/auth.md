@@ -822,7 +822,9 @@ Notes:
     whose org role is `member` can mint `member` tokens only);
   - an existing user must belong to this org and no other (no membership in another
     org or in another org's project), must not be a system admin, and must hold no
-    role in the org or its projects above the caller's own org role.
+    role in the org or its projects above the caller's own org role;
+  - an existing user must be a bot: no login identity (SSH key, web sign-in or
+    Nostr) and no user-scope secrets. Tokens for people are not minted.
   Anything else returns 403 and nothing is created or minted.
 - A token minted by an org or project admin is **bound to the org** (`bound_org_id`
   claim). The API treats it as acting only within that org, whatever other
@@ -831,8 +833,10 @@ Notes:
   `body.org_id` and the `GET /jobs` / `GET /projects` listings are held to it;
   its permissions are the user's in that org. Routes with no project, org or
   resource context, and identity or account routes (`/auth/identities`,
-  `/auth/mint`, user secrets, creating orgs), refuse it. Tokens minted by a system
-  admin are not bound.
+  `/auth/mint`, user secrets, creating orgs), refuse it. Jobs, workflows,
+  pipeline runs and deploys it starts record no user actor, so they never resolve
+  the account's user-scope secrets (even if a person later adopts the account).
+  Tokens minted by a system admin are not bound.
 - `--ttl <days>` sets the token TTL (1-90 days; the API refuses other values).
   Without it, the server's `EVE_AUTH_TOKEN_TTL_DAYS` applies.
 
