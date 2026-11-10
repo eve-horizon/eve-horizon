@@ -148,6 +148,29 @@ Authorization: Bearer <supabase_access_token>
 This endpoint verifies the Supabase token, resolves or auto-links the Eve user,
 and returns a standard Eve access token.
 
+Linking rules:
+
+- A GoTrue account already linked to an Eve user signs in with any method.
+- The first web sign-in of an existing Eve user links by email only when the
+  GoTrue session was opened through that email (an email link or one-time
+  code: `amr` method `otp`, `magiclink`, `invite`, `recovery`,
+  `email/signup` or `email_change`). A password sign-in for that email is
+  refused with 401 and writes no link; signing in once with an email link
+  connects the account.
+- An Eve user already linked to one GoTrue account is never linked to
+  another; the exchange returns 401.
+- Pending org invites (including domain-signup invites) are applied by email
+  only on an email-proven sign-in.
+- A new email with no Eve user is still auto-provisioned on any sign-in.
+
+GoTrue settings: `k8s/base` ships `GOTRUE_MAILER_AUTOCONFIRM=false`, so new
+accounts confirm their email before they get a session (the local overlay
+turns auto-confirm back on for development). `GOTRUE_DISABLE_SIGNUP` stays
+`false` because the SSO page's legacy "Sign Up" tab and its GoTrue magic link
+for new emails need public sign-up. Invites, app magic links and domain
+signup create accounts through the GoTrue admin API and keep working with
+`GOTRUE_DISABLE_SIGNUP=true`, which invite-only instances should set.
+
 ### Admin Web Invites
 
 Admins can send Supabase Auth invite emails:
@@ -1111,8 +1134,8 @@ export SUPABASE_JWT_SECRET="your-supabase-jwt-secret"
 ```
 
 In this configuration:
-- Supabase users are auto-created on first login (identity-linked by Supabase UUID
-  and/or email match)
+- Supabase users are auto-created on first login (identity-linked by Supabase UUID,
+  or by email match on an email-proven sign-in; see Token Exchange above)
 - RS256 flows (SSH/Nostr, job tokens, service principals) continue to work
 - Bootstrap is still required for the **first** internal admin user
 

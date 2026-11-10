@@ -1,0 +1,15 @@
+# Local development only: confirm new GoTrue accounts without an email round
+# trip so password sign-up works straight away against Mailpit.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-auth
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: gotrue
+          env:
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: "true"

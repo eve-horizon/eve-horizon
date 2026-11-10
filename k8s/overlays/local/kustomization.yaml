@@ -13,3 +13,4 @@ patchesStrategicMerge:
   - api-dev-bootstrap.patch.yaml
   - worker-registry.patch.yaml
   - worker-tcp-ingress.patch.yaml
+  - supabase-auth-autoconfirm.patch.yaml

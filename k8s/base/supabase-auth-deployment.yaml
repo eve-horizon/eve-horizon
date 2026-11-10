@@ -57,12 +57,19 @@ spec:
             - name: GOTRUE_URI_ALLOW_LIST
               value: ""
             # --- Sign-up / Email ---
+            # Public sign-up stays on for the SSO page's "Sign Up" tab and its
+            # GoTrue magic link for new emails (projects without x-eve.auth).
+            # Invites, app magic links and domain signup create accounts
+            # through the admin API and work with sign-up off: invite-only
+            # instances should set GOTRUE_DISABLE_SIGNUP=true.
             - name: GOTRUE_DISABLE_SIGNUP
               value: "false"
             - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
               value: "true"
+            # New accounts confirm their email before they get a session.
+            # The local overlay turns this on for development.
             - name: GOTRUE_MAILER_AUTOCONFIRM
-              value: "true"
+              value: "false"
             # --- SMTP (Mailpit) ---
             - name: GOTRUE_SMTP_HOST
               value: "mailpit.eve.svc.cluster.local"

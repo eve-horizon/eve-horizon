@@ -33,6 +33,40 @@ import {
 import type { AuthUser, JobTokenPayload, ServiceTokenPayload } from './auth.types.js';
 
 /**
+ * GoTrue sign-in methods (`amr` claim) that prove the caller controls the
+ * token's email address: a link or one-time code sent to that address.
+ * GoTrue v2 records `otp` for every implicit-flow email link (magic link,
+ * invite, recovery, signup confirmation); the PKCE flow records the specific
+ * method. Password, OAuth, SSO and anonymous sign-ins do not prove the email.
+ */
+const EMAIL_PROVING_SIGN_IN_METHODS = new Set([
+  'otp',
+  'magiclink',
+  'invite',
+  'recovery',
+  'email/signup',
+  'email_change',
+]);
+
+/**
+ * True when the GoTrue session behind these claims was opened through the
+ * token's email address. A one-time code on an account that also has a phone
+ * number may have been sent by SMS, so it does not count.
+ */
+export function isSupabaseEmailProven(claims: JwtPayload): boolean {
+  if (typeof claims.email !== 'string' || claims.email.length === 0) return false;
+  if (!Array.isArray(claims.amr)) return false;
+  const hasPhone = typeof claims.phone === 'string' && claims.phone.length > 0;
+  return claims.amr.some((entry: unknown) => {
+    const method = typeof entry === 'string'
+      ? entry
+      : (entry as { method?: unknown } | null)?.method;
+    if (typeof method !== 'string' || !EMAIL_PROVING_SIGN_IN_METHODS.has(method)) return false;
+    return method !== 'otp' || !hasPhone;
+  });
+}
+
+/**
  * Bearer-token verification for the auth hot path: routes job / service /
  * app-link / service-principal / user / Supabase tokens to their verifiers
  * and resolves them into AuthUsers. Extracted verbatim from AuthService
@@ -136,8 +170,12 @@ export class TokenVerifierService {
    *
    * Identity linking strategy:
    *   1. Look up by Supabase identity link (fingerprint = Supabase UUID).
-   *   2. Match by email (first login after invite — creates the identity link).
+   *   2. Match by email (first web sign-in of an existing Eve user — creates
+   *      the identity link). Only for a sign-in that proved the email, and
+   *      only when the user has no web login linked yet.
    *   3. Auto-provision a new Eve user (dev/test convenience).
+   *
+   * Pending org invites are applied by email only on an email-proven sign-in.
    */
   private async resolveSupabaseToken(token: string): Promise<AuthUser> {
     const claims = this.verifySupabaseToken(token);
@@ -145,13 +183,15 @@ export class TokenVerifierService {
     if (!supabaseUuid) {
       throw new UnauthorizedException('Supabase token missing sub claim');
     }
+    const emailProven = isSupabaseEmailProven(claims);
+    const provenEmail = emailProven ? claims.email : undefined;
 
     // 1. Direct identity link lookup — fastest path for returning users
     const identity = await this.identities.findByFingerprint('supabase', supabaseUuid);
     if (identity) {
       const user = await this.users.findById(identity.user_id);
       if (user) {
-        return this.attachPendingSupabaseInvite(user, claims.email);
+        return this.attachPendingSupabaseInvite(user, provenEmail);
       }
     }
 
@@ -159,6 +199,19 @@ export class TokenVerifierService {
     if (claims.email) {
       const user = await this.users.findByEmail(claims.email);
       if (user) {
+        if (!emailProven) {
+          this.logger.warn(
+            `Refused to link Supabase UUID ${supabaseUuid} to Eve user ${user.id}: sign-in did not prove the email`,
+          );
+          throw new UnauthorizedException('Sign in with an email link to connect this account');
+        }
+        const existingLinks = await this.identities.listByUserAndProvider(user.id, 'supabase');
+        if (existingLinks.length > 0) {
+          this.logger.warn(
+            `Refused to link Supabase UUID ${supabaseUuid} to Eve user ${user.id}: already linked to another web login`,
+          );
+          throw new UnauthorizedException('This account is already connected to a different web login');
+        }
         await this.identities.create({
           id: generateIdentityId(),
           user_id: user.id,
@@ -168,18 +221,19 @@ export class TokenVerifierService {
           label: 'supabase-auto-linked',
         });
         this.logger.log(`Linked Supabase UUID ${supabaseUuid} to Eve user ${user.id} via email match`);
-        return this.attachPendingSupabaseInvite(user, claims.email);
+        return this.attachPendingSupabaseInvite(user, provenEmail);
       }
     }
 
     // 3. Auto-provision new Eve user
-    return this.autoProvisionSupabaseUser(claims, supabaseUuid);
+    return this.autoProvisionSupabaseUser(claims, supabaseUuid, provenEmail);
   }
 
   /**
    * Apply any pending Supabase-provider org invite for this user's email and
    * surface the invite_redirect_to / org / app_context on the AuthUser. Safe
-   * to call for newly-provisioned and returning users alike.
+   * to call for newly-provisioned and returning users alike. Pass the email
+   * only when the sign-in proved it; without one no invite is applied.
    */
   private async attachPendingSupabaseInvite(
     user: Awaited<ReturnType<typeof this.users.findById>> & object,
@@ -206,9 +260,14 @@ export class TokenVerifierService {
   /**
    * Auto-provision a new Eve user from Supabase claims.
    * Creates the user with an Eve TypeID, links the Supabase UUID as an identity,
-   * and applies any pending org invite matching the email.
+   * and applies any pending org invite matching `provenEmail` (set only when
+   * the sign-in proved the email).
    */
-  private async autoProvisionSupabaseUser(claims: JwtPayload, supabaseUuid: string): Promise<AuthUser> {
+  private async autoProvisionSupabaseUser(
+    claims: JwtPayload,
+    supabaseUuid: string,
+    provenEmail: string | undefined,
+  ): Promise<AuthUser> {
     const userId = generateUserId();
     const email = claims.email ?? `${supabaseUuid}@supabase.local`;
     const displayName = (claims.user_metadata as Record<string, unknown> | undefined)?.name as string | undefined;
@@ -233,10 +292,10 @@ export class TokenVerifierService {
     let inviteRedirectTo: string | undefined;
     let inviteOrgId: string | undefined;
     let inviteAppContext: Record<string, unknown> | null | undefined;
-    if (claims.email) {
-      const inviteResult = await this.autoApplyOrgInviteByEmail(user.id, claims.email);
+    if (provenEmail) {
+      const inviteResult = await this.autoApplyOrgInviteByEmail(user.id, provenEmail);
       if (inviteResult.error) {
-        this.logger.error(`Failed to apply org invite for ${claims.email}: ${inviteResult.error}`);
+        this.logger.error(`Failed to apply org invite for ${provenEmail}: ${inviteResult.error}`);
       }
       if (inviteResult.redirect_to) {
         inviteRedirectTo = inviteResult.redirect_to;
