@@ -9,7 +9,9 @@ import {
   generateUserId,
   generateIdentityId,
   AccessBindingScopeSchema,
+  clampJobTokenPermissions,
   clampServiceTokenPermissions,
+  hasUserActor,
   type AccessBindingScope,
 } from '@eve/shared';
 import {
@@ -541,7 +543,8 @@ export class TokenVerifierService {
       org_id: payload.org_id as string | null,
       project_id: payload.project_id as string,
       job_id: payload.job_id as string,
-      permissions: perms as string[],
+      // Held to the job-token rule even if the token was signed before it.
+      permissions: clampJobTokenPermissions(perms as string[], { hasActor: hasUserActor(userId) }),
       ...(scope ? { scope } : {}),
       ...(typeof payload.agent_slug === 'string' ? { agent_slug: payload.agent_slug } : {}),
       ...(typeof payload.email === 'string' ? { email: payload.email } : {}),

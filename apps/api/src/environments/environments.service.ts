@@ -573,10 +573,12 @@ export class EnvironmentsService {
     };
   }
 
+  /** `actorUserId` is the user who asked for the deploy; a pipeline deploy runs its steps as that user. */
   async deploy(
     projectId: string,
     envName: string,
     data: DeployRequest,
+    actorUserId?: string,
   ): Promise<DeployResponse> {
     // Verify project exists
     const project = await this.projects.findById(projectId);
@@ -617,7 +619,7 @@ export class EnvironmentsService {
     // Check if environment has a pipeline configured and direct flag is not set
     if (envConfig?.pipeline && !data.direct) {
       // Route to pipeline execution
-      return this.deployViaPipeline(projectId, envName, envConfig, data, environment);
+      return this.deployViaPipeline(projectId, envName, envConfig, data, environment, actorUserId);
     }
 
     // Fall back to direct deploy flow
@@ -630,6 +632,7 @@ export class EnvironmentsService {
     envConfig: Environment,
     data: DeployRequest,
     environment: Awaited<ReturnType<typeof this.environments.findByProjectAndName>> & object,
+    actorUserId?: string,
   ): Promise<DeployResponse> {
     const pipelineName = envConfig.pipeline!;
 
@@ -676,6 +679,7 @@ export class EnvironmentsService {
       pipelineName,
       pipelineRunRequest,
       'env-deploy',
+      { actorUserId },
     );
 
     return {

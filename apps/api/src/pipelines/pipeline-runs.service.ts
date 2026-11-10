@@ -50,14 +50,20 @@ export class PipelineRunsService {
     this.jobs = jobQueries(db);
   }
 
+  /**
+   * `options.actorUserId` is the user who started the run (a manual run or a
+   * deploy). Step job-token permissions are held to what that user holds;
+   * without one, the no-actor ceiling applies.
+   */
   async createRun(
     projectId: string,
     pipelineName: string,
     request: PipelineRunRequest,
     runMode: string | null,
-    dedupeKey?: string,
+    options: { actorUserId?: string; dedupeKey?: string } = {},
   ): Promise<{ detail: PipelineRunDetailResponse; pipeline: PipelineDefinition }>
   {
+    const { actorUserId, dedupeKey } = options;
     await this.ensureProjectExists(projectId);
     const { manifest, pipeline } = await this.getPipeline(projectId, pipelineName, request.ref);
 
@@ -68,7 +74,7 @@ export class PipelineRunsService {
 
     // Route all pipelines to job-based execution (build actions require job-based path)
     // Legacy step_run path is retained below but no longer reached
-    return this.createRunAsJobs(projectId, pipelineName, request, pipeline, dedupeKey);
+    return this.createRunAsJobs(projectId, pipelineName, request, pipeline, dedupeKey, actorUserId);
 
     /* ===== LEGACY STEP_RUN CODE - RETAINED FOR REFERENCE, NO LONGER EXECUTED =====
     // Handle deduplication: cancel existing active run if dedupe_key provided
@@ -671,6 +677,7 @@ export class PipelineRunsService {
     request: PipelineRunRequest,
     pipeline: PipelineDefinition,
     dedupeKey?: string,
+    actorUserId?: string,
   ): Promise<{ detail: PipelineRunDetailResponse; pipeline: PipelineDefinition }> {
     // Handle deduplication: cancel existing active run if dedupe_key provided
     if (dedupeKey) {
@@ -683,7 +690,7 @@ export class PipelineRunsService {
       git_sha: request.ref,
       inputs: request.inputs,
       dedupe_key: dedupeKey,
-    });
+    }, actorUserId);
 
     // Map expander response to the expected format
     // Jobs are used instead of step runs, so steps array is empty

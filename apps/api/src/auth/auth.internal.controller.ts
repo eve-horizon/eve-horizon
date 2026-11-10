@@ -15,6 +15,8 @@ import { type Db, appLinkSubscriptionQueries, jobQueries, projectQueries } from 
 import { Public } from './auth.decorator.js';
 import { InternalTokenGuard } from '../common/internal-token.guard.js';
 import { AuthService } from './auth.service.js';
+import { AccessService } from './access.service.js';
+import { jobTokenPermissionsFor } from './token-scope.js';
 
 @ApiTags('internal')
 @Controller('internal/auth')
@@ -27,6 +29,7 @@ export class AuthInternalController {
   constructor(
     private readonly authService: AuthService,
     @Inject('DB') private readonly db: Db,
+    private readonly accessService: AccessService,
   ) {
     this.jobs = jobQueries(db);
     this.projects = projectQueries(db);
@@ -51,7 +54,12 @@ export class AuthInternalController {
     }
 
     // Accept both 'permissions' (new) and 'scopes' (legacy) in request body
-    const permissions = body.permissions ?? body.scopes ?? [];
+    const permissions = await jobTokenPermissionsFor(
+      this.accessService,
+      job.actor_user_id,
+      project.org_id,
+      body.permissions ?? body.scopes ?? [],
+    );
     let scope: AccessBindingScope | undefined;
     if (body.scope !== undefined) {
       const parsedScope = AccessBindingScopeSchema.safeParse(body.scope);

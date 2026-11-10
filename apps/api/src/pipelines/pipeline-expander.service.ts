@@ -19,10 +19,12 @@ import {
   VALID_TOOLCHAINS,
   generatePipelineRunId,
   getScriptConfig,
+  hasUserActor,
   isOrgManagementPermission,
   isValidPermission,
   mergeEnvOverrides,
   parseStepExecution as parseSharedStepExecution,
+  splitNoActorJobPermissions,
   type StepExecution,
   type AccessBindingScope,
   type EnvOverrides,
@@ -328,6 +330,34 @@ export class PipelineExpanderService {
     return [...new Set(winner)].sort();
   }
 
+  /**
+   * The job-token permissions a step may carry. With a user actor, every
+   * declared permission must be one the actor holds (400 otherwise). With no
+   * actor (event triggers, schedules, internal runs) platform and
+   * org-management permissions are withheld and recorded on the job, and the
+   * rest are kept; a step left with none falls back to the executor default.
+   */
+  private async ceilStepTokenPermissions(
+    orgId: string,
+    projectId: string,
+    userId: string | undefined,
+    permissions: string[] | null,
+    context: string,
+  ): Promise<{ permissions: string[] | null; withheld: string[] }> {
+    if (!permissions || permissions.length === 0) {
+      return { permissions, withheld: [] };
+    }
+    if (hasUserActor(userId)) {
+      await this.assertActorCanGrantPermissions(orgId, projectId, userId, permissions, context);
+      return { permissions, withheld: [] };
+    }
+    const { granted, withheld } = splitNoActorJobPermissions(permissions);
+    if (withheld.length > 0) {
+      console.warn(`${context}: withheld ${withheld.join(', ')} (no user started this run)`);
+    }
+    return { permissions: granted.length > 0 ? granted : null, withheld };
+  }
+
   private async assertActorCanGrantPermissions(
     orgId: string,
     projectId: string,
@@ -548,15 +578,14 @@ export class PipelineExpanderService {
         (step as { permissions?: unknown }).permissions,
         `Pipeline "${request.pipeline_name}" step "${stepName}".permissions`,
       );
-      const stepJobTokenPermissions = this.mergeStepTokenPermissions(
-        pipelineTokenPermissions,
-        stepTokenPermissions,
-      );
-      await this.assertActorCanGrantPermissions(
+      const {
+        permissions: stepJobTokenPermissions,
+        withheld: withheldTokenPermissions,
+      } = await this.ceilStepTokenPermissions(
         projectForSlug.org_id,
         projectId,
         userId,
-        stepJobTokenPermissions,
+        this.mergeStepTokenPermissions(pipelineTokenPermissions, stepTokenPermissions),
         `Pipeline "${request.pipeline_name}" step "${stepName}" permissions`,
       );
 
@@ -598,6 +627,7 @@ export class PipelineExpanderService {
           git_sha: request.git_sha,
           ...metadata,
           ...(resolvedToolchains.length > 0 ? { toolchains: resolvedToolchains } : {}),
+          ...(withheldTokenPermissions.length > 0 ? { token_permissions_withheld: withheldTokenPermissions } : {}),
         },
         harness: null,
         harness_profile: null,

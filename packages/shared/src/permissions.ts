@@ -172,3 +172,49 @@ export function clampServiceTokenPermissions(requested: readonly string[]): stri
     (permission) => !permission.endsWith(':admin') && !isOrgManagementPermission(permission),
   );
 }
+
+/**
+ * The user id recorded on work no user started (internal pipeline runs) and
+ * carried by job tokens for such jobs. It is never a person.
+ */
+export const SYSTEM_ACTOR_ID = 'system';
+
+/** True when `userId` names a user who started the work (not empty, not the system actor). */
+export function hasUserActor(userId: string | null | undefined): userId is string {
+  return typeof userId === 'string' && userId.length > 0 && userId !== SYSTEM_ACTOR_ID;
+}
+
+/** True for platform permissions (`system:*`), which no job token carries. */
+export function isPlatformPermission(permission: string): boolean {
+  return permission.startsWith('system:');
+}
+
+/**
+ * Split permissions declared for a job token when no user started the job
+ * (event triggers, schedules, internal runs): platform and org-management
+ * permissions are withheld, everything else is granted. With a user actor the
+ * actor's own permissions are the ceiling instead.
+ */
+export function splitNoActorJobPermissions(requested: readonly string[]): { granted: string[]; withheld: string[] } {
+  const granted: string[] = [];
+  const withheld: string[] = [];
+  for (const permission of new Set(requested)) {
+    if (isPlatformPermission(permission) || isOrgManagementPermission(permission)) {
+      withheld.push(permission);
+    } else {
+      granted.push(permission);
+    }
+  }
+  return { granted, withheld };
+}
+
+/**
+ * The permissions a job token may carry, applied when it is minted and again
+ * when it is verified: never platform permissions, and org-management
+ * permissions only for a job that a user started.
+ */
+export function clampJobTokenPermissions(requested: readonly string[], options: { hasActor: boolean }): string[] {
+  return [...new Set(requested)].filter(
+    (permission) => !isPlatformPermission(permission) && (options.hasActor || !isOrgManagementPermission(permission)),
+  );
+}

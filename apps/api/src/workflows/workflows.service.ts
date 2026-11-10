@@ -1,7 +1,7 @@
 import { Injectable, Inject, Optional, BadRequestException, NotFoundException, RequestTimeoutException } from '@nestjs/common';
 import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
-import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, interpolateValue, isOrgManagementPermission, isValidPermission, mergeEnvOverrides, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
+import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isOrgManagementPermission, isValidPermission, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
 import { intersectScopes, pathPatternBase } from './scope-algebra.js';
 import * as yaml from 'yaml';
@@ -262,6 +262,34 @@ export class WorkflowsService {
     const winner = stepPermissions ?? invocationPermissions ?? workflowPermissions;
     if (!winner) return null;
     return [...new Set(winner)].sort();
+  }
+
+  /**
+   * The job-token permissions a step may carry. With a user actor, every
+   * declared permission must be one the actor holds (400 otherwise). With no
+   * actor (event triggers, schedules, internal runs) platform and
+   * org-management permissions are withheld and recorded on the job, and the
+   * rest are kept; a step left with none falls back to the executor default.
+   */
+  private async ceilStepTokenPermissions(
+    orgId: string,
+    projectId: string,
+    userId: string | undefined,
+    permissions: string[] | null,
+    context: string,
+  ): Promise<{ permissions: string[] | null; withheld: string[] }> {
+    if (!permissions || permissions.length === 0) {
+      return { permissions, withheld: [] };
+    }
+    if (hasUserActor(userId)) {
+      await this.assertActorCanGrantPermissions(orgId, projectId, userId, permissions, context);
+      return { permissions, withheld: [] };
+    }
+    const { granted, withheld } = splitNoActorJobPermissions(permissions);
+    if (withheld.length > 0) {
+      console.warn(`${context}: withheld ${withheld.join(', ')} (no user started this run)`);
+    }
+    return { permissions: granted.length > 0 ? granted : null, withheld };
   }
 
   private async assertActorCanGrantPermissions(
@@ -1072,16 +1100,14 @@ export class WorkflowsService {
         (step as { permissions?: unknown }).permissions,
         `Workflow "${workflowName}" step "${stepName}".permissions`,
       );
-      const stepJobTokenPermissions = this.mergeStepTokenPermissions(
-        workflowTokenPermissions,
-        stepTokenPermissions,
-        invocationTokenPermissions,
-      );
-      await this.assertActorCanGrantPermissions(
+      const {
+        permissions: stepJobTokenPermissions,
+        withheld: withheldTokenPermissions,
+      } = await this.ceilStepTokenPermissions(
         project.org_id,
         projectId,
         userId,
-        stepJobTokenPermissions,
+        this.mergeStepTokenPermissions(workflowTokenPermissions, stepTokenPermissions, invocationTokenPermissions),
         `Workflow "${workflowName}" step "${stepName}" permissions`,
       );
       const {
@@ -1128,6 +1154,7 @@ export class WorkflowsService {
           ...(condition ? { condition } : {}),
           ...(agentConfig.permission ? { permission_policy: agentConfig.permission } : {}),
           ...(workflow.db_access ? { db_access: workflow.db_access } : {}),
+          ...(withheldTokenPermissions.length > 0 ? { token_permissions_withheld: withheldTokenPermissions } : {}),
           ...(request?.input ? { request_json: JSON.stringify(request.input) } : {}),
           ...(resolvedToolchains.length > 0 ? { toolchains: resolvedToolchains } : {}),
           ...(stepApis ? { app_apis: stepApis } : {}),

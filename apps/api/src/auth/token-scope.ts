@@ -1,5 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
+import { clampJobTokenPermissions, hasUserActor, isOrgManagementPermission } from '@eve/shared';
 import type { AuthUser } from './auth.types.js';
+import type { AccessService } from './access.service.js';
 
 /** Resolves the project and org references a route names (RbacService implements it). */
 export interface TokenScopeResolver {
@@ -100,4 +102,38 @@ export function heldScope(user: AuthUser): AuthUser | undefined {
     return { user_id: user.user_id, org_id: user.bound_org_id };
   }
   return undefined;
+}
+
+/**
+ * The permissions a job token is signed with. Never platform permissions;
+ * org-management permissions only for a job a user started, and only those
+ * that user holds at org level (org role or org bindings). Step ceilings
+ * already judge declared step permissions; this also covers permissions that
+ * come from agent config.
+ */
+export async function jobTokenPermissionsFor(
+  access: Pick<AccessService, 'can'>,
+  actorUserId: string | null,
+  orgId: string,
+  requested: readonly string[],
+): Promise<string[]> {
+  const hasActor = hasUserActor(actorUserId);
+  const permissions = clampJobTokenPermissions(requested, { hasActor });
+  if (!hasActor) {
+    return permissions;
+  }
+  const kept: string[] = [];
+  for (const permission of permissions) {
+    if (isOrgManagementPermission(permission)) {
+      const { allowed } = await access.can({
+        org_id: orgId,
+        principal_type: 'user',
+        principal_id: actorUserId,
+        permission,
+      });
+      if (!allowed) continue;
+    }
+    kept.push(permission);
+  }
+  return kept;
 }

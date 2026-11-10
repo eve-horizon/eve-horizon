@@ -274,7 +274,20 @@ actor holds. Org-management permissions (`orgs:create`, `orgs:write`,
 `orgs:admin`, `orgs:invite`, `projects:create`, `integrations:write`,
 `endpoints:write`, `system:read`, `system:admin`) count only when the actor holds
 them through their org role; a project role alone does not let a step grant them.
-The same rule applies to pipeline step permissions.
+The same rule applies to pipeline step permissions. Manual pipeline runs
+(`POST /projects/:id/pipelines/:name/run`) and pipeline deploys run as the
+calling user.
+
+When no user started the run (event triggers, schedules, internal runs), the
+step keeps its declared project permissions, but platform (`system:*`) and
+org-management permissions are withheld: they are dropped, logged, and listed in
+the step job's `hints.token_permissions_withheld`. A step left with no declared
+permission falls back to the executor default.
+
+Job tokens are also held to this when minted and verified: they never carry
+`system:*`, and carry org-management permissions only for a job a user started
+and only those that user holds at org level (this also covers agent `access`
+permissions).
 
 ## Validation
 

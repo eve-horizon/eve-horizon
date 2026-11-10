@@ -28,6 +28,8 @@ import {
   ApiNoContentResponse,
 } from '@nestjs/swagger';
 import { EnvironmentsService } from './environments.service.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import type { AuthUser } from '../auth/auth.types.js';
 import { EnvLogsService, type EnvLogsResponse } from './env-logs.service.js';
 import { EnvDiagnosticsService } from './env-diagnostics.service.js';
 import {
@@ -205,8 +207,9 @@ export class EnvironmentsController {
     @Param('id') projectId: string,
     @Param('name') envName: string,
     @Body(new ZodValidationPipe(DeployRequestSchema)) body: DeployRequest,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<DeployResponse> {
-    return this.environmentsService.deploy(projectId, envName, body);
+    return this.environmentsService.deploy(projectId, envName, body, caller?.user_id);
   }
 
   @RequirePermission('envs:write')
