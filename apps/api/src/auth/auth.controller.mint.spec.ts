@@ -281,6 +281,21 @@ describe('AuthController POST /auth/mint', () => {
       expectNothingMinted();
     });
 
+    it("never lowers an existing member's org or project role", async () => {
+      addUser('user_peer_bot', 'peer-bot@example.com');
+      joinOrg('user_peer_bot', 'org_a', 'admin');
+      joinProject('user_peer_bot', 'proj_a', 'admin');
+
+      const response = await controller.mint(
+        mintRequest({ email: 'peer-bot@example.com', project_id: 'proj_a', role: 'member' }),
+        orgAdmin,
+      );
+
+      expect(response.role).toBe('admin');
+      expect(db.state.orgMemberships.find((m) => m.user_id === 'user_peer_bot')?.role).toBe('admin');
+      expect(db.state.projectMemberships.find((m) => m.user_id === 'user_peer_bot')?.role).toBe('admin');
+    });
+
     it('mints again for an existing bot that belongs only to the org', async () => {
       addUser('user_bot', 'app-bot@example.com');
       joinOrg('user_bot', 'org_a', 'member');
