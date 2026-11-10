@@ -21,7 +21,18 @@ describe('isInternalApiPath', () => {
   });
 
   it('leaves other paths alone', () => {
-    for (const path of ['/', '/jobs', '/internal', '/api', '/api/jobs?filter=/api/internal', '/api/internalize', '/apps/internal']) {
+    for (const path of [
+      '/',
+      '/jobs',
+      '/internal',
+      '/api',
+      '/api/jobs?filter=/api/internal',
+      '/api/internalize',
+      '/apps/internal',
+      '/api/orgs/o1/files/50%25off.txt',
+      '/api/docs/100%2525%2520off',
+      '/api/files/%E0%A4%A',
+    ]) {
       expect(isInternalApiPath(path), path).toBe(false);
     }
   });
@@ -57,7 +68,7 @@ describe('internalRouteProxyHooks', () => {
 
   it('lets other upstream paths through', () => {
     const hooks = internalRouteProxyHooks('http://eve-api:4701/');
-    for (const path of ['/auth/me', '/internalize', '/projects/internal', '/orgs/o1/jobs?q=/internal/x']) {
+    for (const path of ['/auth/me', '/internalize', '/projects/internal', '/orgs/o1/jobs?q=/internal/x', '/orgs/o1/files/50%25off.txt']) {
       const proxyReq = fakeProxyReq(path);
       hooks.proxyReq(proxyReq);
       expect(proxyReq.destroyed, path).toBeNull();

@@ -39,7 +39,6 @@ describe('dashboard /api proxy and the API internal routes', () => {
     '/API/internal/x',
     '/Api/Internal/x',
     '/api\\internal/x',
-    '/api/%E0%A4%A',
   ])('answers 404 for %s without calling the API', async (path) => {
     const res = await dashboard.get(path);
     expect(res.status).toBe(404);
@@ -51,6 +50,9 @@ describe('dashboard /api proxy and the API internal routes', () => {
     ['/api/jobs/job-1/attempts/1/logs?after=0', '/jobs/job-1/attempts/1/logs?after=0'],
     ['/api/projects/internal-tools', '/projects/internal-tools'],
     ['/api/internalize', '/internalize'],
+    ['/api/orgs/o1/files/50%25off.txt', '/orgs/o1/files/50%25off.txt'],
+    ['/api/projects/p1/docs/100%2525%2520off', '/projects/p1/docs/100%2525%2520off'],
+    ['/api/files/%E0%A4%A', '/files/%E0%A4%A'],
   ])('still proxies %s', async (path, forwarded) => {
     const res = await dashboard.get(path);
     expect(res.status).toBe(200);
