@@ -33,6 +33,9 @@ import {
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
+import { CurrentUser } from '../common/request-decorators.js';
+import { isScopedToken } from '../auth/token-scope.js';
+import type { AuthUser } from '../auth/auth.types.js';
 import { ThreadsService } from './threads.service.js';
 
 @ApiTags('org-threads')
@@ -96,8 +99,9 @@ export class OrgThreadsController {
   async show(
     @Param('org_id') orgId: string,
     @Param('thread_id') threadId: string,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<ThreadResponse> {
-    return this.requireThreadInOrg(orgId, threadId);
+    return this.requireThreadInOrg(orgId, threadId, caller);
   }
 
   @RequirePermission('threads:write')
@@ -114,8 +118,9 @@ export class OrgThreadsController {
     @Param('org_id') orgId: string,
     @Param('thread_id') threadId: string,
     @Body(new ZodValidationPipe(CreateThreadMessageRequestSchema)) body: CreateThreadMessageRequest,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<ThreadMessageResponse> {
-    await this.requireThreadInOrg(orgId, threadId);
+    await this.requireThreadInOrg(orgId, threadId, caller);
     return this.threads.createMessage(threadId, body);
   }
 
@@ -135,8 +140,9 @@ export class OrgThreadsController {
     @Param('thread_id') threadId: string,
     @Query('since') since?: string,
     @Query('limit') limit?: string,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<ThreadMessageListResponse> {
-    await this.requireThreadInOrg(orgId, threadId);
+    await this.requireThreadInOrg(orgId, threadId, caller);
     return this.threads.listMessages(threadId, {
       since: since ? new Date(since) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
@@ -146,10 +152,13 @@ export class OrgThreadsController {
   /**
    * The route authorises the path org, so the thread must belong to it (an
    * org thread of that org or a thread of one of its projects); 404 otherwise.
+   * A job or service token, minted for one project, gets only org threads and
+   * its own project's threads.
    */
-  private async requireThreadInOrg(orgId: string, threadId: string): Promise<ThreadResponse> {
+  private async requireThreadInOrg(orgId: string, threadId: string, caller?: AuthUser): Promise<ThreadResponse> {
     const thread = await this.threads.findByIdInOrg(threadId, orgId);
-    if (!thread) {
+    const projectToken = caller && isScopedToken(caller) && caller.project_id ? caller : undefined;
+    if (!thread || (projectToken && thread.project_id && thread.project_id !== projectToken.project_id)) {
       throw new NotFoundException(`Thread ${threadId} not found`);
     }
     return thread;
