@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConflictException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { EnvDbService } from './env-db.service';
 import type { SecretsService } from '../secrets/secrets.service';
 
@@ -259,6 +259,78 @@ describe('EnvDbService database target', () => {
 
       await expect(runSql()).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(mocks.createDb).not.toHaveBeenCalled();
+    });
+  });
+  describe('the login privilege check', () => {
+    const managedUrl = 'postgres://tenant_role:tenant-pass@eve-db.internal:5432/tenant_shop_dev';
+
+    beforeEach(() => {
+      mocks.manifests.findLatestByProject.mockResolvedValue({ manifest_yaml: MANAGED_MANIFEST });
+      mocks.managedDb.findReadyTenantByEnv.mockResolvedValue({
+        id: 'mdbt_1',
+        status: 'ready',
+        credential_secret_ref: managedUrl,
+      });
+    });
+
+    it('looks at the session and current user, admin attributes and admin roles', async () => {
+      await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
+
+      const client = mocks.createDb.mock.results[0].value as ReturnType<typeof fakeClient>;
+      expect(client).toHaveBeenCalledTimes(1);
+      const [strings, ...values] = client.mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
+      const sql = strings.join('$');
+      for (const fragment of ['session_user', 'current_user', 'rolsuper', 'rolcreaterole', 'rolbypassrls', 'rolreplication']) {
+        expect(sql).toContain(fragment);
+      }
+      const roles = values.flat();
+      for (const role of [
+        'pg_read_all_data',
+        'pg_write_all_data',
+        'pg_read_server_files',
+        'pg_write_server_files',
+        'pg_execute_server_program',
+      ]) {
+        expect(roles).toContain(role);
+      }
+    });
+  });
+
+  describe('connection parameters in the URL', () => {
+    for (const [label, query] of [
+      ['a role', 'role=other_role'],
+      ['server options', `options=${encodeURIComponent('-c role=other_role')}`],
+      ['a session authorization', 'session_authorization=other_role'],
+    ] as const) {
+      it(`refuses ${label} before connecting`, async () => {
+        environment.overrides_json = { db: { url: `postgres://app:pw@db.tenant.example:5432/app?${query}` } };
+
+        await expect(runSql()).rejects.toBeInstanceOf(BadRequestException);
+        expect(mocks.createDb).not.toHaveBeenCalled();
+      });
+    }
+
+    it('allows TLS mode, application name, timeouts and search_path', async () => {
+      const url = 'postgres://app:pw@db.tenant.example:5432/app?sslmode=require&application_name=shop&connect_timeout=5&search_path=app';
+      environment.overrides_json = { db: { url } };
+
+      await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
+      expect(mocks.createDb).toHaveBeenCalledWith(url);
+    });
+
+    it('allows a managed tenant URL that repeats the platform URL\'s own parameters', async () => {
+      const options = encodeURIComponent('-c statement_timeout=5000');
+      vi.stubEnv('DATABASE_URL', `${PLATFORM_DATABASE_URL}?sslmode=disable&options=${options}`);
+      const managedUrl = `postgres://tenant_role:tenant-pass@eve-db.internal:5432/tenant_shop_dev?sslmode=disable&options=${options}`;
+      mocks.manifests.findLatestByProject.mockResolvedValue({ manifest_yaml: MANAGED_MANIFEST });
+      mocks.managedDb.findReadyTenantByEnv.mockResolvedValue({
+        id: 'mdbt_1',
+        status: 'ready',
+        credential_secret_ref: managedUrl,
+      });
+
+      await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
+      expect(mocks.createDb).toHaveBeenCalledWith(managedUrl);
     });
   });
 });
