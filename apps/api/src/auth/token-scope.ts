@@ -1,5 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
-import { clampJobTokenPermissions, hasUserActor, isOrgManagementPermission } from '@eve/shared';
+import { clampJobTokenPermissions, hasUserActor, isOrgRoleOnlyPermission } from '@eve/shared';
 import type { AuthUser } from './auth.types.js';
 import type { AccessService } from './access.service.js';
 
@@ -106,8 +106,9 @@ export function heldScope(user: AuthUser): AuthUser | undefined {
 
 /**
  * The permissions a job token is signed with. Never platform permissions;
- * org-management permissions only for a job a user started, and only those
- * that user holds at org level (org role or org bindings). Step ceilings
+ * org-role-only permissions (org management, org data admin) only for a job a
+ * user started, and only those that user holds at org level (org role or org
+ * bindings). Step ceilings
  * already judge declared step permissions; this also covers permissions that
  * come from agent config.
  */
@@ -124,7 +125,7 @@ export async function jobTokenPermissionsFor(
   }
   const kept: string[] = [];
   for (const permission of permissions) {
-    if (isOrgManagementPermission(permission)) {
+    if (isOrgRoleOnlyPermission(permission)) {
       const { allowed } = await access.can({
         org_id: orgId,
         principal_type: 'user',
@@ -155,10 +156,10 @@ export function workStartOptions(caller: AuthUser | undefined): Required<WorkSta
 }
 
 /**
- * Org-wide settings (org secrets, cloud-fs mounts) are changed by people and
- * org-level service principals, never by a token minted for one project (job
- * and service tokens), whatever permissions that token carries. Reads are
- * unaffected.
+ * Org-wide settings (org secrets, cloud-fs mounts) and org file sharing and
+ * publishing are changed by people and org-level service principals, never by
+ * a token minted for one project (job and service tokens), whatever
+ * permissions that token carries. Reads are unaffected.
  */
 export function refuseProjectTokens(caller: AuthUser | undefined, what: string): void {
   if (caller && isScopedToken(caller) && caller.project_id) {

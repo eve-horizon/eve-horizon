@@ -275,15 +275,16 @@ The CLI does not expose `--scope-*` flags yet.
 Step `permissions:` for the job token may only list permissions the invoking
 actor holds. Org-management permissions (`orgs:create`, `orgs:write`,
 `orgs:admin`, `orgs:invite`, `projects:create`, `integrations:write`,
-`endpoints:write`, `system:read`, `system:admin`) count only when the actor holds
+`endpoints:write`, `system:read`, `system:admin`) and org data admin permissions
+(`orgfs:admin`, `orgdocs:admin`, `cloud_fs:admin`) count only when the actor holds
 them through their org role; a project role alone does not let a step grant them.
 The same rule applies to pipeline step permissions. Manual pipeline runs
 (`POST /projects/:id/pipelines/:name/run`) and pipeline deploys run as the
 calling user.
 
 When no user started the run (event triggers, schedules, internal runs), the
-step keeps its declared project permissions, but platform (`system:*`) and
-org-management permissions are withheld: they are dropped, logged, and listed in
+step keeps its declared project permissions, but platform (`system:*`),
+org-management and org data admin permissions are withheld: they are dropped, logged, and listed in
 the step job's `hints.token_permissions_withheld`. A step left with no declared
 permission falls back to the executor default.
 

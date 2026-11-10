@@ -85,6 +85,7 @@ import {
 import type { Observable } from 'rxjs';
 import { Public } from '../auth/auth.decorator.js';
 import type { AuthUser } from '../auth/auth.service.js';
+import { refuseProjectTokens } from '../auth/token-scope.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { ScopedAccessService } from '../auth/scoped-access.service.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
@@ -629,6 +630,7 @@ export class OrgFsSyncController {
     @CurrentUser() caller: AuthUser | undefined,
     @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsShare> {
+    refuseProjectTokens(caller, 'org file shares');
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:read',
@@ -670,6 +672,7 @@ export class OrgFsSyncController {
     @CurrentUser() caller: AuthUser | undefined,
     @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsShare> {
+    refuseProjectTokens(caller, 'org file shares');
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
@@ -694,6 +697,7 @@ export class OrgFsSyncController {
     @CurrentUser() caller: AuthUser | undefined,
     @CorrelationId() correlationId: string | undefined,
   ): Promise<OrgFsPublicPath> {
+    refuseProjectTokens(caller, 'published org file paths');
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
@@ -735,6 +739,7 @@ export class OrgFsSyncController {
     @CurrentUser() caller: AuthUser | undefined,
     @CorrelationId() correlationId: string | undefined,
   ): Promise<void> {
+    refuseProjectTokens(caller, 'published org file paths');
     await this.scopedAccess.assert({
       org_id: orgId,
       permission: 'orgfs:admin',
