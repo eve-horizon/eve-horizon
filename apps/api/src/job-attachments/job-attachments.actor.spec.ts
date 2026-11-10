@@ -163,6 +163,23 @@ describe('job attachments and the job actor', () => {
     expect(actorWrites()).toEqual([]);
   });
 
+  it('keeps a job no user started as it is when its own agent attaches to it', async () => {
+    pendingJob({ phase: 'active', actor_user_id: null, token_permissions: ['jobs:read', 'jobs:write'] });
+    const agent: AuthUser = {
+      user_id: 'system',
+      is_job_token: true,
+      job_id: 'a-1',
+      project_id: 'proj_a',
+      org_id: 'org_a',
+      permissions: ['jobs:read', 'jobs:write'],
+    };
+
+    await service().create('a-1', NOTES, agent);
+
+    expect(actorWrites()).toEqual([]);
+    expect(m.attachmentQ.create).toHaveBeenCalled();
+  });
+
   it('refuses a teammate who could not have granted the permissions the job carries, and attaches nothing', async () => {
     pendingJob({ token_permissions: ['jobs:read', 'secrets:write'] });
 

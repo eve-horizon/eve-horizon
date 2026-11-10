@@ -98,6 +98,37 @@ describe('prior step results in a workflow step prompt', () => {
   });
 });
 
+describe('steps of a run no user started', () => {
+  const NO_USER_ROOT: Row = { ...RUN_ROOT, actor_user_id: null };
+  const NO_USER_STEP: Row = {
+    ...WRITE_STEP,
+    actor_user_id: null,
+    hints: { ...(WRITE_STEP.hints as Row), condition: "research.status == 'ok'" },
+  };
+
+  /** "research" recorded with the 'system' actor its job token carries. */
+  function jobsForNoUserRun() {
+    const jobs = jobsWith(
+      [done('run1.1', 'run1', 'research', 'system')],
+      { 'run1.1': { result_text: 'Research notes', result_json: { eve: { status: 'ok' } } } },
+    );
+    jobs.findById.mockImplementation(async (id: string) => (id === 'run1' ? NO_USER_ROOT : null));
+    return jobs;
+  }
+
+  it("feed each other whether recorded as no one or as 'system'", async () => {
+    const prompt = await loop().enrichWorkflowStep(NO_USER_STEP, jobsForNoUserRun());
+
+    expect(prompt).toContain('Research notes');
+  });
+
+  it("decide each other's conditions whether recorded as no one or as 'system'", async () => {
+    const outcome = await loop().evaluateStepCondition(jobsForNoUserRun(), NO_USER_STEP);
+
+    expect(outcome).toEqual({ shouldRun: true, reason: undefined });
+  });
+});
+
 describe('workflow step conditions', () => {
   const CONDITIONAL_STEP: Row = {
     ...WRITE_STEP,

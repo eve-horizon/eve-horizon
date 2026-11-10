@@ -200,6 +200,20 @@ describe('PATCH /jobs/:job_id and the job actor', () => {
     expect(actorWrites()).toEqual([{ actor: 'user_mate', userSecretsExcluded: false }]);
   });
 
+  it("keeps a job no user started as it is when a step no user started edits it", async () => {
+    pendingJob({ actor_user_id: null, token_permissions: ['jobs:read', 'jobs:write'] });
+
+    await update(service(), 'a-1', { description: 'next pass' }, NO_USER_STEP);
+
+    expect(actorWrites()).toEqual([]);
+  });
+
+  it("records no user, never 'system', when a step no user started becomes a person's job's actor", async () => {
+    await update(service(), 'a-1', { description: 'next pass' }, NO_USER_STEP);
+
+    expect(actorWrites()).toEqual([{ actor: null, userSecretsExcluded: false }]);
+  });
+
   it('refuses a step no user started from carrying a token scope judged for a person', async () => {
     pendingJob({ token_scope: { orgfs: { allow_prefixes: ['/finance/**'] } } });
 
