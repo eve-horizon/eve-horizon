@@ -29,6 +29,32 @@ export class ThreadsService {
     return this.toThreadResponse(thread);
   }
 
+  /**
+   * The thread when it belongs to the org (given by id or slug): an org
+   * thread of that org, or a thread of one of its projects. Null otherwise.
+   */
+  async findByIdInOrg(threadId: string, orgIdOrSlug: string): Promise<ThreadResponse | null> {
+    const thread = await this.threads.findById(threadId);
+    if (!thread) return null;
+
+    const [org] = await this.db<{ id: string }[]>`
+      SELECT id FROM orgs WHERE (id = ${orgIdOrSlug} OR slug = ${orgIdOrSlug}) AND deleted_at IS NULL LIMIT 1
+    `;
+    if (!org) return null;
+
+    let threadOrgId: string | null = thread.org_id ?? null;
+    if (!threadOrgId && thread.project_id) {
+      const [project] = await this.db<{ org_id: string }[]>`
+        SELECT org_id FROM projects WHERE id = ${thread.project_id} LIMIT 1
+      `;
+      threadOrgId = project?.org_id ?? null;
+    }
+    if (!threadOrgId || (threadOrgId !== org.id && threadOrgId !== orgIdOrSlug)) {
+      return null;
+    }
+    return this.toThreadResponse(thread);
+  }
+
   async findByProjectAndKey(projectId: string, key: string): Promise<ThreadResponse | null> {
     const thread = await this.threads.findByProjectAndKey(projectId, key);
     if (!thread) return null;

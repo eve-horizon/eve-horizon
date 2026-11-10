@@ -12835,19 +12835,19 @@
         "operationId": "OrgThreadsController_show",
         "parameters": [
           {
-            "name": "thread_id",
+            "name": "org_id",
             "required": true,
             "in": "path",
-            "description": "Thread ID",
+            "description": "Organization ID",
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "org_id",
+            "name": "thread_id",
             "required": true,
             "in": "path",
-            "description": "Organization ID",
+            "description": "Thread ID",
             "schema": {
               "type": "string"
             }
@@ -12881,19 +12881,19 @@
         "operationId": "OrgThreadsController_postMessage",
         "parameters": [
           {
-            "name": "thread_id",
+            "name": "org_id",
             "required": true,
             "in": "path",
-            "description": "Thread ID",
+            "description": "Organization ID",
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "org_id",
+            "name": "thread_id",
             "required": true,
             "in": "path",
-            "description": "Organization ID",
+            "description": "Thread ID",
             "schema": {
               "type": "string"
             }
@@ -12925,6 +12925,15 @@
         "operationId": "OrgThreadsController_listMessages",
         "parameters": [
           {
+            "name": "org_id",
+            "required": true,
+            "in": "path",
+            "description": "Organization ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "thread_id",
             "required": true,
             "in": "path",
@@ -12948,15 +12957,6 @@
             "in": "query",
             "schema": {
               "type": "number"
-            }
-          },
-          {
-            "name": "org_id",
-            "required": true,
-            "in": "path",
-            "description": "Organization ID",
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -35288,7 +35288,8 @@
                                 "media",
                                 "rust",
                                 "java",
-                                "kotlin"
+                                "kotlin",
+                                "browser"
                               ]
                             }
                           }
@@ -35617,7 +35618,8 @@
                           "media",
                           "rust",
                           "java",
-                          "kotlin"
+                          "kotlin",
+                          "browser"
                         ]
                       }
                     }
@@ -36892,7 +36894,8 @@
                                 "media",
                                 "rust",
                                 "java",
-                                "kotlin"
+                                "kotlin",
+                                "browser"
                               ]
                             }
                           }
@@ -37314,7 +37317,8 @@
                           "media",
                           "rust",
                           "java",
-                          "kotlin"
+                          "kotlin",
+                          "browser"
                         ]
                       }
                     }

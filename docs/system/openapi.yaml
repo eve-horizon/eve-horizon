@@ -7404,16 +7404,16 @@ paths:
     get:
       operationId: OrgThreadsController_show
       parameters:
-        - name: thread_id
-          required: true
-          in: path
-          description: Thread ID
-          schema:
-            type: string
         - name: org_id
           required: true
           in: path
           description: Organization ID
+          schema:
+            type: string
+        - name: thread_id
+          required: true
+          in: path
+          description: Thread ID
           schema:
             type: string
       responses:
@@ -7430,16 +7430,16 @@ paths:
     post:
       operationId: OrgThreadsController_postMessage
       parameters:
-        - name: thread_id
-          required: true
-          in: path
-          description: Thread ID
-          schema:
-            type: string
         - name: org_id
           required: true
           in: path
           description: Organization ID
+          schema:
+            type: string
+        - name: thread_id
+          required: true
+          in: path
+          description: Thread ID
           schema:
             type: string
       responses:
@@ -7455,6 +7455,12 @@ paths:
     get:
       operationId: OrgThreadsController_listMessages
       parameters:
+        - name: org_id
+          required: true
+          in: path
+          description: Organization ID
+          schema:
+            type: string
         - name: thread_id
           required: true
           in: path
@@ -7472,12 +7478,6 @@ paths:
           in: query
           schema:
             type: number
-        - name: org_id
-          required: true
-          in: path
-          description: Organization ID
-          schema:
-            type: string
       responses:
         "200":
           description: Thread messages

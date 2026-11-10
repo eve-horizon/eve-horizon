@@ -94,13 +94,10 @@ export class OrgThreadsController {
     schema: zodSchemaToOpenApi(ThreadResponseSchema, 'ThreadResponse'),
   })
   async show(
+    @Param('org_id') orgId: string,
     @Param('thread_id') threadId: string,
   ): Promise<ThreadResponse> {
-    const thread = await this.threads.findById(threadId);
-    if (!thread) {
-      throw new NotFoundException(`Thread ${threadId} not found`);
-    }
-    return thread;
+    return this.requireThreadInOrg(orgId, threadId);
   }
 
   @RequirePermission('threads:write')
@@ -114,9 +111,11 @@ export class OrgThreadsController {
     schema: zodSchemaToOpenApi(ThreadMessageResponseSchema, 'ThreadMessageResponse'),
   })
   async postMessage(
+    @Param('org_id') orgId: string,
     @Param('thread_id') threadId: string,
     @Body(new ZodValidationPipe(CreateThreadMessageRequestSchema)) body: CreateThreadMessageRequest,
   ): Promise<ThreadMessageResponse> {
+    await this.requireThreadInOrg(orgId, threadId);
     return this.threads.createMessage(threadId, body);
   }
 
@@ -132,13 +131,27 @@ export class OrgThreadsController {
     schema: zodSchemaToOpenApi(ThreadMessageListResponseSchema, 'ThreadMessageListResponse'),
   })
   async listMessages(
+    @Param('org_id') orgId: string,
     @Param('thread_id') threadId: string,
     @Query('since') since?: string,
     @Query('limit') limit?: string,
   ): Promise<ThreadMessageListResponse> {
+    await this.requireThreadInOrg(orgId, threadId);
     return this.threads.listMessages(threadId, {
       since: since ? new Date(since) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  /**
+   * The route authorises the path org, so the thread must belong to it (an
+   * org thread of that org or a thread of one of its projects); 404 otherwise.
+   */
+  private async requireThreadInOrg(orgId: string, threadId: string): Promise<ThreadResponse> {
+    const thread = await this.threads.findByIdInOrg(threadId, orgId);
+    if (!thread) {
+      throw new NotFoundException(`Thread ${threadId} not found`);
+    }
+    return thread;
   }
 }
