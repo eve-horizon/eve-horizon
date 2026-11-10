@@ -26,6 +26,7 @@ import type {
   WebhookReplayStatusResponse,
 } from '@eve/shared';
 import { buildApiError } from '../system/api-errors.js';
+import { OutboundUrlError, postToVettedUrl, vetOutboundUrl } from '../common/outbound-url.js';
 
 // ============================================================================
 // Retry schedule: exponential backoff intervals in milliseconds
@@ -41,6 +42,19 @@ const RETRY_DELAYS_MS = [
 
 const MAX_ATTEMPTS = 5;
 const AUTO_DISABLE_THRESHOLD = 10;
+const DELIVERY_TIMEOUT_MS = 30_000;
+const RESPONSE_BODY_LIMIT = 4096;
+
+/**
+ * Development only: let webhooks reach loopback, private and cluster
+ * addresses (for a receiver on the developer's machine). Off by default.
+ */
+const ALLOW_PRIVATE_TARGETS_ENV = 'EVE_WEBHOOKS_ALLOW_PRIVATE_TARGETS';
+
+function allowPrivateTargets(): boolean {
+  const value = (process.env[ALLOW_PRIVATE_TARGETS_ENV] ?? '').trim().toLowerCase();
+  return ['true', '1', 'yes', 'on'].includes(value);
+}
 
 // ============================================================================
 // Service
@@ -67,6 +81,7 @@ export class WebhooksService {
     projectId?: string,
     createdBy?: string,
   ): Promise<WebhookResponse> {
+    await this.assertDeliverableUrl(data.url);
     const sub = await this.queries.createSubscription({
       org_id: orgId,
       project_id: projectId ?? null,
@@ -400,37 +415,41 @@ export class WebhooksService {
         const payloadBody = JSON.stringify(delivery.payload);
         const signature = this.computeHmac(sub.secret, payloadBody);
 
-        const response = await fetch(sub.url, {
-          method: 'POST',
+        // Re-checked on every attempt: DNS may have changed since create.
+        const target = await vetOutboundUrl(sub.url, { allowPrivate: allowPrivateTargets() });
+        const response = await postToVettedUrl(target, {
           headers: {
             'Content-Type': 'application/json',
             'X-Eve-Signature-256': `sha256=${signature}`,
             'X-Eve-Delivery': delivery.id,
           },
           body: payloadBody,
-          signal: AbortSignal.timeout(30_000), // 30s timeout
+          timeoutMs: DELIVERY_TIMEOUT_MS,
+          maxResponseBytes: RESPONSE_BODY_LIMIT,
         });
 
-        const responseBody = await response.text().catch(() => '');
         const newAttempts = delivery.attempts + 1;
 
-        if (response.ok) {
+        // Only 2xx counts. Redirects are not followed, so a 3xx is a failure.
+        if (response.status >= 200 && response.status < 300) {
           await this.queries.updateDelivery(delivery.id, {
             status: 'delivered',
             attempts: newAttempts,
             last_attempt_at: new Date(),
             next_retry_at: null,
             response_status: response.status,
-            response_body: responseBody.slice(0, 4096),
+            response_body: response.body.slice(0, RESPONSE_BODY_LIMIT),
           });
           succeeded++;
         } else {
-          await this.handleFailedAttempt(delivery, sub, newAttempts, response.status, responseBody);
+          await this.handleFailedAttempt(delivery, sub, newAttempts, response.status, response.body);
           failed++;
         }
       } catch (err) {
         const newAttempts = delivery.attempts + 1;
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorMessage = err instanceof OutboundUrlError
+          ? `Webhook URL not allowed: ${err.message}`
+          : err instanceof Error ? err.message : String(err);
         await this.handleFailedAttempt(delivery, sub, newAttempts, null, errorMessage);
         failed++;
       }
@@ -479,6 +498,20 @@ export class WebhooksService {
         `Auto-disabling webhook ${sub.id} after ${consecutiveFailures} consecutive failures`,
       );
       await this.queries.disableSubscription(sub.id);
+    }
+  }
+
+  private async assertDeliverableUrl(url: string): Promise<void> {
+    try {
+      await vetOutboundUrl(url, { allowPrivate: allowPrivateTargets() });
+    } catch (err) {
+      if (err instanceof OutboundUrlError) {
+        throw buildApiError(400, 'webhook_url_not_allowed', `Webhook URL not allowed: ${err.message}`, {
+          hint: 'Webhook URLs must use http or https and reach a public internet address.',
+          details: { url },
+        });
+      }
+      throw err;
     }
   }
 

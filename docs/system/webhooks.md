@@ -1,7 +1,7 @@
 # Webhooks
 
 > Status: Current
-> Last Updated: 2026-02-12
+> Last Updated: 2026-11-10
 > Purpose: Document webhook subscriptions, deliveries, and replay workflows.
 
 ## Overview
@@ -100,12 +100,32 @@ Request body:
 Notes:
 - `events` supports wildcards (e.g., `system.job.*`).
 - `secret` must be 16-256 characters.
+- `url` must use `http` or `https` and reach the public internet. The API
+  resolves the host and answers `400 webhook_url_not_allowed` for loopback,
+  private (RFC 1918), carrier-grade NAT, link-local (including cloud metadata
+  addresses), multicast and reserved addresses, their IPv4-mapped IPv6 forms,
+  IPv6 unique-local and link-local addresses, hosts that do not resolve, and
+  internal names (`localhost`, single-label names, `*.local`, `*.internal`,
+  `*.svc`, `*.home.arpa`).
+
+## Destination Rules
+
+The same check runs again before every delivery attempt, and the request
+connects to the address that was checked, so a later DNS answer cannot move
+it. Redirects are not followed: a `3xx` response is a failed delivery and is
+retried like any other failure. A refused destination is recorded on the
+delivery as `Webhook URL not allowed: ...`.
+
+For local development only, `EVE_WEBHOOKS_ALLOW_PRIVATE_TARGETS=true` on the
+API lets subscriptions and deliveries reach private and loopback receivers.
+It is off by default and must stay off on shared or hosted instances.
 
 ## Delivery + Retry
 
 - Retry schedule: 1m → 5m → 30m → 2h → 12h (max 5 attempts).
 - HTTP timeout: 30s per delivery.
-- Response bodies are truncated to 4096 chars for storage.
+- Only `2xx` responses count as delivered; redirects are not followed.
+- Response bodies are truncated to 4096 bytes for storage.
 - Subscriptions auto-disable after 10 consecutive failures.
 
 ## Signature Verification
@@ -132,4 +152,5 @@ Common error codes:
 
 - `resource_conflict` (replay already running, subscription disabled)
 - `webhook_replay_window_invalid` (invalid window or max_events)
+- `webhook_url_not_allowed` (subscription URL does not reach the public internet)
 - `resource_not_found`
