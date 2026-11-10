@@ -14,3 +14,4 @@ patchesStrategicMerge:
   - worker-registry.patch.yaml
   - worker-tcp-ingress.patch.yaml
   - supabase-auth-autoconfirm.patch.yaml
+  - gateway-simulate.patch.yaml

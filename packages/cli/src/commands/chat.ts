@@ -112,11 +112,15 @@ export async function handleChat(
         }
       }
 
+      // The gateway simulate route is development-only and needs the stack's
+      // internal service token, read from EVE_INTERNAL_API_KEY.
+      const internalKey = process.env.EVE_INTERNAL_API_KEY;
       const response = await requestJson<GatewaySimulateResponse>(
         context,
         '/gateway/providers/simulate',
         {
           method: 'POST',
+          headers: internalKey ? { 'x-eve-internal-token': internalKey } : undefined,
           body: {
             provider,
             account_id: teamId,

@@ -1,5 +1,6 @@
 import { postJson, getJson } from '../api-client.js';
 import { createJsonLogger } from '@eve/shared';
+import { isSimulateEnabled } from '../simulate-mode.js';
 import type { NormalizedInbound, MessageContent, GatewayProvider } from '../providers/gateway-provider.interface.js';
 import {
   parseAgentCommand,
@@ -95,8 +96,8 @@ export class GatewayChatService {
     if (inbound.externalUserId) {
       // Tier 1: Look up Slack user's email for auto-match
       let externalEmail: string | undefined;
-      if (inbound.externalEmail) {
-        externalEmail = inbound.externalEmail;  // Simulate mode: provided directly
+      if (inbound.externalEmail && isSimulateEnabled()) {
+        externalEmail = inbound.externalEmail;  // Simulate mode only: provided directly
       } else if (inbound.provider === 'slack') {
         externalEmail = await this.lookupSlackEmail(inbound.externalUserId, integration.integration_id);
       }

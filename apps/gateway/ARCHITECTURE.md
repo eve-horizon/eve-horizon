@@ -17,8 +17,8 @@ outbound replies back to the channel.
   - `webchat/` — embedded chat SDK backend (`@eve-horizon/chat`)
   - `nostr/` — relay subscriptions
   - `api/` — programmatic ingress (`eve chat simulate`)
-- `src/webhook/webhook.controller.ts` — `POST /gateway/providers/:provider/webhook`, `/simulate`,
-  Slack interactive/slash routes.
+- `src/webhook/webhook.controller.ts` — `POST /gateway/providers/:provider/webhook`, `/simulate`
+  (development only: `EVE_SIMULATE_ENABLED=true` plus the internal token), Slack interactive/slash routes.
 - `src/delivery/delivery.controller.ts` — `POST /internal/deliver` (outbound from API).
 
 ## Key Decisions (Why)

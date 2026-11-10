@@ -54,6 +54,9 @@ export EXAMPLE_REPO=../eve-horizon-fullstack-example
 # Auth token for raw API calls
 TOKEN=$(eve auth token --raw)
 
+# `eve chat simulate` needs the stack's internal service token
+export EVE_INTERNAL_API_KEY=$(kubectl -n eve get secret eve-app -o jsonpath='{.data.EVE_INTERNAL_API_KEY}' | base64 -d)
+
 # Helper for authenticated API calls
 api() { curl -sf -H "Authorization: Bearer $TOKEN" "$@"; }
 api_code() { curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$@"; }
@@ -147,7 +150,9 @@ eve job show $JOB_ID --json | jq '{id, phase, harness}'
 **Failure mode:** If no job is created, check agent sync output -- agents must have
 `gateway.policy: routable` in their YAML config. If route is null, check that the
 integration `team_id` matches the `--team-id` passed to simulate. If the gateway
-returns 404, check that `EVE_SIMULATE_ENABLED=true` is set.
+returns 404, check that `EVE_SIMULATE_ENABLED=true` is set (the local overlay
+sets it; `k8s/base` ships it off). A 401 means `EVE_INTERNAL_API_KEY` is not
+exported or does not match the stack's key.
 
 ---
 

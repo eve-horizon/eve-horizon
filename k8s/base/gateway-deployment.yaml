@@ -35,8 +35,10 @@ spec:
                 configMapKeyRef:
                   name: eve-cluster-config
                   key: EVE_API_URL
+            # POST /gateway/providers/simulate (eve chat simulate) is for
+            # development and tests; the local overlay turns it on.
             - name: EVE_SIMULATE_ENABLED
-              value: "true"
+              value: "false"
           readinessProbe:
             httpGet:
               path: /health

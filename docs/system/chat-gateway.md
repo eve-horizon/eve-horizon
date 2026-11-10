@@ -202,6 +202,14 @@ Use CLI simulation for tests:
 eve chat simulate --project <id> --team-id T123 --channel-id C123 --user-id U123 --text "hello"
 ```
 
+Without `--project`, `eve chat simulate` posts to the gateway's
+`POST /gateway/providers/simulate`. That route is for development stacks: it
+answers only when the gateway runs with `EVE_SIMULATE_ENABLED=true` (the local
+overlay sets it, `k8s/base` ships it off) and the request carries the
+internal service token (`x-eve-internal-token`). The CLI sends the token from
+`EVE_INTERNAL_API_KEY` in your environment. A sender email (`--external-email`)
+is only honoured while simulate is on.
+
 ## Notes
 
 - `@eve agents list` returns the org agent directory (slug -> project).

@@ -1,0 +1,15 @@
+# Local development only: turn on the gateway simulate endpoint used by
+# `eve chat simulate`. Callers still need the internal service token.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eve-gateway
+  namespace: eve
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway
+          env:
+            - name: EVE_SIMULATE_ENABLED
+              value: "true"

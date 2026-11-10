@@ -10,10 +10,11 @@ import {
   Req,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createJsonLogger } from '@eve/shared';
+import { createJsonLogger, INTERNAL_TOKEN_HEADER, internalTokenMatches } from '@eve/shared';
 import { GatewayProviderRegistry } from '../providers/provider-registry.js';
 import { GatewayChatService } from '../chat/gateway-chat.service.js';
 import { postJson, getJson } from '../api-client.js';
+import { isSimulateEnabled } from '../simulate-mode.js';
 import type { WebhookRequest, SimulateRequest, SimulateResponse, NormalizedInbound } from '../providers/gateway-provider.interface.js';
 
 const logger = createJsonLogger('gateway');
@@ -218,16 +219,21 @@ export class WebhookController {
   }
 
   // ---------------------------------------------------------------------------
-  // Simulate endpoint (routes through gateway without real webhook)
+  // Simulate endpoint (routes through gateway without real webhook).
+  // Development and tests only: needs EVE_SIMULATE_ENABLED=true and the
+  // internal service token.
   // ---------------------------------------------------------------------------
 
   @Post('simulate')
   @HttpCode(HttpStatus.OK)
   async handleSimulate(
-    @Req() req: { body: unknown },
+    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown },
   ): Promise<SimulateResponse> {
-    if ((process.env.EVE_SIMULATE_ENABLED ?? '').toLowerCase() !== 'true') {
+    if (!isSimulateEnabled()) {
       throw new NotFoundException('Simulate endpoint disabled');
+    }
+    if (!internalTokenMatches(req.headers?.[INTERNAL_TOKEN_HEADER], process.env.EVE_INTERNAL_API_KEY)) {
+      throw new UnauthorizedException('Missing or invalid internal token');
     }
 
     const body = req.body as SimulateRequest;

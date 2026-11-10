@@ -2452,7 +2452,7 @@ Requires Docker Desktop; k3d and kubectl are auto-managed by the CLI.`,
     usage: 'eve chat <subcommand> [options]',
     subcommands: {
       simulate: {
-        description: 'Simulate an inbound chat message via the gateway',
+        description: 'Simulate an inbound chat message via the gateway (development stacks: needs EVE_SIMULATE_ENABLED=true on the gateway and EVE_INTERNAL_API_KEY in your environment)',
         usage: 'eve chat simulate --team-id <team> --text <message>',
         options: [
           '--team-id <id>         Slack team ID (required)',
