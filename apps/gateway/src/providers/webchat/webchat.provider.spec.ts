@@ -62,7 +62,7 @@ describe('verifyWebChatToken', () => {
       keyPair.privateKey,
     );
 
-    await expect(verifyWebChatToken(token, eveApiUrl)).resolves.toEqual({
+    await expect(verifyWebChatToken(token, eveApiUrl, 'org_123')).resolves.toEqual({
       ok: true,
       claims: { user_id: 'usr_123', org_id: 'org_123' },
     });
@@ -96,7 +96,7 @@ describe('verifyWebChatToken', () => {
       keyPair.privateKey,
     );
 
-    await expect(verifyWebChatToken(token, eveApiUrl)).resolves.toEqual({
+    await expect(verifyWebChatToken(token, eveApiUrl, 'org_123')).resolves.toEqual({
       ok: false,
       closeReason: 'token_expired',
     });
@@ -112,7 +112,7 @@ describe('verifyWebChatToken', () => {
     }));
     const token = `${header}.${payload}.${base64url('fake-signature')}`;
 
-    await expect(verifyWebChatToken(token, eveApiUrl)).resolves.toEqual({
+    await expect(verifyWebChatToken(token, eveApiUrl, 'org_123')).resolves.toEqual({
       ok: false,
       closeReason: 'token_invalid',
     });
@@ -135,7 +135,7 @@ describe('verifyWebChatToken', () => {
       org_id: 'org_999',
     }));
 
-    await expect(verifyWebChatToken(`${header}.${tamperedPayload}.${signature}`, eveApiUrl)).resolves.toEqual({
+    await expect(verifyWebChatToken(`${header}.${tamperedPayload}.${signature}`, eveApiUrl, 'org_123')).resolves.toEqual({
       ok: false,
       closeReason: 'token_invalid',
     });

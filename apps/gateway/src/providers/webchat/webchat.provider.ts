@@ -25,26 +25,30 @@ export type WebChatTokenVerification =
   | { ok: true; claims: { user_id: string; org_id: string } }
   | { ok: false; closeReason: 'token_invalid' | 'token_expired' | 'token_not_yet_valid' };
 
+/**
+ * Verify a webchat connection token for the integration's org. Only a user
+ * token is accepted, and only for `expectedOrgId`: the token's org_id when
+ * it names one, otherwise its org memberships.
+ */
 export async function verifyWebChatToken(
   token: string,
   eveApiUrl: string,
-  expectedOrgId?: string,
+  expectedOrgId: string,
 ): Promise<WebChatTokenVerification> {
   try {
     const claims: EveTokenClaims = await verifyEveToken(token, eveApiUrl);
-    const orgId =
-      claims.org_id ??
-      (expectedOrgId && claims.orgs?.some((org: { id: string }) => org.id === expectedOrgId) ? expectedOrgId : undefined) ??
-      (claims.orgs?.length === 1 ? claims.orgs[0]?.id : undefined);
+    const inOrg = claims.org_id
+      ? claims.org_id === expectedOrgId
+      : Boolean(claims.orgs?.some((org: { id: string }) => org.id === expectedOrgId));
 
-    if (!claims.user_id || !orgId) {
+    if (!expectedOrgId || claims.type !== 'user' || !claims.user_id || !inOrg) {
       return { ok: false, closeReason: 'token_invalid' };
     }
     return {
       ok: true,
       claims: {
         user_id: claims.user_id,
-        org_id: orgId,
+        org_id: expectedOrgId,
       },
     };
   } catch (err) {

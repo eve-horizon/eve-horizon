@@ -192,6 +192,7 @@ taken) is logged as `webchat.listen_failed` and does not stop the gateway.
 
 **Features:**
 - JWT auth in WebSocket handshake using Eve JWKS verification (`RS256`, `exp`, `nbf`, `kid`); the keys always come from the gateway's own `EVE_API_URL` (an `eve_api_url` integration setting is ignored)
+- Only Eve user tokens for the integration's own org are accepted (the token's `org_id` when it names one, otherwise its org memberships); job, service and service-principal tokens are refused
 - Heartbeat ping/pong (30s interval)
 - Thread continuity across reconnections
 - Multi-tab support (same user, multiple connections)
