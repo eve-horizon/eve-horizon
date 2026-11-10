@@ -8,7 +8,13 @@ import {
   type Event,
   type TriggerEvaluationEntry,
 } from '@eve/db';
-import { generateAppLinkEventDeliveryId, generateEventId, loadConfig } from '@eve/shared';
+import {
+  apiPath,
+  generateAppLinkEventDeliveryId,
+  generateEventId,
+  isPlainApiPath,
+  loadConfig,
+} from '@eve/shared';
 import { TriggerMatcherService, type TriggerMatch } from './trigger-matcher.service';
 
 /**
@@ -379,7 +385,8 @@ export class EventRouterService implements OnModuleInit {
       );
 
       const result = await this.callInternalApi(
-        `/internal/projects/${match.projectId}/pipelines/${match.name}/runs`,
+        // Pipeline names are manifest keys: each value is one encoded path segment.
+        apiPath`/internal/projects/${match.projectId}/pipelines/${match.name}/runs`,
         {
           git_sha: event.ref_sha,
           env_name: envName,
@@ -396,7 +403,8 @@ export class EventRouterService implements OnModuleInit {
     if (match.type === 'workflow') {
       this.logger.log(`Invoking workflow: ${match.name}`);
       const result = await this.callInternalApi(
-        `/internal/projects/${match.projectId}/workflows/${match.name}/invoke`,
+        // Workflow names are manifest keys: each value is one encoded path segment.
+        apiPath`/internal/projects/${match.projectId}/workflows/${match.name}/invoke`,
         {
           input: inputs,
         },
@@ -520,6 +528,11 @@ export class EventRouterService implements OnModuleInit {
     path: string,
     body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    // The internal key goes only to the route the caller named.
+    if (!isPlainApiPath(path)) {
+      throw new Error(`Internal API request refused: not a plain API path (${JSON.stringify(path)})`);
+    }
+
     const token = this.config.EVE_INTERNAL_API_KEY;
     if (!token) {
       throw new Error(

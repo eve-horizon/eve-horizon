@@ -36,6 +36,7 @@ import {
   type AccessBindingScope,
   readPositiveTimeoutSeconds,
   parseWorkerUrlMapping,
+  apiPath,
 } from '@eve/shared';
 import {
   accessRoleQueries,
@@ -2495,7 +2496,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const url = `${this.config.EVE_API_URL}/internal/projects/${job.project_id}/chat/deliver`;
+      const url = `${this.config.EVE_API_URL}${apiPath`/internal/projects/${job.project_id}/chat/deliver`}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -3011,7 +3012,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const url = `${this.config.EVE_API_URL}/internal/projects/${projectId}/secrets/resolve`;
+      const url = `${this.config.EVE_API_URL}${apiPath`/internal/projects/${projectId}/secrets/resolve`}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: {

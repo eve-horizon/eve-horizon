@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import {
+  apiPath,
   ensureCorrelationId,
   getCorrelationContext,
   getCorrelationHeaders,
@@ -46,7 +47,7 @@ async function pollForCompletion(
   // Narrow to this attempt to avoid losing completion events in high-volume projects.
   const since = new Date(startTime - 60_000).toISOString();
   const url =
-    `${config.EVE_API_URL}/internal/projects/${projectId}/events` +
+    `${config.EVE_API_URL}${apiPath`/internal/projects/${projectId}/events`}` +
     `?type=runner.completed,runner.failed` +
     `&attempt_id=${encodeURIComponent(attemptId)}` +
     `&since=${encodeURIComponent(since)}` +
@@ -112,7 +113,7 @@ async function pollForCompletion(
     if (Date.now() - startTime >= nextJobStatusCheckMs) {
       nextJobStatusCheckMs += jobStatusCheckIntervalMs;
       try {
-        const jobUrl = `${config.EVE_API_URL}/jobs/${jobId}`;
+        const jobUrl = `${config.EVE_API_URL}${apiPath`/jobs/${jobId}`}`;
         const jobResponse = await fetch(jobUrl, {
           headers: {
             'x-eve-internal-token': config.EVE_INTERNAL_API_KEY!,

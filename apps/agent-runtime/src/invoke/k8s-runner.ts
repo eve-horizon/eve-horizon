@@ -1,4 +1,4 @@
-import { internalAuthHeaders } from '@eve/shared';
+import { apiPath, internalAuthHeaders } from '@eve/shared';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
@@ -43,7 +43,7 @@ async function pollForCompletion(
 
   // Use `since` to avoid fetching stale events from previous runs
   const since = new Date(startTime - 60_000).toISOString(); // 1 minute buffer
-  const url = `${config.EVE_API_URL}/internal/projects/${projectId}/events?type=runner.completed,runner.failed&since=${encodeURIComponent(since)}&limit=50`;
+  const url = `${config.EVE_API_URL}${apiPath`/internal/projects/${projectId}/events`}?type=runner.completed,runner.failed&since=${encodeURIComponent(since)}&limit=50`;
   console.log(`[k8s-poll] Starting poll for attemptId=${attemptId} projectId=${projectId}`);
   console.log(`[k8s-poll] URL: ${url}`);
   console.log(`[k8s-poll] Has internal API key: ${!!config.EVE_INTERNAL_API_KEY}`);

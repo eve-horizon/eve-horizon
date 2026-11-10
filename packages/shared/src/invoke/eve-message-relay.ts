@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'crypto';
 import { loadConfig } from '../config/schema.js';
+import { apiPath } from '../api-client/internal-fetch.js';
 import type { ChatDeliveryContext, RelayDb } from './types.js';
 
 /**
@@ -222,7 +223,7 @@ export class EveMessageRelay {
       const apiUrl = config.EVE_API_URL ?? process.env.EVE_API_URL;
       if (!apiUrl) return;
 
-      const url = `${apiUrl}/internal/projects/${this.chatContext!.projectId}/chat/deliver`;
+      const url = `${apiUrl}${apiPath`/internal/projects/${this.chatContext!.projectId}/chat/deliver`}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: {

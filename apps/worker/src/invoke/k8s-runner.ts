@@ -1,4 +1,4 @@
-import { internalAuthHeaders } from '@eve/shared';
+import { apiPath, internalAuthHeaders } from '@eve/shared';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
@@ -59,7 +59,7 @@ async function pollForCompletion(
   // Use `since` to avoid fetching stale events from previous runs
   const since = new Date(startTime - 60_000).toISOString(); // 1 minute buffer
   const url =
-    `${config.EVE_API_URL}/internal/projects/${projectId}/events` +
+    `${config.EVE_API_URL}${apiPath`/internal/projects/${projectId}/events`}` +
     `?type=runner.completed,runner.failed` +
     `&attempt_id=${encodeURIComponent(attemptId)}` +
     `&since=${encodeURIComponent(since)}` +

@@ -4,6 +4,7 @@ import {
   SecretResolveResponseSchema,
   type SecretResolveItem,
 } from '../index.js';
+import { apiPath } from './internal-fetch.js';
 
 /**
  * Update an existing secret via the internal write-back API.
@@ -22,7 +23,7 @@ export async function updateSecret(
     throw new Error(`Cannot update secret: EVE_API_URL or EVE_INTERNAL_API_KEY not configured`);
   }
 
-  const url = `${config.EVE_API_URL}/internal/secrets/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeId)}/${encodeURIComponent(key)}`;
+  const url = `${config.EVE_API_URL}${apiPath`/internal/secrets/${scopeType}/${scopeId}/${key}`}`;
   const response = await fetch(url, {
     method: 'PATCH',
     headers: {
@@ -69,7 +70,7 @@ export async function resolveProjectSecrets(
   }
 
   try {
-    const url = `${config.EVE_API_URL}/internal/projects/${projectId}/secrets/resolve`;
+    const url = `${config.EVE_API_URL}${apiPath`/internal/projects/${projectId}/secrets/resolve`}`;
     console.log(`[secrets] Resolving secrets for project ${projectId} via ${config.EVE_API_URL}`);
     const body: Record<string, string> = { project_id: projectId };
     if (options?.userId) {

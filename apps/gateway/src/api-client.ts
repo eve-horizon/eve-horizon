@@ -1,31 +1,6 @@
-import { internalApiFetch } from '@eve/shared';
+import { internalApiFetch, isPlainApiPath } from '@eve/shared';
 
 type JsonValue = Record<string, unknown> | unknown[];
-
-/** Percent-encoded dot, slash or backslash. */
-const ENCODED_PATH_CHARACTER = /%(2e|2f|5c)/i;
-
-/**
- * True for a plain absolute API path: it starts with a single `/`, carries
- * no query or fragment, no encoded dot, slash or backslash, and the URL
- * parser reads it back as exactly the same path (so no dot segments,
- * backslashes or characters that would need encoding).
- */
-export function isPlainApiPath(path: string): boolean {
-  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
-    return false;
-  }
-  if (ENCODED_PATH_CHARACTER.test(path)) {
-    return false;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(path, 'http://api.invalid');
-  } catch {
-    return false;
-  }
-  return parsed.pathname === path && parsed.search === '' && parsed.hash === '';
-}
 
 async function requestJson<TResponse>(
   path: string,

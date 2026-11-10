@@ -12,8 +12,10 @@ export { mintAppLinkToken, mintJobToken, mintServiceToken } from './auth-client.
 export type { AppLinkTokenResult, JobTokenResult, ServiceTokenResult } from './auth-client.js';
 
 export {
+  apiPath,
   internalApiFetch,
   internalAuthHeaders,
+  isPlainApiPath,
   internalTokenMatches,
   INTERNAL_TOKEN_HEADER,
 } from './internal-fetch.js';

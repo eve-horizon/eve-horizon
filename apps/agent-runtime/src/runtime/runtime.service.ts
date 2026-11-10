@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createHash } from 'crypto';
-import { loadConfig } from '@eve/shared';
+import { apiPath, loadConfig } from '@eve/shared';
 import type { Db } from '@eve/db';
 import { agentPlacementQueries, agentRuntimePodQueries } from '@eve/db';
 
@@ -185,7 +185,7 @@ export class RuntimeService implements OnModuleInit, OnModuleDestroy {
       await Promise.all(
         orgIds.map(async (orgId) => {
           try {
-            const response = await fetch(`${config.EVE_API_URL}/internal/orgs/${orgId}/agent-runtime/heartbeat`, {
+            const response = await fetch(`${config.EVE_API_URL}${apiPath`/internal/orgs/${orgId}/agent-runtime/heartbeat`}`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',

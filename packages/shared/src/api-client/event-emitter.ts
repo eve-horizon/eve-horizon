@@ -3,6 +3,7 @@ import {
   getCorrelationHeaders,
   type HarnessResult,
 } from '../index.js';
+import { apiPath } from './internal-fetch.js';
 
 export type RunnerEmitterEventType =
   | 'runner.started'
@@ -61,7 +62,7 @@ export async function emitRunnerEvent(
     };
 
     // Make the API request
-    const url = `${config.EVE_API_URL}/internal/projects/${projectId}/events`;
+    const url = `${config.EVE_API_URL}${apiPath`/internal/projects/${projectId}/events`}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
