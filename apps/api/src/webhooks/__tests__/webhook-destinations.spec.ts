@@ -24,12 +24,14 @@ const net = vi.hoisted(() => ({
 }));
 
 function resolveName(host: string): Array<{ address: string; family: number }> {
-  const answers = net.dns.get(host.toLowerCase());
+  // Absolute names (trailing dot) resolve like the plain spelling here.
+  const name = host.toLowerCase().replace(/\.$/, '');
+  const answers = net.dns.get(name);
   if (!answers) {
     throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' });
   }
-  const call = net.dnsCalls.get(host) ?? 0;
-  net.dnsCalls.set(host, call + 1);
+  const call = net.dnsCalls.get(name) ?? 0;
+  net.dnsCalls.set(name, call + 1);
   const addresses = answers[Math.min(call, answers.length - 1)];
   return addresses.map((address) => ({ address, family: isIP(address) }));
 }

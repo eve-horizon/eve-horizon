@@ -24,7 +24,8 @@ const net = vi.hoisted(() => ({
 }));
 
 function resolveName(host: string): Array<{ address: string; family: number }> {
-  const answers = net.dns.get(host.toLowerCase());
+  // Absolute names (trailing dot) resolve like the plain spelling here.
+  const answers = net.dns.get(host.toLowerCase().replace(/\.$/, ''));
   if (!answers) {
     throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' });
   }

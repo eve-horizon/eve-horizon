@@ -57,12 +57,41 @@ for (const [network, prefix] of [
 
 const INTERNAL_NAME_SUFFIXES = ['.localhost', '.local', '.internal', '.svc', '.home.arpa'];
 
+/**
+ * Extra ranges an operator marks as private, such as a cluster service range
+ * that is not RFC 1918 (GKE's default is 34.118.224.0/20). Comma-separated
+ * CIDRs; empty by default. An entry that cannot be read refuses every URL.
+ */
+const CLUSTER_PRIVATE_CIDRS_ENV = 'EVE_CLUSTER_PRIVATE_CIDRS';
+
+let operatorRanges: { source: string; v4: BlockList; v6: BlockList } | null = null;
+
+function operatorPrivateRanges(): { v4: BlockList; v6: BlockList } {
+  const source = process.env[CLUSTER_PRIVATE_CIDRS_ENV] ?? '';
+  if (operatorRanges?.source === source) {
+    return operatorRanges;
+  }
+  const v4 = new BlockList();
+  const v6 = new BlockList();
+  for (const entry of source.split(',').map((part) => part.trim()).filter(Boolean)) {
+    const match = /^([^/]+)\/(\d{1,3})$/.exec(entry);
+    const family = match ? isIP(match[1]) : 0;
+    const prefix = match ? Number(match[2]) : NaN;
+    if (!match || !family || prefix > (family === 4 ? 32 : 128)) {
+      throw new OutboundUrlError(`${CLUSTER_PRIVATE_CIDRS_ENV} has an entry that is not a CIDR range: ${entry}`);
+    }
+    (family === 4 ? v4 : v6).addSubnet(match[1], prefix, family === 4 ? 'ipv4' : 'ipv6');
+  }
+  operatorRanges = { source, v4, v6 };
+  return operatorRanges;
+}
+
 /** True only for a globally routable unicast address. */
 export function isPublicAddress(address: string): boolean {
   const value = address.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1');
   const family = isIP(value);
   if (family === 4) {
-    return !NON_PUBLIC_V4.check(value, 'ipv4');
+    return !NON_PUBLIC_V4.check(value, 'ipv4') && !operatorPrivateRanges().v4.check(value, 'ipv4');
   }
   if (family !== 6) {
     return false;
@@ -75,7 +104,7 @@ export function isPublicAddress(address: string): boolean {
     const low = parseInt(mapped[2], 16);
     return isPublicAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
   }
-  return !NON_PUBLIC_V6.check(canonical, 'ipv6');
+  return !NON_PUBLIC_V6.check(canonical, 'ipv6') && !operatorPrivateRanges().v6.check(canonical, 'ipv6');
 }
 
 /** Names that only mean something inside a host, cluster or private network. */
@@ -120,9 +149,13 @@ export async function vetOutboundUrl(
     throw new OutboundUrlError(`${host} is not a public host name`);
   }
 
+  // Resolve as an absolute name (trailing dot) so the pod's DNS search path
+  // cannot expand a short name into a cluster service. The development
+  // setting keeps plain lookups, so names like localhost still resolve.
+  const lookupName = options.allowPrivate || host.endsWith('.') ? host : `${host}.`;
   let answers: Array<{ address: string; family: number }>;
   try {
-    answers = await lookup(host, { all: true });
+    answers = await lookup(lookupName, { all: true });
   } catch {
     throw new OutboundUrlError(`${host} does not resolve`);
   }
