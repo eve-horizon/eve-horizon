@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     findById: vi.fn(),
     findByOrgAndName: vi.fn(),
     findByOrgAndSlug: vi.fn(),
+    listByOrgAndSlugIgnoringCase: vi.fn(async () => []),
     create: vi.fn(),
     update: vi.fn(),
   },

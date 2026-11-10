@@ -68,6 +68,19 @@ export function projectQueries(db: Db) {
       return row ?? null;
     },
 
+    /**
+     * Every project in the org (deleted ones included) whose slug equals
+     * `slug` ignoring case. Kubernetes names are lower-cased, so such
+     * projects share namespaces.
+     */
+    async listByOrgAndSlugIgnoringCase(orgId: string, slug: string): Promise<Project[]> {
+      return db<Project[]>`
+        SELECT * FROM projects
+        WHERE org_id = ${orgId} AND lower(slug) = lower(${slug})
+        ORDER BY created_at ASC
+      `;
+    },
+
     async findFirstByOrg(
       orgId: string,
     ): Promise<Project | null> {

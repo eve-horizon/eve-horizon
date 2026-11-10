@@ -796,6 +796,16 @@ export class EnvironmentsService {
       }
       // The namespace the worker deploys this environment into.
       const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
+      // A project whose slug differs only in case shares that namespace, so
+      // in-cluster URLs there are ambiguous: allow only public spec URLs.
+      const sameNamespace = await this.projects.listByOrgAndSlugIgnoringCase(project.org_id, project.slug);
+      const namespaceShared = sameNamespace.some((other) => other.id !== project.id);
+      if (namespaceShared) {
+        this.logger.warn(
+          `Project ${projectId} shares its namespaces with another project of the org (slug differs only in case); ` +
+          'registering only public API spec URLs',
+        );
+      }
 
       const repoPath = this.extractLocalRepoPath(project.repo_url);
 
@@ -807,7 +817,7 @@ export class EnvironmentsService {
           namespace,
           serviceName,
           service,
-          isServiceDeployedInCluster(serviceName, service, manifest, envName),
+          !namespaceShared && isServiceDeployedInCluster(serviceName, service, manifest, envName),
           repoPath,
         );
       }

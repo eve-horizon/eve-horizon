@@ -175,6 +175,10 @@ export class ProjectApisService {
     if (!envName) return null;
     const project = await this.projects.findById(projectId, { include_deleted: true });
     if (!project) return null;
+    // Another project whose slug differs only in case maps to the same
+    // namespace, so an in-cluster URL there could be either project's.
+    const sameNamespace = await this.projects.listByOrgAndSlugIgnoringCase(project.org_id, project.slug);
+    if (sameNamespace.some((other) => other.id !== project.id)) return null;
     const org = await this.orgs.findById(project.org_id, { include_deleted: true });
     if (!org) return null;
     const environment = await this.environments.findByProjectAndName(projectId, envName);

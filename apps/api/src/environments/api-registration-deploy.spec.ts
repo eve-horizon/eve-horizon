@@ -128,7 +128,7 @@ vi.mock('node:https', async (importOriginal) => {
 const db = vi.hoisted(() => ({
   apiSources: { upsert: vi.fn(), updateCachedSchema: vi.fn() },
   manifests: { findByProjectAndHash: vi.fn() },
-  projects: { findById: vi.fn() },
+  projects: { findById: vi.fn(), listByOrgAndSlugIgnoringCase: vi.fn(async () => []) },
   orgs: { findById: vi.fn() },
   environments: { findByProjectAndName: vi.fn() },
 }));

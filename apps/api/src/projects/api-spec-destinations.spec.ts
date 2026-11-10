@@ -136,7 +136,7 @@ const db = vi.hoisted(() => ({
     updateCachedSchema: vi.fn(),
     list: vi.fn(),
   },
-  projects: { findById: vi.fn() },
+  projects: { findById: vi.fn(), listByOrgAndSlugIgnoringCase: vi.fn(async () => []) },
   orgs: { findById: vi.fn() },
   manifests: { findLatestByProject: vi.fn() },
   environments: { list: vi.fn(), findByProjectAndName: vi.fn() },

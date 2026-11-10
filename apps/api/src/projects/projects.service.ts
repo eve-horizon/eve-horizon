@@ -165,6 +165,8 @@ export class ProjectsService {
       );
     }
 
+    await this.assertSlugFreeIgnoringCase(data.org_id, slug);
+
     const id = generateProjectId();
     const project = await this.projects.create({
       id,
@@ -259,6 +261,8 @@ export class ProjectsService {
       // Slug matches and attributes match - return existing project
       return this.toResponse(existingBySlug);
     }
+
+    await this.assertSlugFreeIgnoringCase(data.org_id, slug);
 
     // Validate org exists before creating
     const org = await this.orgs.findById(data.org_id);
@@ -387,6 +391,21 @@ export class ProjectsService {
     const project = await this.projects.findById(id, { include_deleted: includeDeleted });
     if (!project) return null;
     return this.toResponse(project);
+  }
+
+  /**
+   * Kubernetes names are lower-cased, so two projects whose slugs differ only
+   * in case would share every environment namespace. Refuse the new one.
+   */
+  private async assertSlugFreeIgnoringCase(orgId: string, slug: string): Promise<void> {
+    const matches = await this.projects.listByOrgAndSlugIgnoringCase(orgId, slug);
+    const other = matches.find((existing) => existing.slug !== slug);
+    if (other) {
+      throw new ConflictException(
+        `Slug "${slug}" differs only in case from project "${other.name}" (slug "${other.slug}") in this org. ` +
+        'Slugs must be unique ignoring case; choose another slug.',
+      );
+    }
   }
 
   async update(id: string, updates: UpdateProjectRequest): Promise<ProjectResponse> {

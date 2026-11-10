@@ -68,6 +68,9 @@ proj_01abc...
 ```
 
 - Projects also have a `slug` (4-8 chars, e.g., `MyProj`) used for job IDs.
+  Slugs are unique within an org ignoring case (`MyProj` and `myproj` cannot
+  both exist), because Kubernetes namespaces are built from the lower-cased
+  slug; creating a case variant of an existing slug answers `409`.
 
 ### Job ID
 
