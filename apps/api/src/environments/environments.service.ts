@@ -26,6 +26,7 @@ import {
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { ApiRegistrationService } from './api-registration.service.js';
+import { componentInClusterBaseUrl, isServiceDeployedInCluster } from '../common/api-spec-fetch.js';
 import { fileURLToPath } from 'node:url';
 import { PipelineRunsService } from '../pipelines/pipeline-runs.service.js';
 import { EnvDiagnosticsService } from './env-diagnostics.service.js';
@@ -781,17 +782,25 @@ export class EnvironmentsService {
         return;
       }
 
+      const environment = await this.environments.findByProjectAndName(projectId, envName);
+      if (!environment) {
+        this.logger.warn(`Environment ${envName} not found, skipping API registration`);
+        return;
+      }
+      // The namespace the worker deploys this environment into.
+      const namespace = deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
+
       const repoPath = this.extractLocalRepoPath(project.repo_url);
 
       // Register API specs for each service
       for (const [serviceName, service] of Object.entries(services)) {
         await this.registerComponentApiSpecs(
-          org.slug,
-          project.slug,
           projectId,
           envName,
+          namespace,
           serviceName,
           service,
+          isServiceDeployedInCluster(serviceName, service, manifest, envName),
           repoPath,
         );
       }
@@ -804,12 +813,12 @@ export class EnvironmentsService {
   }
 
   private async registerComponentApiSpecs(
-    orgSlug: string,
-    projectSlug: string,
     projectId: string,
     envName: string,
+    namespace: string,
     componentName: string,
     component: Service,
+    deployed: boolean,
     repoPath: string | undefined,
   ): Promise<void> {
     const xeve = this.resolveXeve(component);
@@ -818,8 +827,6 @@ export class EnvironmentsService {
     if (apiSpecs.length === 0) {
       return;
     }
-
-    const namespace = deriveNamespace(orgSlug, projectSlug, envName);
 
     for (const apiSpec of apiSpecs) {
       // Only register if on_deploy is true (default)
@@ -844,7 +851,7 @@ export class EnvironmentsService {
           envName,
           componentName,
           apiSpec,
-          deployedBaseUrl,
+          { baseUrl: deployedBaseUrl, namespace, deployed },
           repoPath,
         );
 
@@ -911,9 +918,13 @@ export class EnvironmentsService {
     namespace: string;
     port?: number;
   }): string {
-    const portSuffix = params.port ? `:${params.port}` : '';
-
-    const deployedBaseUrl = `http://${params.envName}-${params.componentName}.${params.namespace}.svc.cluster.local${portSuffix}`;
+    // Built from sanitised names only, the way the worker names the Service.
+    const deployedBaseUrl = componentInClusterBaseUrl({
+      envName: params.envName,
+      serviceName: params.componentName,
+      namespace: params.namespace,
+      port: params.port,
+    });
     this.logger.debug(
       `Using internal URL for API source ${params.componentName}: ${deployedBaseUrl}`
     );

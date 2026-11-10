@@ -1,5 +1,4 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
-import { deriveNamespace } from '@eve/shared';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '@eve/db';
@@ -7,9 +6,14 @@ import { projectApiSourceQueries } from '@eve/db';
 import { type ApiSpec, getDefaultSpecUrl } from '@eve/shared';
 import { fetchApiSpec } from '../common/api-spec-fetch.js';
 
-interface ResolvedBaseUrls {
-  internal_base_url: string;
-  external_base_url: string;
+/** Where a component lives, as the deploy resolved it. */
+export interface ComponentApiLocation {
+  /** The component's in-cluster URL, built by componentInClusterBaseUrl. */
+  baseUrl: string;
+  /** The environment's namespace (the one the worker deploys into). */
+  namespace: string;
+  /** False for services the worker does not deploy (external, job, managed_db, ...). */
+  deployed: boolean;
 }
 
 @Injectable()
@@ -22,14 +26,16 @@ export class ApiRegistrationService {
   }
 
   /**
-   * Register a component's API during deployment
+   * Register a component's API during deployment. A relative spec_url is
+   * resolved against the component's in-cluster URL and is only fetched for
+   * services the worker deploys; any other spec URL must be public.
    */
   async registerComponentApi(
     projectId: string,
     envName: string,
     componentName: string,
     apiSpec: ApiSpec,
-    deployedBaseUrl: string,
+    location: ComponentApiLocation,
     repoPath?: string,
   ): Promise<void> {
     this.logger.log(
@@ -38,8 +44,21 @@ export class ApiRegistrationService {
 
     // Resolve spec URL
     const specUrl = apiSpec.spec_url ?? getDefaultSpecUrl(apiSpec.type);
+    const deployedBaseUrl = location.baseUrl;
+    const absolute = /^[a-z][a-z0-9+.-]*:/i.test(specUrl);
+    if (!apiSpec.spec_path && !location.deployed && !absolute) {
+      throw new BadRequestException(
+        `Service "${componentName}" is not deployed by Eve (external, job, managed_db or connection_url), ` +
+        'so its spec_url must be an absolute public URL.',
+      );
+    }
     const normalizedBase = deployedBaseUrl.endsWith('/') ? deployedBaseUrl : `${deployedBaseUrl}/`;
-    const fullSpecUrl = new URL(specUrl, normalizedBase).toString();
+    let fullSpecUrl: string;
+    try {
+      fullSpecUrl = new URL(specUrl, normalizedBase).toString();
+    } catch {
+      throw new BadRequestException(`API spec URL not allowed (${specUrl}): the URL is not valid`);
+    }
 
     // Fetch the spec
     let spec: string;
@@ -47,7 +66,11 @@ export class ApiRegistrationService {
       if (apiSpec.spec_path) {
         spec = await this.readSpecFromPath(componentName, apiSpec.spec_path, repoPath);
       } else {
-        spec = await this.fetchSpec(fullSpecUrl, apiSpec.type, deployedBaseUrl);
+        spec = await this.fetchSpec(
+          fullSpecUrl,
+          apiSpec.type,
+          location.deployed ? { baseUrl: deployedBaseUrl, namespace: location.namespace } : null,
+        );
       }
     } catch (error) {
       this.logger.error(
@@ -122,43 +145,27 @@ export class ApiRegistrationService {
   }
 
   /**
-   * Resolve internal and external base URLs for a component
-   */
-  resolveBaseUrls(
-    orgSlug: string,
-    projectSlug: string,
-    envName: string,
-    componentName: string,
-    domain: string,
-    port?: number,
-  ): ResolvedBaseUrls {
-    const portSuffix = port ? `:${port}` : '';
-
-    return {
-      internal_base_url: `http://${envName}-${componentName}.${deriveNamespace(orgSlug, projectSlug, envName)}.svc.cluster.local${portSuffix}`,
-      external_base_url: `http://${componentName}.${orgSlug}-${projectSlug}-${envName}.${domain}`,
-    };
-  }
-
-  /**
    * Fetch an API spec from the component's own in-cluster URL
    * (`componentBaseUrl`) or a public URL; see fetchApiSpec.
    */
   async fetchSpec(
     url: string,
     type: ApiSpec['type'],
-    componentBaseUrl: string,
+    inCluster: { baseUrl: string; namespace: string } | null,
   ): Promise<string> {
     this.logger.debug(`Fetching ${type} spec from ${url}`);
 
     try {
       if (type === 'graphql') {
         // For GraphQL, use introspection query
-        return await this.fetchGraphQLIntrospection(url, componentBaseUrl);
+        return await this.fetchGraphQLIntrospection(url, inCluster);
       }
 
       // For OpenAPI and PostgREST, fetch directly
-      return await fetchApiSpec(url, { componentBaseUrl });
+      return await fetchApiSpec(url, {
+        componentBaseUrl: inCluster?.baseUrl ?? null,
+        namespace: inCluster?.namespace ?? null,
+      });
     } catch (error) {
       this.logger.error(
         `Failed to fetch spec from ${url}: ${error instanceof Error ? error.message : String(error)}`,
@@ -170,7 +177,10 @@ export class ApiRegistrationService {
   /**
    * Fetch GraphQL schema using introspection query
    */
-  private async fetchGraphQLIntrospection(url: string, componentBaseUrl: string): Promise<string> {
+  private async fetchGraphQLIntrospection(
+    url: string,
+    inCluster: { baseUrl: string; namespace: string } | null,
+  ): Promise<string> {
     // GraphQL introspection query
     const introspectionQuery = {
       query: `
@@ -269,7 +279,8 @@ export class ApiRegistrationService {
     };
 
     return fetchApiSpec(url, {
-      componentBaseUrl,
+      componentBaseUrl: inCluster?.baseUrl ?? null,
+      namespace: inCluster?.namespace ?? null,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(introspectionQuery),

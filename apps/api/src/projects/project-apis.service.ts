@@ -4,13 +4,16 @@ import type { Db } from '@eve/db';
 import { environmentQueries, orgQueries, projectApiSourceQueries, projectManifestQueries, projectQueries, type ProjectApiSource } from '@eve/db';
 import { type ApiSource, type ApiSourceType, type ApiSpec, type Service, getDefaultSpecUrl, getServicesFromManifest } from '@eve/shared';
 import * as yaml from 'yaml';
-import { fetchApiSpec } from '../common/api-spec-fetch.js';
+import { componentInClusterBaseUrl, fetchApiSpec, isServiceDeployedInCluster } from '../common/api-spec-fetch.js';
 
 type ResolvedApiSource = {
   dbSource: ProjectApiSource | null;
   apiSource: ApiSource;
   specUrl: string;
-  /** The environment namespace the source's in-cluster base URL must be in. */
+  /**
+   * The environment namespace the source's in-cluster base URL must be in;
+   * null when the source may only be fetched from a public URL.
+   */
   namespace: string | null;
 };
 
@@ -153,35 +156,42 @@ export class ProjectApisService {
       return null;
     }
 
-    const fallback = await this.listFromManifestFallback(projectId, envName);
-    const source = fallback.find((entry) => entry.name === name);
-    if (!source) {
+    const fallback = await this.manifestFallbackSources(projectId, envName);
+    const entry = fallback.find((candidate) => candidate.source.name === name);
+    if (!entry) {
       return null;
     }
 
     return {
       dbSource: null,
-      apiSource: source,
-      specUrl: this.resolveSpecUrlFromApiSource(source),
-      namespace: await this.environmentNamespace(projectId, envName),
+      apiSource: entry.source,
+      specUrl: this.resolveSpecUrlFromApiSource(entry.source),
+      namespace: entry.deployed ? await this.environmentNamespace(projectId, envName) : null,
     };
   }
 
-  /** The namespace Eve derives for the environment, as its base URLs use. */
+  /** The namespace the worker deploys the environment into (a chosen one included). */
   private async environmentNamespace(projectId: string, envName: string | null): Promise<string | null> {
     if (!envName) return null;
     const project = await this.projects.findById(projectId, { include_deleted: true });
     if (!project) return null;
     const org = await this.orgs.findById(project.org_id, { include_deleted: true });
     if (!org) return null;
-    return deriveNamespace(org.slug, project.slug, envName);
+    const environment = await this.environments.findByProjectAndName(projectId, envName);
+    if (!environment) return null;
+    return deriveNamespace(org.slug, project.slug, environment.name, environment.namespace);
   }
 
   private async listFromManifestFallback(projectId: string, envName: string): Promise<ApiSource[]> {
-    const project = await this.projects.findById(projectId, { include_deleted: true });
-    if (!project) return [];
-    const org = await this.orgs.findById(project.org_id, { include_deleted: true });
-    if (!org) return [];
+    return (await this.manifestFallbackSources(projectId, envName)).map((entry) => entry.source);
+  }
+
+  private async manifestFallbackSources(
+    projectId: string,
+    envName: string,
+  ): Promise<Array<{ source: ApiSource; deployed: boolean }>> {
+    const namespace = await this.environmentNamespace(projectId, envName);
+    if (!namespace) return [];
 
     const manifestRecord = await this.manifests.findLatestByProject(projectId);
     if (!manifestRecord) return [];
@@ -191,18 +201,29 @@ export class ProjectApisService {
     if (!services) return [];
 
     const now = new Date().toISOString();
-    const fallbackSources: ApiSource[] = [];
+    const fallbackSources: Array<{ source: ApiSource; deployed: boolean }> = [];
 
     for (const [componentName, service] of Object.entries(services)) {
       const xeve = this.resolveXeve(service);
       const specs = this.resolveApiSpecs(xeve);
       if (specs.length === 0) continue;
 
-      const baseUrl = this.resolveBaseUrl(componentName, project.slug, org.slug, envName, service, xeve);
+      let baseUrl: string;
+      try {
+        baseUrl = componentInClusterBaseUrl({
+          envName,
+          serviceName: componentName,
+          namespace,
+          port: this.resolveServicePort(service, xeve),
+        });
+      } catch {
+        continue;
+      }
+      const deployed = isServiceDeployedInCluster(componentName, service, manifest, envName);
       for (const spec of specs) {
         if (spec.on_deploy === false) continue;
         const apiName = spec.name ?? componentName;
-        fallbackSources.push({
+        fallbackSources.push({ deployed, source: {
           project_id: projectId,
           env_name: envName,
           name: apiName,
@@ -214,7 +235,7 @@ export class ProjectApisService {
           last_synced_at: null,
           created_at: now,
           updated_at: now,
-        });
+        } });
       }
     }
 
@@ -234,21 +255,6 @@ export class ProjectApisService {
     if (apiSpec) specs.push(apiSpec);
     if (Array.isArray(apiSpecs)) specs.push(...apiSpecs);
     return specs;
-  }
-
-  private resolveBaseUrl(
-    componentName: string,
-    projectSlug: string,
-    orgSlug: string,
-    envName: string,
-    service: Service,
-    xeve: Record<string, unknown> | null,
-  ): string {
-    const port = this.resolveServicePort(service, xeve);
-    const portSuffix = port ? `:${port}` : '';
-
-    const namespace = deriveNamespace(orgSlug, projectSlug, envName);
-    return `http://${envName}-${componentName}.${namespace}.svc.cluster.local${portSuffix}`;
   }
 
   private resolveServicePort(service: Service, xeve: Record<string, unknown> | null): number | undefined {

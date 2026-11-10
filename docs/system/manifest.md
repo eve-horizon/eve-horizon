@@ -662,9 +662,14 @@ services:
 
 Notes:
 - `spec_url` may be relative (resolved against the service's in-cluster URL,
-  `http://<env>-<service>.<namespace>.svc.cluster.local:<port>`) or an absolute
-  URL on the public internet. Eve fetches it only from the service's own
-  in-cluster URL (same scheme, host and port) or from a public address;
+  `http://<env>-<service>.<namespace>.svc.cluster.local:<port>`, built from
+  the same sanitised names the worker gives the Kubernetes Service, in the
+  environment's own namespace) or an absolute URL on the public internet.
+  A relative `spec_url` only works for services Eve deploys; `external`,
+  `connection_url`, `job` and `managed_db` services need an absolute public
+  URL. Spec URLs with credentials or a fragment are refused. Eve fetches a
+  spec only from the service's own in-cluster URL (same scheme, host and
+  port) or from a public address;
   loopback, private, link-local and cluster addresses outside the service's
   own URL are refused with `400`. Redirects are not followed, and a fetch
   times out after 15s or fails above 10 MiB. At deploy a refused or failed

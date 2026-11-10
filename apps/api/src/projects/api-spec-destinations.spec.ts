@@ -138,7 +138,7 @@ const db = vi.hoisted(() => ({
   projects: { findById: vi.fn() },
   orgs: { findById: vi.fn() },
   manifests: { findLatestByProject: vi.fn() },
-  environments: { list: vi.fn() },
+  environments: { list: vi.fn(), findByProjectAndName: vi.fn() },
 }));
 
 vi.mock('@eve/db', async (importOriginal) => ({
@@ -237,6 +237,7 @@ describe('API spec fetch destinations', () => {
     db.apiSources.updateCachedSchema.mockImplementation(async () => sourceRow(manifestSpecUrl));
     db.apiSources.list.mockResolvedValue([]);
     db.environments.list.mockResolvedValue([]);
+    db.environments.findByProjectAndName.mockResolvedValue({ id: 'env_1', name: 'dev', namespace: null });
 
     projectApis = new ProjectApisService({} as never);
     registration = new ApiRegistrationService({} as never);
@@ -252,7 +253,7 @@ describe('API spec fetch destinations', () => {
       'dev',
       'api',
       { type, spec_url: specUrl, on_deploy: true, auth: 'eve' },
-      OWN_BASE,
+      { baseUrl: OWN_BASE, namespace: 'eve-acme-shop-dev', deployed: true },
     );
 
   describe('refused destinations', () => {
