@@ -1,0 +1,70 @@
+import { createRequire } from 'node:module';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { startDashboardServer } from './dashboard-server.js';
+
+const proxied = vi.hoisted(() => []);
+
+// The dashboard image installs express and http-proxy-middleware at build
+// time; the workspace has express through the SSO app.
+vi.mock('express', () => ({
+  default: createRequire(new URL('../../sso/package.json', import.meta.url))('express'),
+}));
+vi.mock('http-proxy-middleware', () => ({
+  createProxyMiddleware: () => (req, res) => {
+    proxied.push(req.url);
+    res.end(`proxied ${req.url}`);
+  },
+}));
+
+let dashboard;
+
+beforeAll(async () => {
+  dashboard = await startDashboardServer({ EVE_API_URL: 'http://127.0.0.1:9' });
+});
+
+beforeEach(() => {
+  proxied.length = 0;
+});
+
+describe('dashboard /api proxy and the API internal routes', () => {
+  it.each([
+    '/api/internal',
+    '/api/internal/',
+    '/api/internal/registry/token',
+    '/api/internal/projects/proj_1/secrets/resolve?x=1',
+    '/api//internal/projects/proj_1/events',
+    '/api///internal/x',
+    '/api/./internal/x',
+    '/api/foo/../internal/x',
+    '/api/internal/../internal/x',
+    '/api/%69nternal/x',
+    '/api/%2569nternal/x',
+    '/api/%2Finternal/x',
+    '/api/INTERNAL/x',
+    '/API/internal/x',
+    '/Api/Internal/x',
+    '/api\\internal/x',
+    '/api/%E0%A4%A',
+  ])('answers 404 for %s without calling the API', async (path) => {
+    const res = await dashboard.get(path);
+    expect(res.status).toBe(404);
+    expect(proxied).toEqual([]);
+  });
+
+  it.each([
+    ['/api/auth/config', '/auth/config'],
+    ['/api/jobs/job-1/attempts/1/logs?after=0', '/jobs/job-1/attempts/1/logs?after=0'],
+    ['/api/projects/internal-tools', '/projects/internal-tools'],
+    ['/api/internalize', '/internalize'],
+  ])('still proxies %s', async (path, forwarded) => {
+    const res = await dashboard.get(path);
+    expect(res.status).toBe(200);
+    expect(proxied).toEqual([forwarded]);
+  });
+
+  it('still serves the app on SPA routes', async () => {
+    const res = await dashboard.get('/jobs');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+  });
+});
