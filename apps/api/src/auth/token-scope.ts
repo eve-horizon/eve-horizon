@@ -1,5 +1,11 @@
-import { ForbiddenException } from '@nestjs/common';
-import { clampJobTokenPermissions, hasUserActor, isOrgManagementPermission, isUserActorOnlyPermission } from '@eve/shared';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  clampJobTokenPermissions,
+  hasUserActor,
+  isOrgManagementPermission,
+  isUserActorOnlyPermission,
+  splitNoActorJobPermissions,
+} from '@eve/shared';
 import type { AuthUser } from './auth.types.js';
 import type { AccessService } from './access.service.js';
 
@@ -166,5 +172,40 @@ export function workStartOptions(caller: AuthUser | undefined): Required<WorkSta
 export function refuseProjectTokens(caller: AuthUser | undefined, what: string): void {
   if (caller && isScopedToken(caller) && caller.project_id) {
     throw new ForbiddenException(`Tokens minted for a project may not change ${what}`);
+  }
+}
+
+/**
+ * Refuse (400) unless `userId` could grant every permission in `permissions`
+ * to a job token in this project: org management judged on the user's org
+ * role alone, everything else on the user's permissions for the project. With
+ * no user, permissions that need one (and platform permissions) are refused.
+ */
+export async function assertCanGrantJobPermissions(
+  access: Pick<AccessService, 'can'>,
+  params: { orgId: string; projectId: string; userId: string | undefined; permissions: readonly string[] | null; context: string },
+): Promise<void> {
+  const { orgId, projectId, userId, permissions, context } = params;
+  if (!permissions || permissions.length === 0) {
+    return;
+  }
+  if (!hasUserActor(userId)) {
+    const { withheld } = splitNoActorJobPermissions(permissions);
+    if (withheld.length > 0) {
+      throw new BadRequestException(`${context} carries ${withheld.join(', ')}, which need a user who started the work`);
+    }
+    return;
+  }
+  for (const permission of permissions) {
+    const result = await access.can({
+      org_id: orgId,
+      principal_type: 'user',
+      principal_id: userId,
+      project_id: isOrgManagementPermission(permission) ? undefined : projectId,
+      permission,
+    });
+    if (!result.allowed) {
+      throw new BadRequestException(`${context} requests permission "${permission}" that the invoking actor does not hold`);
+    }
   }
 }

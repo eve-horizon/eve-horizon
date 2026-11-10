@@ -67,12 +67,11 @@ function actorWrites(): Array<{ actor: unknown; userSecretsExcluded: unknown }> 
 
 function service(): JobsService {
   const access = new AccessService({} as never, (async () => []) as never);
-  return Reflect.construct(JobsService, [fakeDb, {}, {}, {}, access]) as JobsService;
+  return new JobsService(fakeDb as never, {} as never, {} as never, {} as never, access);
 }
 
-/** JobsService.update with the caller as its third argument. */
 function update(svc: JobsService, jobId: string, body: Record<string, unknown>, caller: AuthUser): Promise<unknown> {
-  return (svc.update as unknown as (...a: unknown[]) => Promise<unknown>).call(svc, jobId, body, caller);
+  return svc.update(jobId, body, caller);
 }
 
 const OWNER: AuthUser = { user_id: 'user_owner' };

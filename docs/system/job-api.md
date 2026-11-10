@@ -315,6 +315,20 @@ interface UpdateJobRequest {
 - `approve`: optional `comment`
 - `reject`: requires `reason`
 
+## Job Actor on Update
+
+A job runs as its actor (`actor_user_id`): their user-scope secrets, org-fs
+bindings and job-token permission ceiling. When someone other than the actor
+uses `PATCH /jobs/{job_id}` to change what the job runs or how (`description`,
+`assignee`, `harness`, `harness_profile`, `harness_options`, `hints`, `git`,
+`workspace`, `env_name`, `execution_mode`, `defer_until`, or moving it to
+`ready` or `active`), they become the actor, and an org-bound token's edit marks
+the job to resolve no user-scope secrets. The job-token permissions the job
+already carries must be ones the new actor could grant, otherwise the update is
+refused with 400 and nothing changes. The actor's own edits, and cosmetic edits
+(`title`, `labels`, `priority`, `due_at`, `review_required`, `close_reason`, or
+moving the job to any other phase), keep the actor.
+
 ## Dependency Model
 
 Dependencies are stored as relations between jobs (`blocks`, `conditional_blocks`, `waits_for`, etc.).

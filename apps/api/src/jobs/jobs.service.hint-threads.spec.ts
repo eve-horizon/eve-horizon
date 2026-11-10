@@ -16,7 +16,7 @@ async function fakeDb(strings: TemplateStringsArray, ...values: unknown[]): Prom
 }
 
 function serviceFor(threadId: string) {
-  const service = new JobsService(fakeDb as never, {} as never, {} as never, {} as never);
+  const service = new JobsService(fakeDb as never, {} as never, {} as never, {} as never, {} as never);
   const internals = service as unknown as Record<string, unknown>;
   internals.jobs = {
     findById: vi.fn(async () => ({

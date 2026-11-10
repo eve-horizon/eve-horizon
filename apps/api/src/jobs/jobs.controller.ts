@@ -376,9 +376,10 @@ export class JobsController {
   })
   async update(
     @Param('job_id') jobId: string,
-    @Body() body: UpdateJobRequest
+    @Body() body: UpdateJobRequest,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<JobResponse> {
-    return this.jobsService.update(jobId, body);
+    return this.jobsService.update(jobId, body, caller);
   }
 
   @RequirePermission('jobs:read')

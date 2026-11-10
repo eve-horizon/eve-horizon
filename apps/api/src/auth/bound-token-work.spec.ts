@@ -222,7 +222,7 @@ describe('work started with an org-bound token', () => {
     });
 
     it('on the jobs a job, workflow or pipeline creates', async () => {
-      const jobsService = new JobsService(rawSql, {} as never, {} as never, {} as never);
+      const jobsService = new JobsService(rawSql, {} as never, {} as never, {} as never, access());
       await call(jobsService, 'create', 'proj_a', { description: 'go' }, 'user_bot', 'c', { userSecretsExcluded: true });
       expect(m.jobs.at(-1)).toMatchObject({ actor_user_id: 'user_bot', user_secrets_excluded: true });
 

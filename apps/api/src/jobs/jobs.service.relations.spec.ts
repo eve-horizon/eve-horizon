@@ -99,7 +99,7 @@ const rawSql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
 }) as never;
 
 function service(): JobsService {
-  return new JobsService(rawSql, {} as never, {} as never, {} as never);
+  return new JobsService(rawSql, {} as never, {} as never, {} as never, {} as never);
 }
 
 describe('JobsService jobs related to another project', () => {

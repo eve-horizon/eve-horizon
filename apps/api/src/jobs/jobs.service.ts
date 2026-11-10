@@ -9,7 +9,9 @@ import { buildApiError } from '../system/api-errors.js';
 import { JobLogsService } from './job-logs.service.js';
 import { JobReceiptsService } from './job-receipts.service.js';
 import { JobBatchService } from './job-batch.service.js';
-import type { WorkStartOptions } from '../auth/token-scope.js';
+import { assertCanGrantJobPermissions, workStartOptions, type WorkStartOptions } from '../auth/token-scope.js';
+import { AccessService } from '../auth/access.service.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 // ============================================================================
 // Request/Response Types (inline - the new model)
@@ -210,6 +212,33 @@ export type WaitForJobResponse =
 // Service
 // ============================================================================
 
+/** Update fields that change what a job runs or how (anything but cosmetic ones). */
+const EXECUTION_FIELDS = [
+  'description',
+  'assignee',
+  'harness',
+  'harness_profile',
+  'harness_options',
+  'hints',
+  'git',
+  'workspace',
+  'env_name',
+  'execution_mode',
+  'defer_until',
+] as const satisfies ReadonlyArray<keyof UpdateJobRequest>;
+
+/** True when an update changes what the job runs or releases it to run. */
+function changesWhatRuns(job: Job, updates: UpdateJobRequest): boolean {
+  if (EXECUTION_FIELDS.some((field) => updates[field] !== undefined)) {
+    return true;
+  }
+  return Boolean(
+    updates.phase
+    && updates.phase !== job.phase
+    && (updates.phase === 'ready' || updates.phase === 'active'),
+  );
+}
+
 @Injectable()
 export class JobsService {
   private jobs: ReturnType<typeof jobQueries>;
@@ -230,6 +259,7 @@ export class JobsService {
     private readonly jobLogsService: JobLogsService,
     private readonly jobReceiptsService: JobReceiptsService,
     private readonly jobBatchService: JobBatchService,
+    private readonly accessService: AccessService,
   ) {
     this.jobs = jobQueries(db);
     this.projects = projectQueries(db);
@@ -927,11 +957,13 @@ export class JobsService {
   /**
    * Update a job
    */
-  async update(jobId: string, updates: UpdateJobRequest): Promise<JobResponse> {
+  async update(jobId: string, updates: UpdateJobRequest, caller?: AuthUser): Promise<JobResponse> {
     const currentJob = await this.jobs.findById(jobId);
     if (!currentJob) {
       throw new NotFoundException(`Job ${jobId} not found`);
     }
+
+    await this.takeOverChangedJob(currentJob, updates, caller);
 
     // Handle phase transitions through updatePhase for validation
     if (updates.phase && updates.phase !== currentJob.phase) {
@@ -1026,6 +1058,46 @@ export class JobsService {
     }
 
     return this.toJobResponse(updatedJob);
+  }
+
+  /**
+   * A job runs as its actor (their user secrets, org-fs bindings and step
+   * ceiling). When someone other than the actor changes what the job runs or
+   * how it runs, they become the actor (with their user-secrets marker), and
+   * the job-token permissions the job carries must be ones they could grant,
+   * otherwise 400 before anything changes. The actor's own edits, and
+   * cosmetic ones (title, labels, priority, due date, review setting, close
+   * reason, or moving it anywhere but ready or active), keep the actor.
+   */
+  private async takeOverChangedJob(job: Job, updates: UpdateJobRequest, caller?: AuthUser): Promise<void> {
+    if (!caller || !changesWhatRuns(job, updates)) {
+      return;
+    }
+    const { userSecretsExcluded } = workStartOptions(caller);
+    const sameActor = job.actor_user_id === caller.user_id;
+    // The marker is sticky for the same actor and never loosened by an edit.
+    const nextExcluded = sameActor ? job.user_secrets_excluded || userSecretsExcluded : userSecretsExcluded;
+    if (sameActor && nextExcluded === job.user_secrets_excluded) {
+      return;
+    }
+
+    const project = await this.projects.findById(job.project_id);
+    if (!project) {
+      throw new NotFoundException(`Project ${job.project_id} not found`);
+    }
+    await assertCanGrantJobPermissions(this.accessService, {
+      orgId: project.org_id,
+      projectId: job.project_id,
+      userId: caller.user_id,
+      permissions: job.token_permissions,
+      context: `Job ${job.id} job-token permissions`,
+    });
+
+    await this.db`
+      UPDATE jobs
+      SET actor_user_id = ${caller.user_id}, user_secrets_excluded = ${nextExcluded}, updated_at = NOW()
+      WHERE id = ${job.id}
+    `;
   }
 
   /**
