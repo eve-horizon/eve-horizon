@@ -136,32 +136,40 @@ export async function vetOutboundUrl(
 }
 
 /**
- * POST to a vetted URL. The connection goes to `target.address` only (the
- * name is still used for the Host header, TLS SNI and certificate checks),
- * and redirects are returned as-is, never followed.
+ * Send one request to a vetted URL. When `target.address` is set the
+ * connection goes to that address only (the name is still used for the Host
+ * header, TLS SNI and certificate checks); without it the name is resolved
+ * as usual. Redirects are returned as-is, never followed. The response body
+ * is read up to `maxResponseBytes`; `truncated` says whether there was more.
  */
-export function postToVettedUrl(
-  target: VettedUrl,
+export function requestVettedUrl(
+  target: { url: URL; address?: string; family?: 4 | 6 },
   request: {
+    method: 'GET' | 'POST';
     headers: Record<string, string>;
-    body: string;
+    body?: string;
     timeoutMs: number;
     maxResponseBytes: number;
   },
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; truncated: boolean }> {
   const { url, address, family } = target;
-  const pinnedLookup = ((_hostname, lookupOptions, callback) => {
-    if ((lookupOptions as { all?: boolean } | undefined)?.all) {
-      (callback as unknown as (err: null, addresses: Array<{ address: string; family: number }>) => void)(
-        null,
-        [{ address, family }],
-      );
-    } else {
-      callback(null, address, family);
-    }
-  }) as LookupFunction;
+  const pinnedLookup = address
+    ? (((_hostname, lookupOptions, callback) => {
+      if ((lookupOptions as { all?: boolean } | undefined)?.all) {
+        (callback as unknown as (err: null, addresses: Array<{ address: string; family: number }>) => void)(
+          null,
+          [{ address, family: family ?? (isIP(address) === 6 ? 6 : 4) }],
+        );
+      } else {
+        callback(null, address, family ?? (isIP(address) === 6 ? 6 : 4));
+      }
+    }) as LookupFunction)
+    : undefined;
 
   const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  const headers = request.body === undefined
+    ? request.headers
+    : { ...request.headers, 'Content-Length': String(Buffer.byteLength(request.body)) };
 
   return new Promise((resolve, reject) => {
     const req = send(
@@ -169,9 +177,9 @@ export function postToVettedUrl(
         hostname: url.hostname.replace(/^\[(.*)\]$/, '$1'),
         port: url.port || undefined,
         path: `${url.pathname}${url.search}`,
-        method: 'POST',
-        headers: { ...request.headers, 'Content-Length': String(Buffer.byteLength(request.body)) },
-        lookup: pinnedLookup,
+        method: request.method,
+        headers,
+        ...(pinnedLookup ? { lookup: pinnedLookup } : {}),
         signal: AbortSignal.timeout(request.timeoutMs),
       },
       (res: IncomingMessage) => {
@@ -184,6 +192,7 @@ export function postToVettedUrl(
           resolve({
             status: res.statusCode ?? 0,
             body: Buffer.concat(chunks).toString('utf8'),
+            truncated: size > request.maxResponseBytes,
           });
         };
         res.on('data', (chunk: Buffer | string) => {
@@ -192,7 +201,7 @@ export function postToVettedUrl(
           const room = request.maxResponseBytes - size;
           chunks.push(buffer.subarray(0, Math.max(room, 0)));
           size += buffer.length;
-          if (size >= request.maxResponseBytes) {
+          if (size > request.maxResponseBytes) {
             finish();
             res.destroy();
           }

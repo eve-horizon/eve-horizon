@@ -4,6 +4,15 @@ import type { Db } from '@eve/db';
 import { environmentQueries, orgQueries, projectApiSourceQueries, projectManifestQueries, projectQueries, type ProjectApiSource } from '@eve/db';
 import { type ApiSource, type ApiSourceType, type ApiSpec, type Service, getDefaultSpecUrl, getServicesFromManifest } from '@eve/shared';
 import * as yaml from 'yaml';
+import { fetchApiSpec } from '../common/api-spec-fetch.js';
+
+type ResolvedApiSource = {
+  dbSource: ProjectApiSource | null;
+  apiSource: ApiSource;
+  specUrl: string;
+  /** The environment namespace the source's in-cluster base URL must be in. */
+  namespace: string | null;
+};
 
 @Injectable()
 export class ProjectApisService {
@@ -76,7 +85,7 @@ export class ProjectApisService {
       return resolved.apiSource.cached_schema_json as Record<string, unknown>;
     }
 
-    return this.fetchSpecJson(resolved.specUrl);
+    return this.fetchSpecJson(resolved);
   }
 
   async refreshSpec(projectId: string, name: string, envName?: string | null): Promise<ApiSource> {
@@ -86,7 +95,7 @@ export class ProjectApisService {
       throw new NotFoundException(`API source "${name}" not found for project ${projectId}`);
     }
 
-    const payload = await this.fetchSpecJson(resolved.specUrl);
+    const payload = await this.fetchSpecJson(resolved);
     const source = resolved.dbSource ?? await this.apiSources.upsert({
       project_id: resolved.apiSource.project_id,
       env_name: resolved.apiSource.env_name,
@@ -117,7 +126,7 @@ export class ProjectApisService {
     projectId: string,
     name: string,
     envName?: string | null,
-  ): Promise<{ dbSource: ProjectApiSource | null; apiSource: ApiSource; specUrl: string } | null> {
+  ): Promise<ResolvedApiSource | null> {
     if (envName !== undefined) {
       const scoped = await this.apiSources.findByProjectEnvAndName(projectId, envName ?? null, name);
       if (scoped) {
@@ -125,6 +134,7 @@ export class ProjectApisService {
           dbSource: scoped,
           apiSource: this.toResponse(scoped),
           specUrl: this.resolveSpecUrl(scoped),
+          namespace: await this.environmentNamespace(projectId, scoped.env_name),
         };
       }
     }
@@ -135,6 +145,7 @@ export class ProjectApisService {
         dbSource: unscoped,
         apiSource: this.toResponse(unscoped),
         specUrl: this.resolveSpecUrl(unscoped),
+        namespace: await this.environmentNamespace(projectId, unscoped.env_name),
       };
     }
 
@@ -152,7 +163,18 @@ export class ProjectApisService {
       dbSource: null,
       apiSource: source,
       specUrl: this.resolveSpecUrlFromApiSource(source),
+      namespace: await this.environmentNamespace(projectId, envName),
     };
+  }
+
+  /** The namespace Eve derives for the environment, as its base URLs use. */
+  private async environmentNamespace(projectId: string, envName: string | null): Promise<string | null> {
+    if (!envName) return null;
+    const project = await this.projects.findById(projectId, { include_deleted: true });
+    if (!project) return null;
+    const org = await this.orgs.findById(project.org_id, { include_deleted: true });
+    if (!org) return null;
+    return deriveNamespace(org.slug, project.slug, envName);
   }
 
   private async listFromManifestFallback(projectId: string, envName: string): Promise<ApiSource[]> {
@@ -295,12 +317,18 @@ export class ProjectApisService {
     return `${baseUrl}${specPath}`;
   }
 
-  private async fetchSpecJson(specUrl: string): Promise<Record<string, unknown>> {
-    const response = await fetch(specUrl);
-    if (!response.ok) {
-      throw new BadRequestException(`Failed to fetch spec from ${specUrl}: ${response.status}`);
+  private async fetchSpecJson(resolved: ResolvedApiSource): Promise<Record<string, unknown>> {
+    const { specUrl } = resolved;
+    const text = await fetchApiSpec(specUrl, {
+      componentBaseUrl: resolved.apiSource.base_url,
+      namespace: resolved.namespace,
+    });
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new BadRequestException(`Spec from ${specUrl} is not valid JSON`);
     }
-    const payload = await response.json();
     if (!payload || typeof payload !== 'object') {
       throw new BadRequestException(`Spec from ${specUrl} did not return JSON object`);
     }

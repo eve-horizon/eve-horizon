@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Db } from '@eve/db';
 import { projectApiSourceQueries } from '@eve/db';
 import { type ApiSpec, getDefaultSpecUrl } from '@eve/shared';
+import { fetchApiSpec } from '../common/api-spec-fetch.js';
 
 interface ResolvedBaseUrls {
   internal_base_url: string;
@@ -46,7 +47,7 @@ export class ApiRegistrationService {
       if (apiSpec.spec_path) {
         spec = await this.readSpecFromPath(componentName, apiSpec.spec_path, repoPath);
       } else {
-        spec = await this.fetchSpec(fullSpecUrl, apiSpec.type);
+        spec = await this.fetchSpec(fullSpecUrl, apiSpec.type, deployedBaseUrl);
       }
     } catch (error) {
       this.logger.error(
@@ -140,34 +141,24 @@ export class ApiRegistrationService {
   }
 
   /**
-   * Fetch an API spec from a URL
+   * Fetch an API spec from the component's own in-cluster URL
+   * (`componentBaseUrl`) or a public URL; see fetchApiSpec.
    */
   async fetchSpec(
     url: string,
     type: ApiSpec['type'],
+    componentBaseUrl: string,
   ): Promise<string> {
     this.logger.debug(`Fetching ${type} spec from ${url}`);
 
     try {
       if (type === 'graphql') {
         // For GraphQL, use introspection query
-        return await this.fetchGraphQLIntrospection(url);
+        return await this.fetchGraphQLIntrospection(url, componentBaseUrl);
       }
 
       // For OpenAPI and PostgREST, fetch directly
-      const response = await fetch(url, {
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: ${response.statusText}`,
-        );
-      }
-
-      return await response.text();
+      return await fetchApiSpec(url, { componentBaseUrl });
     } catch (error) {
       this.logger.error(
         `Failed to fetch spec from ${url}: ${error instanceof Error ? error.message : String(error)}`,
@@ -179,7 +170,7 @@ export class ApiRegistrationService {
   /**
    * Fetch GraphQL schema using introspection query
    */
-  private async fetchGraphQLIntrospection(url: string): Promise<string> {
+  private async fetchGraphQLIntrospection(url: string, componentBaseUrl: string): Promise<string> {
     // GraphQL introspection query
     const introspectionQuery = {
       query: `
@@ -277,22 +268,12 @@ export class ApiRegistrationService {
       `,
     };
 
-    const response = await fetch(url, {
+    return fetchApiSpec(url, {
+      componentBaseUrl,
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(introspectionQuery),
     });
-
-    if (!response.ok) {
-      throw new Error(
-        `GraphQL introspection failed: HTTP ${response.status}: ${response.statusText}`,
-      );
-    }
-
-    return await response.text();
   }
 
   /**

@@ -661,7 +661,14 @@ services:
 ```
 
 Notes:
-- `spec_url` may be relative (resolved against the service URL) or absolute.
+- `spec_url` may be relative (resolved against the service's in-cluster URL,
+  `http://<env>-<service>.<namespace>.svc.cluster.local:<port>`) or an absolute
+  URL on the public internet. Eve fetches it only from the service's own
+  in-cluster URL (same scheme, host and port) or from a public address;
+  loopback, private, link-local and cluster addresses outside the service's
+  own URL are refused with `400`. Redirects are not followed, and a fetch
+  times out after 15s or fails above 10 MiB. At deploy a refused or failed
+  fetch is logged as a registration failure and the deploy continues.
 - `spec_path` is local-only (`file://` repo URLs).
 
 ### Files Mount

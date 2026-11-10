@@ -26,7 +26,7 @@ import type {
   WebhookReplayStatusResponse,
 } from '@eve/shared';
 import { buildApiError } from '../system/api-errors.js';
-import { OutboundUrlError, postToVettedUrl, vetOutboundUrl } from '../common/outbound-url.js';
+import { OutboundUrlError, requestVettedUrl, vetOutboundUrl } from '../common/outbound-url.js';
 
 // ============================================================================
 // Retry schedule: exponential backoff intervals in milliseconds
@@ -417,7 +417,8 @@ export class WebhooksService {
 
         // Re-checked on every attempt: DNS may have changed since create.
         const target = await vetOutboundUrl(sub.url, { allowPrivate: allowPrivateTargets() });
-        const response = await postToVettedUrl(target, {
+        const response = await requestVettedUrl(target, {
+          method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-Eve-Signature-256': `sha256=${signature}`,
