@@ -341,9 +341,9 @@ export class AppAuthService {
       : { user: await this.createMintedUser(input.email), created: true };
     await this.resolveMembership(orgId, user.id, role, input.project_id);
 
-    // Capped at the server's user-token lifetime (EVE_AUTH_TOKEN_TTL_DAYS).
+    // ttl_days is 1-90 (request schema); without it the server default applies.
     const ttlSeconds = input.ttl_days
-      ? Math.min(input.ttl_days * 24 * 60 * 60, this.userTokenTtlSeconds)
+      ? input.ttl_days * 24 * 60 * 60
       : undefined;
     // A token minted by anyone but a system admin acts only within the minting org.
     const token = await this.mintUserToken(user.id, user.email ?? undefined, ttlSeconds, {

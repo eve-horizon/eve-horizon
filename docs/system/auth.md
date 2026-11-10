@@ -833,9 +833,8 @@ Notes:
   resource context, and identity or account routes (`/auth/identities`,
   `/auth/mint`, user secrets, creating orgs), refuse it. Tokens minted by a system
   admin are not bound.
-- `--ttl <days>` sets the token TTL (1-90 days). Capped at the server's
-  `EVE_AUTH_TOKEN_TTL_DAYS` (a longer request is shortened to the cap, not refused).
-  Set `EVE_AUTH_TOKEN_TTL_DAYS` on the instance if bot tokens need a longer life.
+- `--ttl <days>` sets the token TTL (1-90 days; the API refuses other values).
+  Without it, the server's `EVE_AUTH_TOKEN_TTL_DAYS` applies.
 
 ## Challenge-Response Login
 

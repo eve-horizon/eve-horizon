@@ -287,7 +287,7 @@ describe('POST /auth/mint tokens minted by an org or project admin', () => {
     ).resolves.toBe(true);
   });
 
-  it('are capped at the server token lifetime', async () => {
+  it('keep the requested lifetime within the documented 1-90 days', async () => {
     const { controller } = build();
     const now = Math.floor(Date.now() / 1000);
     const minted = await controller.mint(
@@ -295,7 +295,8 @@ describe('POST /auth/mint tokens minted by an org or project admin', () => {
       orgOwner,
     );
 
-    expect(minted.expires_at).toBeLessThanOrEqual(now + 7 * 24 * 60 * 60 + 5);
+    expect(minted.expires_at).toBeGreaterThanOrEqual(now + 90 * 24 * 60 * 60 - 5);
+    expect(minted.expires_at).toBeLessThanOrEqual(now + 90 * 24 * 60 * 60 + 5);
   });
 });
 
