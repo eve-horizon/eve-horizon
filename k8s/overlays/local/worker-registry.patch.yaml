@@ -19,3 +19,7 @@ spec:
               value: "local"
             - name: EVE_TOOLCHAIN_REGISTRY_INSECURE
               value: "true"
+            # Local stack only: deploys of file:// repo projects (manual
+            # scenarios, `eve local mesh`) read the local checkout.
+            - name: EVE_ALLOW_FILE_REPO_URLS
+              value: "true"

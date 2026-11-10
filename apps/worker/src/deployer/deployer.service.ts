@@ -15,6 +15,9 @@ import {
 } from '@eve/db';
 import yaml from 'yaml';
 import {
+  readRepoFile,
+  readRepoFiles,
+  RepoFileError,
   loadConfig,
   type Healthcheck,
   type ManagedDbTrustInput,
@@ -72,6 +75,11 @@ import {
 } from './app-credential-provisioner/factory';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { fileURLToPath } from 'node:url';
+
+/** ConfigMaps hold at most 1 MiB, so no single mounted file may be larger. */
+const CONFIGMAP_MAX_BYTES = 1024 * 1024;
+const LOCAL_SECRETS_MAX_BYTES = 1024 * 1024;
 import {
   classifyFromSnapshot,
   DeployFailureError,
@@ -2737,43 +2745,27 @@ export class DeployerService {
   }
 
   /**
-   * Read files from a source path for mounting as a ConfigMap.
-   * Supports both single files and directories.
+   * Read files from a repo-relative source for mounting as a ConfigMap.
+   * Supports both single files and directories (flat: subdirectories are
+   * skipped). Only regular files inside the checkout are read; anything
+   * else (paths that climb out, absolute paths, symlinks leading outside,
+   * pipes, devices) fails the deploy before any content is read.
    * Returns a map of filename -> content for ConfigMap data.
    */
-  private async readFilesForConfigMap(sourcePath: string): Promise<Record<string, string>> {
-    const data: Record<string, string> = {};
-
+  private async readFilesForConfigMap(repoRoot: string, source: string): Promise<Record<string, string>> {
+    let data: Record<string, string>;
     try {
-      const stat = await fs.stat(sourcePath);
-
-      if (stat.isDirectory()) {
-        const files = await fs.readdir(sourcePath);
-        for (const file of files) {
-          const filePath = join(sourcePath, file);
-          const fileStat = await fs.stat(filePath);
-          if (fileStat.isFile()) {
-            const content = await fs.readFile(filePath, 'utf-8');
-            data[file] = content;
-          }
-          // Skip subdirectories - ConfigMaps are flat
-        }
-      } else if (stat.isFile()) {
-        // Single file - use basename as key
-        const basename = sourcePath.split('/').pop() ?? 'file';
-        const content = await fs.readFile(sourcePath, 'utf-8');
-        data[basename] = content;
-      }
+      data = await readRepoFiles(repoRoot, source, CONFIGMAP_MAX_BYTES);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to read files from ${sourcePath}: ${message}`);
+      throw new Error(`Failed to read files from ${source}: ${message}`);
     }
 
     // Check ConfigMap size limit (1MB)
     const totalSize = Object.values(data).reduce((sum, content) => sum + content.length, 0);
     if (totalSize > 1024 * 1024) {
       throw new Error(
-        `Files at ${sourcePath} exceed ConfigMap size limit (1MB). ` +
+        `Files at ${source} exceed ConfigMap size limit (1MB). ` +
         `Total size: ${Math.round(totalSize / 1024)}KB. ` +
         `Consider baking files into the image instead.`
       );
@@ -2819,14 +2811,13 @@ export class DeployerService {
         continue;
       }
 
-      const sourcePath = join(repoPath, source);
       const configMapName = toK8sName(`${resourcePrefix}-files-${index}`, 'configmap');
 
       try {
-        const data = await this.readFilesForConfigMap(sourcePath);
+        const data = await this.readFilesForConfigMap(repoPath, source);
 
         if (Object.keys(data).length === 0) {
-          this.logger.warn(`No files found at ${sourcePath} - skipping ConfigMap creation`);
+          this.logger.warn(`No files found at ${source} - skipping ConfigMap creation`);
           continue;
         }
 
@@ -3065,34 +3056,37 @@ export class DeployerService {
    */
   private async loadLocalSecrets(repoPath: string, envName: string): Promise<Map<string, string>> {
     const secretsMap = new Map<string, string>();
-    const secretsPath = join(repoPath, '.eve', 'dev-secrets.yaml');
-    const legacySecretsPath = join(repoPath, '.eve', 'secrets.yaml');
+    const secretsPath = join('.eve', 'dev-secrets.yaml');
+    const legacySecretsPath = join('.eve', 'secrets.yaml');
+
+    // Only a regular file inside the checkout is read; anything else fails
+    // the deploy rather than being skipped.
+    let fileContent: string | null = null;
+    let usedPath: string | null = null;
+    try {
+      fileContent = await readRepoFile(repoPath, secretsPath, LOCAL_SECRETS_MAX_BYTES);
+      usedPath = secretsPath;
+    } catch (error) {
+      if (!(error instanceof RepoFileError) || error.code !== 'not_found') {
+        throw new Error(`Local secrets file refused: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        fileContent = await readRepoFile(repoPath, legacySecretsPath, LOCAL_SECRETS_MAX_BYTES);
+        usedPath = legacySecretsPath;
+        this.logger.warn(
+          'Using deprecated .eve/secrets.yaml; rename to .eve/dev-secrets.yaml for local overrides.',
+        );
+      } catch (legacyError) {
+        if (legacyError instanceof RepoFileError && legacyError.code === 'not_found') {
+          return secretsMap;
+        }
+        throw new Error(
+          `Local secrets file refused: ${legacyError instanceof Error ? legacyError.message : String(legacyError)}`,
+        );
+      }
+    }
 
     try {
-      let fileContent: string | null = null;
-      let usedPath: string | null = null;
-      try {
-        fileContent = await fs.readFile(secretsPath, 'utf-8');
-        usedPath = secretsPath;
-      } catch (error) {
-        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-          try {
-            fileContent = await fs.readFile(legacySecretsPath, 'utf-8');
-            usedPath = legacySecretsPath;
-            this.logger.warn(
-              'Using deprecated .eve/secrets.yaml; rename to .eve/dev-secrets.yaml for local overrides.',
-            );
-          } catch (legacyError) {
-            if (legacyError instanceof Error && 'code' in legacyError && legacyError.code === 'ENOENT') {
-              return secretsMap;
-            }
-            throw legacyError;
-          }
-        } else {
-          throw error;
-        }
-      }
-
       if (!fileContent) {
         return secretsMap;
       }
@@ -3162,16 +3156,31 @@ export class DeployerService {
       return undefined;
     }
 
-    if (repoUrl.startsWith('file://')) {
-      return repoUrl.slice(7); // Remove 'file://' prefix
+    const isLocal = /^file:/i.test(repoUrl) || repoUrl.startsWith('/');
+    if (!isLocal) {
+      return undefined;
     }
 
-    // For absolute paths without protocol (e.g., /path/to/repo)
+    // A checkout on the worker's own filesystem is a local-development
+    // feature; projects created before the API gate may still carry one.
+    const allowed = ['true', '1', 'yes', 'on'].includes(
+      (process.env.EVE_ALLOW_FILE_REPO_URLS ?? '').trim().toLowerCase(),
+    );
+    if (!allowed) {
+      throw new Error(
+        'This project uses a local file:// repo URL, which is only used for local development ' +
+          '(EVE_ALLOW_FILE_REPO_URLS=true). Set an https or SSH git URL on the project.',
+      );
+    }
+
     if (repoUrl.startsWith('/')) {
       return repoUrl;
     }
-
-    return undefined;
+    try {
+      return fileURLToPath(new URL(repoUrl));
+    } catch {
+      throw new Error(`Invalid file:// repo URL: ${repoUrl}`);
+    }
   }
 
 

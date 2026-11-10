@@ -691,6 +691,13 @@ services:
           target: /etc/app/app.conf
 ```
 
+`source` is a path relative to the repository: a file, or a directory whose
+files (not subdirectories) are mounted. It must stay inside the checkout
+after symlinks are resolved and name only regular files of at most 1 MiB
+each (1 MiB in all, the ConfigMap limit). Absolute paths, paths that climb
+out of the repository, symlinks that lead outside it, and pipes or devices
+fail the deploy. The same rule applies to `.eve/dev-secrets.yaml`.
+
 ### Persistent Storage
 
 ```yaml

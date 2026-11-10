@@ -37,3 +37,4 @@ export * from './cloud-fs/index.js';
 export * from './skills/index.js';
 export * from './templates/index.js';
 export * from './net/outbound-url.js';
+export * from './lib/repo-files.js';

@@ -1,6 +1,4 @@
 import { BadRequestException } from '@nestjs/common';
-import { constants as fsConstants, promises as fs } from 'node:fs';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -40,56 +38,5 @@ export function localRepoPath(repoUrl: string | null | undefined): string | unde
   }
 }
 
-function isInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === '' ? false : !relative.startsWith('..') && !path.isAbsolute(relative);
-}
-
-/**
- * Read a regular file inside `repoRoot`, at most `maxBytes`. Symlinks are
- * resolved first and must stay inside the (resolved) root; devices, pipes,
- * directories and files over the limit are refused before any content is
- * read.
- */
-export async function readRepoFile(repoRoot: string, relativePath: string, maxBytes: number): Promise<string> {
-  const root = await fs.realpath(path.resolve(repoRoot));
-  const lexical = path.resolve(root, relativePath);
-  if (!isInside(root, lexical)) {
-    throw new Error(`${relativePath} is outside the repository`);
-  }
-  let real: string;
-  try {
-    real = await fs.realpath(lexical);
-  } catch {
-    throw new Error(`${relativePath} does not exist in the repository`);
-  }
-  if (!isInside(root, real)) {
-    throw new Error(`${relativePath} leads outside the repository`);
-  }
-
-  // O_NONBLOCK so a named pipe cannot hold the open; fstat on the opened
-  // descriptor so the checks apply to exactly what is read.
-  const handle = await fs.open(real, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`${relativePath} is not a regular file`);
-    }
-    if (stat.size > maxBytes) {
-      throw new Error(`${relativePath} is larger than ${maxBytes} bytes`);
-    }
-    const buffer = Buffer.alloc(Math.min(stat.size, maxBytes) + 1);
-    let filled = 0;
-    while (filled < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
-      if (bytesRead === 0) break;
-      filled += bytesRead;
-    }
-    if (filled > maxBytes) {
-      throw new Error(`${relativePath} is larger than ${maxBytes} bytes`);
-    }
-    return buffer.subarray(0, filled).toString('utf8');
-  } finally {
-    await handle.close();
-  }
-}
+/** Read a regular file inside a checkout (see @eve/shared readRepoFile). */
+export { readRepoFile } from '@eve/shared';

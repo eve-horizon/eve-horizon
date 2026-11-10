@@ -108,6 +108,8 @@ services:
       # Codex/Code auth - base64 encoded JSON from system-secrets.env.local
       CODEX_AUTH_JSON_B64: ${CODEX_AUTH_JSON_B64:-}
       EVE_ORG_FS_ROOT: /org
+      # Local stack: deploys of file:// repo projects read the local checkout.
+      EVE_ALLOW_FILE_REPO_URLS: ${EVE_ALLOW_FILE_REPO_URLS:-true}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:${EVE_WORKER_PORT:-4711}/health || exit 1"]
       interval: 5s
