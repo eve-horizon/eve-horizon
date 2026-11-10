@@ -3,7 +3,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { internalRouteProxyHooks, refuseInternalApi } from './server/internal-api-guard.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { contentSecurityPolicy, ssoOriginSource } from './server/content-security-policy.js';
+import { contentSecurityPolicy, sandboxApiResponse, ssoOriginSource } from './server/content-security-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -17,11 +17,12 @@ app.use(refuseInternalApi);
 
 // Proxy /api/* to the Eve API. Express strips the /api mount, so req.url is
 // already the API path. The proxy hooks also refuse any upstream path under
-// the API's /internal.
+// the API's /internal, and give every API response a sandboxing policy so it
+// never acts as a dashboard page.
 app.use('/api', createProxyMiddleware({
   target: apiUrl,
   changeOrigin: true,
-  on: internalRouteProxyHooks(apiUrl),
+  on: { ...internalRouteProxyHooks(apiUrl), proxyRes: sandboxApiResponse },
   // Support SSE streaming
   onProxyRes(proxyRes) {
     if (proxyRes.headers['content-type']?.includes('text/event-stream')) {

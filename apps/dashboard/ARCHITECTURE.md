@@ -37,6 +37,11 @@ Legacy routes (`/board`, `/project`, `/environments`, `/spending`) redirect to t
   extra configuration. Responses never wait on that lookup: it runs in the background (at start,
   every minute, and with backoff after failures), and until it first succeeds the policy allows
   only the page's own origin.
+- **API responses never act as dashboard pages** — every response proxied from `/api` gets
+  `Content-Security-Policy: default-src 'none'; sandbox` and `X-Content-Type-Options: nosniff`
+  (`sandboxApiResponse`), so a stored file served with an HTML type cannot run on the dashboard
+  origin. Browsers ignore both on `fetch`/`EventSource` responses, so JSON and streams are
+  unaffected.
 
 ## Navigation
 

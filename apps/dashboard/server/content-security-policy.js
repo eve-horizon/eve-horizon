@@ -99,6 +99,21 @@ export function ssoOriginSource({
   return currentSsoOrigin;
 }
 
+/** The policy for every response proxied from /api. */
+export const API_RESPONSE_POLICY = "default-src 'none'; sandbox";
+
+/**
+ * http-proxy-middleware `proxyRes` hook: an API response (JSON, an event
+ * stream, a stored file with whatever Content-Type it was given) must never
+ * act as a dashboard page. Browsers ignore these headers on fetch and
+ * EventSource responses, so the app is unaffected; a response opened as a
+ * page runs no script, loads nothing and is never sniffed into another type.
+ */
+export function sandboxApiResponse(proxyRes) {
+  proxyRes.headers['content-security-policy'] = API_RESPONSE_POLICY;
+  proxyRes.headers['x-content-type-options'] = 'nosniff';
+}
+
 /** Express middleware that sets the policy on every response it passes on. */
 export function contentSecurityPolicy(currentSsoOrigin) {
   return (_req, res, next) => {
