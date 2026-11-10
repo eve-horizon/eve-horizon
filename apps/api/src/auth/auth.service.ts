@@ -420,6 +420,10 @@ export class AuthService {
     if (!actor?.user_id) {
       throw new UnauthorizedException('User context required');
     }
+    // A token bound to one org acts on that org's data, never on the account.
+    if (actor.bound_org_id) {
+      throw new ForbiddenException('Org-bound tokens may not register login identities');
+    }
 
     const targetUser = input.user_id
       ? await this.users.findById(input.user_id)

@@ -324,6 +324,7 @@ export class AuthController {
     const identity = await this.authService.registerIdentity(body, {
       user_id: user.user_id,
       is_admin: user.is_admin,
+      bound_org_id: user.bound_org_id,
     });
     return {
       id: identity.id,
