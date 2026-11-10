@@ -13,6 +13,8 @@ describe('DeployerService – files read from a repo checkout', () => {
   let repo: string;
   let outsideFile: string;
   let outsideDir: string;
+  let siblingDir: string;
+  let siblingFile: string;
   let deployer: DeployerService;
   const createConfigMap = vi.fn(async () => undefined);
 
@@ -21,6 +23,10 @@ describe('DeployerService – files read from a repo checkout', () => {
     repo = path.join(work, 'repo');
     outsideDir = path.join(work, 'outside-dir');
     outsideFile = path.join(work, 'outside.txt');
+    // A separate temp directory beside the checkout's parent.
+    siblingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eve-deployer-sibling-'));
+    siblingFile = path.join(siblingDir, 'notes.txt');
+    fs.writeFileSync(siblingFile, 'outside-the-checkout\n');
     fs.mkdirSync(path.join(repo, 'config'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'db', 'migrations'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'piped'), { recursive: true });
@@ -29,19 +35,20 @@ describe('DeployerService – files read from a repo checkout', () => {
     fs.writeFileSync(path.join(repo, 'config', 'app.conf'), 'mode=prod\n');
     fs.writeFileSync(path.join(repo, 'db', 'migrations', '001_init.sql'), 'CREATE TABLE a (id int);\n');
     fs.writeFileSync(path.join(repo, 'db', 'migrations', '002_more.sql'), 'CREATE TABLE b (id int);\n');
-    fs.writeFileSync(outsideFile, 'WORKER_TOKEN=from-the-worker\n');
-    fs.writeFileSync(path.join(outsideDir, 'token'), 'from-the-worker\n');
+    fs.writeFileSync(outsideFile, 'OUTSIDE_VALUE=outside-the-checkout\n');
+    fs.writeFileSync(path.join(outsideDir, 'notes.txt'), 'outside-the-checkout\n');
     fs.symlinkSync('config/app.conf', path.join(repo, 'app-link.conf'));
     fs.symlinkSync(outsideFile, path.join(repo, 'out-link'));
     fs.symlinkSync(outsideDir, path.join(repo, 'out-dir'));
     fs.symlinkSync(outsideFile, path.join(repo, 'db', 'migrations', '003_link.sql'));
     execFileSync('mkfifo', [path.join(repo, 'pipe')]);
     execFileSync('mkfifo', [path.join(repo, 'piped', 'pipe')]);
-    fs.writeFileSync(path.join(outsideDir, 'dev-secrets.yaml'), 'secrets:\n  WORKER_TOKEN: from-the-worker\n');
+    fs.writeFileSync(path.join(outsideDir, 'dev-secrets.yaml'), 'secrets:\n  OUTSIDE_VALUE: outside-the-checkout\n');
   });
 
   afterAll(() => {
     fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(siblingDir, { recursive: true, force: true });
   });
 
   beforeEach(() => {
@@ -68,18 +75,19 @@ describe('DeployerService – files read from a repo checkout', () => {
   const failure = (promise: Promise<unknown>) => promise.then(() => null, (err: unknown) => err);
 
   describe('x-eve.files sources that are refused', () => {
+    // Sources are functions: the temp paths exist only once beforeAll has run.
     for (const [label, source] of [
-      ['a path that climbs out of the repo', '../outside.txt'],
-      ['a path that climbs to the worker process files', '../../../../../../proc/self/environ'],
-      ['an absolute path', '/proc/self/environ'],
-      ['an absolute path to a host file', '/etc/hosts'],
-      ['a symlink to a file outside the repo', 'out-link'],
-      ['a symlink to a directory outside the repo', 'out-dir'],
-      ['a named pipe', 'pipe'],
-      ['a directory holding a named pipe', 'piped'],
+      ['a path that climbs out of the repo', () => '../outside.txt'],
+      ['a path that climbs into a sibling directory', () => path.relative(repo, siblingFile)],
+      ['an absolute path outside the repo', () => outsideFile],
+      ['an absolute path into a sibling directory', () => siblingFile],
+      ['a symlink to a file outside the repo', () => 'out-link'],
+      ['a symlink to a directory outside the repo', () => 'out-dir'],
+      ['a named pipe', () => 'pipe'],
+      ['a directory holding a named pipe', () => 'piped'],
     ] as const) {
       it(`refuses ${label} and creates no ConfigMap`, async () => {
-        const error = await failure(mount(source));
+        const error = await failure(mount(source()));
         expect(error).toBeInstanceOf(Error);
         expect(createConfigMap).not.toHaveBeenCalled();
       });
