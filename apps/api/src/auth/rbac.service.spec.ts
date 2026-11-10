@@ -35,13 +35,8 @@ const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
   return limit ? rows.slice(0, Number(limit[1])) : rows;
 }) as never;
 
-type TokenScopeLookups = {
-  getProjectScope(projectInput: string): Promise<{ id: string; org_id: string }>;
-  getOrgScopeId(orgInput: string): Promise<string>;
-};
-
 describe('RbacService token scope lookups', () => {
-  const rbac = new RbacService(db) as unknown as TokenScopeLookups;
+  const rbac = new RbacService(db);
 
   describe('getProjectScope', () => {
     it('resolves a project id to the project and its org', async () => {

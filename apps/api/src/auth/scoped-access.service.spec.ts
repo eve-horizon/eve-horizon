@@ -17,7 +17,13 @@ describe('ScopedAccessService', () => {
       evaluateScope: vi.fn(() => ({ scope_required: true, scope_matched: allowed })),
     };
 
-    const service = new ScopedAccessService(authService as any, accessService as any);
+    // Legacy job-token cases below carry org_test, so the token is always in scope here.
+    const rbacService = {
+      getProjectScope: vi.fn(async (projectInput: string) => ({ id: projectInput, org_id: 'org_test' })),
+      getOrgScopeId: vi.fn(async (orgInput: string) => orgInput),
+    };
+
+    const service = new ScopedAccessService(authService as any, accessService as any, rbacService as any);
     return { service, authService, accessService };
   }
 
@@ -115,6 +121,7 @@ describe('ScopedAccessService', () => {
     const user: AuthUser = {
       user_id: 'user_job',
       is_job_token: true,
+      org_id: 'org_test',
       permissions: ['orgfs:write'],
     };
 
@@ -135,6 +142,7 @@ describe('ScopedAccessService', () => {
     const user: AuthUser = {
       user_id: 'user_job',
       is_job_token: true,
+      org_id: 'org_test',
       permissions: ['orgfs:write'],
       scope: { orgfs: { allow_prefixes: ['/groups/projects/project-a/**'] } },
     };
@@ -159,6 +167,7 @@ describe('ScopedAccessService', () => {
     const user: AuthUser = {
       user_id: 'user_job',
       is_job_token: true,
+      org_id: 'org_test',
       permissions: ['cloud_fs:read'],
       scope: { cloud_fs: { allow_mount_ids: ['mount_a'] } },
     };
@@ -206,7 +215,7 @@ describe('ScopedAccessService job tokens and the org or project they address', (
         return id;
       }),
     };
-    const service = Reflect.construct(ScopedAccessService, [authService, accessService, rbacService]) as ScopedAccessService;
+    const service = new ScopedAccessService(authService as any, accessService as any, rbacService as any);
     return { service, accessService, rbacService };
   }
 

@@ -4,6 +4,7 @@ import { membershipQueries, projectQueries, accessRoleQueries, accessGroupQuerie
 import { expandPermissions, type Permission } from './permissions.js';
 import { allPermissions } from '@eve/shared';
 import type { AuthUser } from './auth.service.js';
+import { isScopedToken, tokenMayAddressProject, type TokenScopeResolver } from './token-scope.js';
 
 export const ROLE_RANK: Record<MembershipRole, number> = {
   member: 1,
@@ -22,7 +23,7 @@ const OWNED_RESOURCE_LABELS: Record<OwnedResourceKind, string> = {
 };
 
 @Injectable()
-export class RbacService {
+export class RbacService implements TokenScopeResolver {
   private memberships: ReturnType<typeof membershipQueries>;
   private projects: ReturnType<typeof projectQueries>;
   private accessRoles: ReturnType<typeof accessRoleQueries>;
@@ -133,7 +134,11 @@ export class RbacService {
     projectInput?: string,
   ): Promise<ReadonlySet<string>> {
     if (user.is_admin) return new Set<string>(allPermissions());
-    if (user.is_job_token || user.is_service_token || user.is_service_principal) {
+    if (isScopedToken(user)) {
+      // A scoped token holds no permissions in a project outside its own scope.
+      if (projectInput && !(await tokenMayAddressProject(user, projectInput, this))) {
+        return new Set<string>();
+      }
       return new Set(user.permissions ?? []);
     }
 
@@ -180,6 +185,48 @@ export class RbacService {
   async getProjectOrgId(projectInput: string): Promise<string> {
     const project = await this.resolveProject(projectInput);
     return project.org_id;
+  }
+
+  /**
+   * Resolve a project identifier (slug or proj_xxx ID) to the project's id and
+   * org for a token scope comparison. A slug held by more than one project
+   * (deleted ones included, since some lookups do not skip them) is refused,
+   * so the comparison can never be made against a different project than the
+   * one the handler goes on to load. Throws NotFoundException when the project
+   * does not exist.
+   */
+  async getProjectScope(projectInput: string): Promise<{ id: string; org_id: string }> {
+    if (projectInput.startsWith('proj_')) {
+      const project = await this.resolveProject(projectInput);
+      return { id: project.id, org_id: project.org_id };
+    }
+
+    const rows = await this.db<{ id: string; org_id: string; deleted_at: Date | null }[]>`
+      SELECT id, org_id, deleted_at FROM projects WHERE slug = ${projectInput} LIMIT 2
+    `;
+    if (rows.length > 1) {
+      throw new ForbiddenException('Project slug is not unique; address the project by id');
+    }
+    const [row] = rows;
+    if (!row || row.deleted_at) {
+      throw new NotFoundException('Project not found');
+    }
+    return { id: row.id, org_id: row.org_id };
+  }
+
+  /**
+   * Resolve an org identifier (org_xxx ID or slug; org routes accept either)
+   * to the org's id for a token scope comparison. Throws NotFoundException
+   * when the org does not exist.
+   */
+  async getOrgScopeId(orgInput: string): Promise<string> {
+    const rows = await this.db<{ id: string }[]>`
+      SELECT id FROM orgs WHERE (id = ${orgInput} OR slug = ${orgInput}) AND deleted_at IS NULL LIMIT 2
+    `;
+    if (rows.length !== 1) {
+      throw new NotFoundException('Org not found');
+    }
+    return rows[0].id;
   }
 
   /**

@@ -11,6 +11,7 @@ import { AuthService, type AuthUser } from './auth.service.js';
 import { RbacService, type OwnedResourceKind } from './rbac.service.js';
 import { PERMISSION_KEY } from './permission.decorator.js';
 import { expandPermissions, hasAnyPermission, type Permission } from './permissions.js';
+import { isScopedToken, tokenMayAddressOrg, tokenMayAddressProject } from './token-scope.js';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -88,6 +89,9 @@ export class PermissionGuard implements CanActivate {
    *   - `/orgs/:org_id/...`          → that org.
    *   - otherwise                    → `body.org_id` when present (e.g. POST /projects),
    *     else no context (member baseline).
+   *
+   * Job, service and service-principal tokens carry their own permissions; the
+   * same context decides only whether the token may address the route at all.
    */
   private async resolvePermissions(
     user: AuthUser,
@@ -96,12 +100,8 @@ export class PermissionGuard implements CanActivate {
     const projectId = extractProjectId(request);
     const resource = projectId ? undefined : extractResourceRef(request);
 
-    // Job, service, and service principal tokens carry explicit permissions,
-    // but may only address resources owned by the project (or org) they were minted for.
-    if (user.is_job_token || user.is_service_token || user.is_service_principal) {
-      if (resource) {
-        await this.assertTokenMayAddressResource(user, resource);
-      }
+    if (isScopedToken(user)) {
+      await this.assertTokenMayAddressRoute(user, request, projectId, resource);
       return new Set(user.permissions ?? []);
     }
 
@@ -119,7 +119,7 @@ export class PermissionGuard implements CanActivate {
       orgId = owner.org_id;
       contextProjectId = owner.project_id;
     } else {
-      orgId = extractOrgId(request);
+      orgId = extractPathOrgId(request) ?? extractBodyOrgId(request);
     }
 
     if (orgId) {
@@ -128,6 +128,34 @@ export class PermissionGuard implements CanActivate {
 
     // No org, project, or job context — use member baseline
     return expandPermissions('member');
+  }
+
+  /**
+   * A job, service or service-principal token may only address its own scope.
+   * A project in the path must be the token's project (for an org-only token,
+   * a project in its org). An org in the path must be the token's org, and so
+   * must `body.org_id` on a route with no project, resource or org in its path.
+   * A flat resource route must name a resource in the token's scope.
+   */
+  private async assertTokenMayAddressRoute(
+    user: AuthUser,
+    request: any,
+    projectId: string | undefined,
+    resource: ResourceRef | undefined,
+  ): Promise<void> {
+    if (projectId && !(await tokenMayAddressProject(user, projectId, this.rbacService))) {
+      throw new ForbiddenException('Token is not scoped to this project');
+    }
+
+    if (resource) {
+      await this.assertTokenMayAddressResource(user, resource);
+    }
+
+    const orgId = extractPathOrgId(request)
+      ?? (projectId || resource ? undefined : extractBodyOrgId(request));
+    if (orgId && !(await tokenMayAddressOrg(user, orgId, this.rbacService))) {
+      throw new ForbiddenException('Token is not scoped to this org');
+    }
   }
 
   /**
@@ -196,7 +224,7 @@ function extractResourceRef(request: { params?: Record<string, string>; routeOpt
   return undefined;
 }
 
-function extractOrgId(request: { params?: Record<string, string>; routeOptions?: { url?: string }; url?: string; body?: any }): string | undefined {
+function extractPathOrgId(request: { params?: Record<string, string>; routeOptions?: { url?: string }; url?: string }): string | undefined {
   const params = request.params ?? {};
   if (params.org_id) return params.org_id;
 
@@ -207,10 +235,10 @@ function extractOrgId(request: { params?: Record<string, string>; routeOptions?:
     }
   }
 
-  // Only consulted for routes that carry no project or job context.
-  if (request.body?.org_id) {
-    return request.body.org_id as string;
-  }
-
   return undefined;
+}
+
+/** Only consulted for routes that carry no project, resource or org in their path. */
+function extractBodyOrgId(request: { body?: any }): string | undefined {
+  return request.body?.org_id ? (request.body.org_id as string) : undefined;
 }

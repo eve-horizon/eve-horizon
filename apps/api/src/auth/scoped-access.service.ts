@@ -2,6 +2,8 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { AuthUser } from './auth.service.js';
 import { AuthService } from './auth.service.js';
 import { AccessService } from './access.service.js';
+import { RbacService } from './rbac.service.js';
+import { tokenMayAddressOrg, tokenMayAddressProject } from './token-scope.js';
 import { buildApiError } from '../system/api-errors.js';
 
 export type ScopedResourceContext = {
@@ -20,6 +22,7 @@ export class ScopedAccessService {
   constructor(
     private readonly authService: AuthService,
     private readonly accessService: AccessService,
+    private readonly rbacService: RbacService,
   ) {}
 
   async can(params: {
@@ -30,9 +33,13 @@ export class ScopedAccessService {
     resource?: ScopedResourceContext;
   }): Promise<boolean> {
     // Job tokens carry explicit permissions — check those directly
-    // rather than going through access groups (job principals aren't org members)
+    // rather than going through access groups (job principals aren't org members).
+    // They hold them only inside the org and project they were minted for.
     if (params.user?.is_job_token && params.user.permissions) {
       if (!params.user.permissions.includes(params.permission)) {
+        return false;
+      }
+      if (!(await this.jobTokenMayAddress(params.user, params.org_id, params.project_id))) {
         return false;
       }
       if (!params.user.scope) {
@@ -90,6 +97,16 @@ export class ScopedAccessService {
         },
       },
     );
+  }
+
+  /** A lookup that fails (unknown or ambiguous org or project) counts as outside the token's scope. */
+  private async jobTokenMayAddress(user: AuthUser, orgId: string, projectId?: string): Promise<boolean> {
+    try {
+      return (await tokenMayAddressOrg(user, orgId, this.rbacService))
+        && (!projectId || (await tokenMayAddressProject(user, projectId, this.rbacService)));
+    } catch {
+      return false;
+    }
   }
 
   private resolvePrincipal(user?: AuthUser): AccessPrincipal | null {

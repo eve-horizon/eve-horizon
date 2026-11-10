@@ -959,7 +959,12 @@ Permissions for user tokens are resolved against the resource the route addresse
 - `/orgs/:org_id/...` resolves against that org.
 - Routes with none of the above (for example `POST /projects`) may take `org_id` from the request body.
 
-Job, service, and service principal tokens use the explicit `permissions` list carried in the token, and may only address jobs owned by the job, project, or org the token was minted for.
+Job, service, and service principal tokens use the explicit `permissions` list carried in the token, and may only address the scope the token was minted for (anything else is 403):
+
+- `/projects/:project_id/...` and `/projects/:id/...` must name the token's own project. A service principal (org only, no project) may name any project in its org. A project slug is accepted only when exactly one project holds it; otherwise use the project id.
+- `/orgs/:org_id/...` and `/orgs/:id/...` (by id or slug) must name the token's org (for a token that carries only a project, that project's org). The same applies to `body.org_id` on routes with none of the above in their path.
+- `/jobs/:job_id/...`, `/pipeline-runs/:runId/...`, `/builds/:build_id/...` and `/threads/:thread_id/...` must name a resource owned by the token's job, project or org.
+- Org-scoped resource checks (org docs, org filesystem, agent memory, env DB) hold job tokens to the same org and project.
 
 CLI helpers:
 
