@@ -53,19 +53,24 @@ export function get(port, path) {
 
 /**
  * Send `target` as the raw request-target of a GET (absolute-form, fragments
- * and all) and return the response status.
+ * and all), with any `extraHeaders` ("Name: value" lines), and return the
+ * final response status (after any 100 Continue).
  */
-export function rawGet(port, target) {
+export function rawGet(port, target, extraHeaders = []) {
   return new Promise((resolve, reject) => {
     const socket = connect(port, '127.0.0.1', () => {
-      socket.write(`GET ${target} HTTP/1.1\r\nHost: dashboard.test\r\nConnection: close\r\n\r\n`);
+      const headers = ['Host: dashboard.test', 'Connection: close', ...extraHeaders].join('\r\n');
+      socket.write(`GET ${target} HTTP/1.1\r\n${headers}\r\n\r\n`);
     });
     let response = '';
     socket.setEncoding('latin1');
     socket.on('data', (chunk) => {
       response += chunk;
     });
-    socket.on('end', () => resolve(Number(response.split(' ', 2)[1])));
+    socket.on('end', () => {
+      const statuses = [...response.matchAll(/^HTTP\/1\.1 (\d{3})/gm)].map((match) => Number(match[1]));
+      resolve(statuses.find((status) => status >= 200) ?? statuses[0]);
+    });
     socket.on('error', reject);
   });
 }
@@ -78,9 +83,11 @@ export function rawGet(port, target) {
  * dropped); `on.proxyReq(proxyReq, req, res)` runs before anything is sent
  * (not for requests carrying an Expect header), and a proxyReq it destroys
  * goes to `on.error`, or to a 500 without one. Paths that would be sent are
- * pushed to `forwarded`.
+ * pushed to `forwarded`. The upstream answer comes from `upstream(path)`
+ * ({ status, headers, body }); `on.proxyRes(proxyRes, req, res)` sees it,
+ * and may change its headers, before it is copied to the response.
  */
-export function proxyMiddlewareStub(forwarded) {
+export function proxyMiddlewareStub(forwarded, upstream = (path) => ({ body: `proxied ${path}` })) {
   return {
     createProxyMiddleware(options) {
       const targetPath = new URL(options.target).pathname.replace(/\/+$/, '');
@@ -109,7 +116,11 @@ export function proxyMiddlewareStub(forwarded) {
           return;
         }
         forwarded.push(proxyReq.path);
-        res.end(`proxied ${proxyReq.path}`);
+        const answer = upstream(proxyReq.path);
+        const proxyRes = { statusCode: answer.status ?? 200, headers: { ...(answer.headers ?? {}) } };
+        options.on?.proxyRes?.(proxyRes, req, res);
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        res.end(answer.body ?? '');
       };
     },
   };
