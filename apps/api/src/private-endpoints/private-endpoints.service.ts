@@ -186,9 +186,10 @@ export class PrivateEndpointsService {
     }
     const start = Date.now();
     try {
-      const res = await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
+      // Redirects are not followed; a 3xx (like any non-2xx) is unhealthy.
+      const res = await fetch(probeUrl, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
       const elapsed = Date.now() - start;
-      const reachable = res.ok;
+      const reachable = res.status >= 200 && res.status < 300;
 
       if (reachable && ep.status !== 'ready') {
         await this.endpoints.updateStatus(ep.id, 'ready', null);
@@ -299,11 +300,12 @@ export class PrivateEndpointsService {
         checks.push({ name: 'Health probe', passed: false, detail: UNSAFE_HEALTH_PATH });
       } else if (probeUrl) {
         try {
-          const res = await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
+          const res = await fetch(probeUrl, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+          const healthy = res.status >= 200 && res.status < 300;
           checks.push({
             name: `Health probe ${ep.health_path}`,
-            passed: res.ok,
-            detail: res.ok ? `HTTP ${res.status} OK` : `HTTP ${res.status}`,
+            passed: healthy,
+            detail: healthy ? `HTTP ${res.status} OK` : `HTTP ${res.status}`,
           });
         } catch (err) {
           checks.push({
