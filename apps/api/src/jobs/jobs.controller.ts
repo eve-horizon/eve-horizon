@@ -376,7 +376,7 @@ export class JobsController {
   })
   async update(
     @Param('job_id') jobId: string,
-    @Body() body: UpdateJobRequest,
+    @Body(new ZodValidationPipe(UpdateJobRequestSchema)) body: UpdateJobRequest,
     @CurrentUser() caller?: AuthUser,
   ): Promise<JobResponse> {
     return this.jobsService.update(jobId, body, caller);

@@ -212,9 +212,15 @@ export type WaitForJobResponse =
 // Service
 // ============================================================================
 
-/** Update fields that change what a job runs or how (anything but cosmetic ones). */
+/**
+ * Update fields that change what a job runs or how (anything but cosmetic ones).
+ * The title opens the agent's prompt, and the `chat` label sends the run's
+ * output to the thread its hints name.
+ */
 const EXECUTION_FIELDS = [
+  'title',
   'description',
+  'labels',
   'assignee',
   'harness',
   'harness_profile',
@@ -1066,8 +1072,8 @@ export class JobsService {
    * how it runs, they become the actor (with their user-secrets marker), and
    * the job-token permissions the job carries must be ones they could grant,
    * otherwise 400 before anything changes. The actor's own edits, and
-   * cosmetic ones (title, labels, priority, due date, review setting, close
-   * reason, or moving it anywhere but ready or active), keep the actor.
+   * cosmetic ones (priority, due date, review setting, close reason, or moving
+   * it anywhere but ready or active), keep the actor.
    */
   private async takeOverChangedJob(job: Job, updates: UpdateJobRequest, caller?: AuthUser): Promise<void> {
     if (!caller || !changesWhatRuns(job, updates)) {
