@@ -246,6 +246,7 @@ export class SlackGatewayProvider implements GatewayProvider {
 
     const resolved: ChatFile[] = [];
     let totalSize = 0;
+    let downloadedTotal = 0;
 
     for (const file of files) {
       if (!file.url || !file.id) {
@@ -268,6 +269,14 @@ export class SlackGatewayProvider implements GatewayProvider {
           resolved.push({ ...file, source_url: file.url, source_provider: 'slack' });
           continue;
         }
+      }
+
+      // The URL comes from the event body: fetch (with the bot token) only
+      // from Slack's file host.
+      if (!isSlackFileUrl(file.url)) {
+        logger.warn({ event: 'file.host_not_allowed', fileId: file.id });
+        resolved.push({ ...file, source_url: file.url, source_provider: 'slack', error: 'host_not_allowed' });
+        continue;
       }
 
       // Download from Slack — disable redirect following to catch CDN auth failures
@@ -333,8 +342,20 @@ export class SlackGatewayProvider implements GatewayProvider {
       // Upload via presigned URL (no AWS SDK needed in gateway)
       const key = `chat-attachments/${context.orgId}/slack:${context.accountId}/${context.channelId}/${context.messageTs}/${safeName}`;
       try {
+        // Read at most the per-file limit, whatever size the event declared.
+        const body = await readBodyWithin(response, MAX_FILE_SIZE);
+        if (!body) {
+          logger.warn({ event: 'file.too_large', fileId: file.id });
+          resolved.push({ ...file, source_url: file.url, source_provider: 'slack', error: 'too_large' });
+          continue;
+        }
+        downloadedTotal += body.byteLength;
+        if (downloadedTotal > MAX_TOTAL_SIZE) {
+          logger.warn({ event: 'file.total_limit_exceeded', fileId: file.id, totalSize: downloadedTotal });
+          resolved.push({ ...file, source_url: file.url, source_provider: 'slack' });
+          continue;
+        }
         const uploadUrl = await context.getUploadUrl(key, contentType);
-        const body = await response.arrayBuffer();
         const uploadResp = await fetch(uploadUrl, {
           method: 'PUT',
           headers: { 'Content-Type': contentType },
@@ -377,6 +398,56 @@ const MAX_TOTAL_SIZE = 100 * 1024 * 1024; // 100 MB
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Hosts Slack serves `url_private` / `url_private_download` from. */
+const SLACK_FILE_HOSTS: ReadonlySet<string> = new Set(['files.slack.com']);
+
+/** True for an https URL on Slack's file host (default port, no credentials). */
+export function isSlackFileUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  return (
+    url.protocol === 'https:'
+    && SLACK_FILE_HOSTS.has(url.hostname.toLowerCase())
+    && url.port === ''
+    && url.username === ''
+    && url.password === ''
+  );
+}
+
+/** Read a response body of at most `limit` bytes; null when it is larger. */
+async function readBodyWithin(response: Response, limit: number): Promise<ArrayBuffer | null> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body?.cancel();
+    return null;
+  }
+  if (!response.body) return new ArrayBuffer(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body.buffer;
+}
 
 function headerString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];

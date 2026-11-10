@@ -63,6 +63,7 @@ The webhook endpoint handles URL verification challenges, validates request sign
 
 - **Signing secret**: Used to verify inbound webhook signatures. Stored per org in the Slack app config (`oauth_app_configs.config_json.signing_secret`) and applied to that org's Slack integrations. Each event, interactive action and slash command is verified with the secret of the integration for the workspace it names (`team_id`); a request naming a workspace with no active integration, or signed with another integration's secret, is refused with 401. Orgs that share one Slack app store the same signing secret in each org's config. The URL verification handshake, which names no workspace, is answered when it verifies with any connected integration's secret.
 - **Bot token**: `xoxb-...` token used for outbound messages and Slack API calls. Stored in `tokens_json.access_token`.
+- **File attachments**: files shared in a message are downloaded with the bot token only from `https://files.slack.com` (redirects are not followed), at most 50 MB per file and 100 MB per message, and stored as chat attachments under the org's prefix. Other file URLs (for example remote files hosted elsewhere) are passed on as links, not fetched.
 
 ### Channel Notifications for Non-Chat Workflows
 
