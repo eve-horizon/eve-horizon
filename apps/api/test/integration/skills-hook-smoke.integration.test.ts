@@ -58,7 +58,7 @@ describe('integration skills hook smoke', () => {
     expect(cliSkills).toContain("'pi'");
     // Resolves bundled skills binary and calls add
     expect(cliSkills).toContain('resolveSkillsBinary');
-    expect(cliSkills).toContain("add ${JSON.stringify(skill.source)}");
+    expect(cliSkills).toContain("execFileSync(skillsBin, ['add', skill.source,");
   });
 
   it('eve-cli exposes fast materialization for manifest and local skills.txt sources', () => {
