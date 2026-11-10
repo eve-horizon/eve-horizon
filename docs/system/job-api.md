@@ -365,6 +365,14 @@ permissions or hold its token scope, 409 if the actor changed after the job was
 read), and the attachment and actor change together or not at all. The actor's
 own attachments, including an agent attaching to its own job, keep the actor.
 
+A job's attachments are taken in by other jobs, not by the job itself: a child
+job copies named parent attachments (`agent_context.parent_attachments`) into
+`.eve/context/parent/`, and a `job_attachments:/<job-id>/<name>` resource ref
+writes one into `.eve/resources/`. A job takes in only attachments its own
+actor created (`created_by`); a job no user started takes in only attachments
+created by work no user started. Others are skipped with a logged reason (a
+skipped resource ref is reported as `resource_access_denied`).
+
 ## Dependency Model
 
 Dependencies are stored as relations between jobs (`blocks`, `conditional_blocks`, `waits_for`, etc.).

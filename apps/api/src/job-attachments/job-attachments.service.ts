@@ -41,9 +41,11 @@ export class JobAttachmentsService {
   }
 
   /**
-   * The worker writes a job's attachments into its workspace when it runs, so
-   * adding or removing one changes what the job runs: it is judged and applied
-   * as such for the caller (see JobsService.changeWhatJobRuns).
+   * A job's attachments are what its children (agent_context.parent_attachments)
+   * and jobs that reference them (job_attachments: resource refs) take in, so
+   * adding or removing one is judged and applied like a change to what the job
+   * runs (see JobsService.changeWhatJobRuns). Each reader also takes in only
+   * the attachments its own actor created.
    */
   private changeAttachments<T>(
     job: Job,

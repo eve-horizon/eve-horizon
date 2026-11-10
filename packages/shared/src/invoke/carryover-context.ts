@@ -8,7 +8,8 @@
  * Supports:
  *   - `memory`   — org-doc memory entries for a given agent + categories
  *   - `docs`     — arbitrary org-doc paths (single or recursive)
- *   - `parent_attachments` — named attachments from the parent job
+ *   - `parent_attachments` — named attachments from the parent job (only
+ *     those the job's own actor created)
  *   - `threads.coordination` — coordination thread messages
  */
 
@@ -18,6 +19,7 @@ import type { HarnessInvocation } from '../types/harness.js';
 import type { CarryoverContextDb } from './types.js';
 import { readPositiveInt, parseDurationToMs } from './types.js';
 import { projectThreadId } from './thread-ownership.js';
+import { mayReadJobAttachment } from './job-attachment-readers.js';
 
 /**
  * Materialize declarative context carryover from job hints into `.eve/context/`.
@@ -122,6 +124,13 @@ export async function writeCarryoverContext(
         if (!name) continue;
         const attachment = await db.findJobAttachment(invocation.parentJobId, name);
         if (!attachment) continue;
+        if (!mayReadJobAttachment(job?.actor_user_id, attachment)) {
+          console.warn(
+            `[context] Skipping parent attachment "${name}" of ${invocation.parentJobId}: ` +
+            `created by someone other than this job's actor`,
+          );
+          continue;
+        }
         await fs.writeFile(path.join(parentDir, name), attachment.content);
       }
     }

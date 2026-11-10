@@ -209,10 +209,12 @@ export interface JobAttachmentRow {
 
 /** DB facade for carryover context materialisation. */
 export interface CarryoverContextDb extends JobHintsReader, JobByIdReader, ThreadMessageReader, ThreadProjectReader {
+  /** The job being run, with the actor it runs as. */
+  findJobById(jobId: string): Promise<{ hints: Record<string, unknown> | null; actor_user_id: string | null } | undefined>;
   findProjectById(projectId: string): Promise<{ org_id: string } | undefined>;
   listOrgDocsByPrefix(orgId: string, prefix: string, limit: number): Promise<OrgDocumentRow[]>;
   findOrgDocByPath(orgId: string, path: string): Promise<{ content: string } | undefined>;
-  findJobAttachment(jobId: string, name: string): Promise<{ content: string } | undefined>;
+  findJobAttachment(jobId: string, name: string): Promise<{ content: string; created_by: string | null } | undefined>;
 }
 
 /** DB facade for EveMessageRelay. */

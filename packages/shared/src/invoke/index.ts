@@ -69,6 +69,7 @@ export {
 
 // Carryover context
 export { writeCarryoverContext } from './carryover-context.js';
+export { mayReadJobAttachment } from './job-attachment-readers.js';
 export { projectThreadId } from './thread-ownership.js';
 
 // Security policy

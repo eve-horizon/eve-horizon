@@ -169,9 +169,13 @@ eve job runner-logs myproj-a3f2dd12      # Stream runner pod logs (kubectl)
 ### Attachments
 
 Jobs can store named attachments (metadata + content) for artifacts and summaries.
-Attachments are written into the job's workspace when it runs, so attaching to
-or removing from someone else's job makes you its actor, as editing it does
-(see "Job Actor on Update" in `job-api.md`).
+Other jobs take attachments in: a child job through
+`agent_context.parent_attachments`, and any job through a
+`job_attachments:/<job-id>/<name>` resource ref. A job takes in only the
+attachments its own actor created and skips the rest. Attaching to or removing
+from someone else's job makes you its actor, as editing it does, and is refused
+on the jobs of a workflow or pipeline run (see "Job Actor on Update" in
+`job-api.md`).
 
 ```bash
 eve job attach myproj-a3f2dd12 --name result.json --content '{"ok":true}'

@@ -59,6 +59,7 @@ import {
   ToolchainProvisionError,
   probeBrowserRuntime,
   rejectBrowserPathOverrides,
+  mayReadJobAttachment,
 } from '@eve/shared';
 // Shared invoke module — single source of truth for agent-execution logic
 import {
@@ -983,6 +984,7 @@ export class InvokeService {
     await fs.mkdir(resourcesDir, { recursive: true });
 
     const usedMountPaths = new Map<string, string>();
+    let readingJob: { actor_user_id: string | null } | null | undefined;
 
     for (const ref of refs) {
       const required = ref.required !== false;
@@ -1120,6 +1122,14 @@ export class InvokeService {
         const attachment = await this.attachments.findByJobIdAndName(parsed.jobId, parsed.name);
         if (!attachment) {
           throw new Error('resource_not_found');
+        }
+        // Take in only attachments this job's own actor created.
+        readingJob ??= await this.jobs.findById(invocation.jobId);
+        if (!readingJob || !mayReadJobAttachment(readingJob.actor_user_id, attachment)) {
+          console.warn(
+            `[resources] Skipping ${ref.uri} for job ${invocation.jobId}: attachment created by someone other than this job's actor`,
+          );
+          throw new Error('resource_access_denied');
         }
 
         await fs.mkdir(path.dirname(localPath), { recursive: true });

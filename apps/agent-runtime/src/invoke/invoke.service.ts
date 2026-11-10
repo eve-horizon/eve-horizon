@@ -32,6 +32,7 @@ import {
   type AttachmentIndex,
   sanitizeFilename,
   generateEventId,
+  mayReadJobAttachment,
 } from '@eve/shared';
 import {
   type Db,
@@ -381,7 +382,7 @@ export class InvokeService {
       },
       findJobAttachment: async (jobId, name) => {
         const att = await this.attachments.findByJobIdAndName(jobId, name);
-        return att ? { content: att.content } : undefined;
+        return att ? { content: att.content, created_by: att.created_by } : undefined;
       },
       queryJobHints: async (jobId) => {
         const rows = await this.db<{ hints: Record<string, unknown> | null; project_id: string }[]>`
@@ -694,6 +695,7 @@ export class InvokeService {
     await fs.mkdir(resourcesDir, { recursive: true });
 
     const usedMountPaths = new Map<string, string>();
+    let readingJob: { actor_user_id: string | null } | null | undefined;
 
     for (const ref of refs) {
       const required = ref.required !== false;
@@ -830,6 +832,14 @@ export class InvokeService {
         const attachment = await this.attachments.findByJobIdAndName(parsed.jobId, parsed.name);
         if (!attachment) {
           throw new Error('resource_not_found');
+        }
+        // Take in only attachments this job's own actor created.
+        readingJob ??= await this.jobs.findById(invocation.jobId);
+        if (!readingJob || !mayReadJobAttachment(readingJob.actor_user_id, attachment)) {
+          console.warn(
+            `[resources] Skipping ${ref.uri} for job ${invocation.jobId}: attachment created by someone other than this job's actor`,
+          );
+          throw new Error('resource_access_denied');
         }
 
         await fs.mkdir(path.dirname(localPath), { recursive: true });
