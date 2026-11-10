@@ -92,13 +92,14 @@ This ensures new users can always link their accounts, even before any agents ar
 **Processing:**
 1. Parse URL-encoded form body and extract `payload` JSON field
 2. Validate Slack request signature (same signing secret as the webhook endpoint)
-3. Route by `action_id` to the appropriate handler
+3. Acknowledge the action
 
-**Supported action IDs:**
-- `membership_approve` — approve a pending org membership request
-- `membership_deny` — deny a pending org membership request
+No action IDs are handled yet: Eve posts no interactive messages, so a
+verified request is logged (`slack.interactive.unhandled_actions`) and
+acknowledged without calling the API. Membership requests are approved or
+denied through `POST /orgs/:org_id/membership-requests/:request_id/approve|deny`.
 
-**Response:** Returns `200 OK` with an optional message update to replace the interactive message in Slack.
+**Response:** Returns `200 OK` (`{ "ok": true }`); Slack ignores the body for block actions.
 
 ## Gateway Provider Interface
 

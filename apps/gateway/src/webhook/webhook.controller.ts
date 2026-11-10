@@ -307,7 +307,8 @@ export class WebhookController {
   }
 
   // ---------------------------------------------------------------------------
-  // Slack Interactive Components (Tier 3: membership approval buttons)
+  // Slack Interactive Components. Requests are verified and acknowledged;
+  // no action is handled yet (Eve posts no interactive messages).
   // ---------------------------------------------------------------------------
 
   @Post('slack/interactive')
@@ -345,16 +346,13 @@ export class WebhookController {
       rawBody: rawBodyText(req.rawBody),
     });
 
-    if (payload.type !== 'block_actions' || !payload.actions?.length) {
-      return { ok: true };
-    }
-
-    for (const action of payload.actions) {
-      if (action.action_id === 'membership_approve') {
-        await this.handleMembershipAction(action.value, 'approve', teamId);
-      } else if (action.action_id === 'membership_deny') {
-        await this.handleMembershipAction(action.value, 'deny', teamId);
-      }
+    // Slack ignores the response body for block actions; acknowledge only.
+    if (payload.type === 'block_actions' && payload.actions?.length) {
+      logger.log({
+        event: 'slack.interactive.unhandled_actions',
+        teamId,
+        actionIds: payload.actions.map((action) => action.action_id),
+      });
     }
 
     return { ok: true };
@@ -470,54 +468,5 @@ export class WebhookController {
       }
     }
     throw new UnauthorizedException('Invalid signature');
-  }
-
-  private async handleMembershipAction(
-    requestId: string,
-    action: 'approve' | 'deny',
-    teamId?: string,
-  ): Promise<void> {
-    try {
-      // Resolve the org from the team ID
-      let orgId: string | null = null;
-      if (teamId) {
-        const resolution = await postJson<{ integration_id: string; org_id: string }>(
-          '/internal/integrations/resolve',
-          { provider: 'slack', account_id: teamId },
-        );
-        orgId = resolution.org_id;
-      }
-
-      if (!orgId) {
-        logger.warn({ event: 'slack.interactive.no_org', requestId, teamId });
-        return;
-      }
-
-      if (action === 'approve') {
-        await postJson(`/internal/membership-requests/${requestId}/approve`, {
-          org_id: orgId,
-          approved_by: 'slack_admin',
-          role: 'member',
-        });
-      } else {
-        await postJson(`/internal/membership-requests/${requestId}/deny`, {
-          org_id: orgId,
-          denied_by: 'slack_admin',
-        });
-      }
-
-      logger.log({
-        event: `slack.interactive.membership_${action}d`,
-        requestId,
-        orgId,
-      });
-    } catch (err) {
-      logger.warn({
-        event: 'slack.interactive.action_failed',
-        requestId,
-        action,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
   }
 }

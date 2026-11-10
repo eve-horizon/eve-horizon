@@ -208,10 +208,8 @@ describe('Slack request verification uses the named integration', () => {
         const req = formRequest(TEAMS[teamId].secret, membershipApproval(teamId));
 
         await expect(controller.handleSlackInteractive(req)).resolves.toEqual({ ok: true });
-        expect(api.postJson).toHaveBeenCalledWith(
-          '/internal/membership-requests/mreq_123/approve',
-          expect.objectContaining({ org_id: TEAMS[teamId].org_id }),
-        );
+        // Actions are acknowledged only; none sends an API request.
+        expect(api.postJson).not.toHaveBeenCalled();
       },
     );
   });

@@ -49,7 +49,7 @@ Default browse/search returns one provider page and may include `next_page_token
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /gateway/providers/slack/webhook` | Receives all Slack Events API payloads (mentions, messages, URL verification) |
-| `POST /gateway/providers/slack/interactive` | Receives Slack interactive payloads (button clicks, e.g., membership approval) |
+| `POST /gateway/providers/slack/interactive` | Receives Slack interactive payloads (button clicks); verified and acknowledged, no actions handled yet |
 
 The webhook endpoint handles URL verification challenges, validates request signatures against the signing secret, resolves `team_id` to an org via the `integrations` table, and dispatches the event through the gateway provider pipeline.
 

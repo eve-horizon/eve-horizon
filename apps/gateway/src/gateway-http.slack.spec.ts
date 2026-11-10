@@ -138,9 +138,8 @@ describe('gateway HTTP stack accepts signed Slack requests', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(api.postJson).toHaveBeenCalledWith(
-      '/internal/membership-requests/mreq_http/approve',
-      expect.objectContaining({ org_id: ORG_ID }),
-    );
+    // Actions are acknowledged only; none sends a membership API request.
+    const paths = api.postJson.mock.calls.map(([path]) => String(path));
+    expect(paths.filter((path) => path.includes('membership'))).toEqual([]);
   });
 });
