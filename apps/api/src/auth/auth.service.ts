@@ -10,6 +10,7 @@ import {
 
 import {
   loadConfig,
+  clampServiceTokenPermissions,
   generateUserId,
   generateIdentityId,
   generateServicePrincipalTokenId,
@@ -345,7 +346,7 @@ export class AuthService {
       project_id: params.projectId,
       env_name: params.envName,
       service_name: params.serviceName,
-      permissions: params.permissions,
+      permissions: clampServiceTokenPermissions(params.permissions),
       exp,
       iat: now,
       type: 'service',

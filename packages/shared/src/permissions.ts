@@ -134,3 +134,31 @@ export const DEFAULT_SERVICE_PERMISSIONS: readonly Permission[] = [
   'agents:read',
   'events:read',
 ];
+
+/**
+ * Permissions a deployed-service token never carries, whatever the manifest
+ * declares in `x-eve.permissions`: platform access and org management that
+ * reaches beyond the service's own project. Every `*:admin` permission is
+ * excluded as well (see {@link clampServiceTokenPermissions}).
+ */
+const SERVICE_TOKEN_EXCLUDED: ReadonlySet<string> = new Set<Permission>([
+  'system:read',
+  'orgs:create',
+  'orgs:write',
+  'orgs:invite',
+  'projects:create',
+  'integrations:write',
+  'endpoints:write',
+]);
+
+/**
+ * Drop the permissions a deployed-service token may not carry: every admin-level
+ * (`*:admin`) permission and those in {@link SERVICE_TOKEN_EXCLUDED}. Applied
+ * when a service token is minted and again when one is verified, so a token
+ * signed before a narrower set took effect is held to it too.
+ */
+export function clampServiceTokenPermissions(requested: readonly string[]): string[] {
+  return [...new Set(requested)].filter(
+    (permission) => !permission.endsWith(':admin') && !SERVICE_TOKEN_EXCLUDED.has(permission),
+  );
+}

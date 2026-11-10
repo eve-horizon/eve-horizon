@@ -50,6 +50,8 @@ Declared permissions are **merged** with the read-only defaults. You only list t
 
 After updating the manifest, **redeploy** to mint a new token with the updated scopes.
 
+**Not available to services:** a service token never carries admin-level permissions (any `*:admin`), `system:read`, or org management (`orgs:create`, `orgs:write`, `orgs:invite`, `projects:create`, `integrations:write`, `endpoints:write`). These are dropped from `x-eve.permissions` when the token is minted, and ignored on tokens minted earlier. A service token also acts only on its own project (and that project's org); see [Auth](./auth.md#resolution-context).
+
 ## Using the Token
 
 The token is available as `EVE_SERVICE_TOKEN` in the service environment. Use it with `EVE_API_URL` for server-to-server calls:
@@ -89,6 +91,6 @@ No manual rotation needed — regular deploys keep the token fresh.
 
 ## Troubleshooting
 
-**403 "Missing required permission"**: The service token doesn't have the required scope. Add the missing permission to `x-eve.permissions` in the manifest and redeploy.
+**403 "Missing required permission"**: The service token doesn't have the required scope. Add the missing permission to `x-eve.permissions` in the manifest and redeploy (unless it is one of the permissions not available to services, above).
 
 **Empty `EVE_SERVICE_TOKEN`**: Check that `EVE_INTERNAL_API_KEY` is configured in the platform. The deployer logs a warning if token minting fails.

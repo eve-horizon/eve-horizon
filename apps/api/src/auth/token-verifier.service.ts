@@ -9,6 +9,7 @@ import {
   generateUserId,
   generateIdentityId,
   AccessBindingScopeSchema,
+  clampServiceTokenPermissions,
   type AccessBindingScope,
 } from '@eve/shared';
 import {
@@ -590,7 +591,8 @@ export class TokenVerifierService {
       project_id: payload.project_id as string,
       env_name: payload.env_name as string,
       service_name: payload.service_name as string,
-      permissions: perms as string[],
+      // Held to the service-token ceiling even if the token was signed before it.
+      permissions: clampServiceTokenPermissions(perms as string[]),
       exp: payload.exp,
       iat: payload.iat,
       type: 'service',
