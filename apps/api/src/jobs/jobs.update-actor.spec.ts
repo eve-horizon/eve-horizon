@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
+import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
+import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { JobsService } from './jobs.service';
 import { JobsController } from './jobs.controller';
 import { AccessService } from '../auth/access.service';
@@ -120,9 +122,21 @@ describe('PATCH /jobs/:job_id and the job actor', () => {
     expect(actorWrites()).toEqual([{ actor: 'user_mate', userSecretsExcluded: false }]);
   });
 
+  it("makes a teammate who renames the job its actor, since the title opens the prompt", async () => {
+    await update(service(), 'a-1', { title: 'Summarise the open issues' }, TEAMMATE);
+
+    expect(actorWrites()).toEqual([{ actor: 'user_mate', userSecretsExcluded: false }]);
+  });
+
+  it("makes a teammate who relabels the job its actor, since the chat label routes the run's output", async () => {
+    await update(service(), 'a-1', { labels: ['chat'] }, TEAMMATE);
+
+    expect(actorWrites()).toEqual([{ actor: 'user_mate', userSecretsExcluded: false }]);
+  });
+
   it("keeps the actor for the actor's own edit and for cosmetic edits", async () => {
     await update(service(), 'a-1', { description: 'sharper prompt' }, OWNER);
-    await update(service(), 'a-1', { title: 'Renamed', labels: ['x'], priority: 1, due_at: null }, TEAMMATE);
+    await update(service(), 'a-1', { priority: 1, due_at: null, review_required: 'human', close_reason: 'later' }, TEAMMATE);
 
     expect(actorWrites()).toEqual([]);
   });
@@ -144,4 +158,22 @@ describe('PATCH /jobs/:job_id and the job actor', () => {
 
     expect(jobsService.update).toHaveBeenCalledWith('a-1', { description: 'x' }, TEAMMATE);
   });
+
+  it("applies the update schema's limits to the body", () => {
+    const body = (input: Record<string, unknown>) => validatedBody(JobsController, 'update', input);
+
+    expect(() => body({ title: 'x'.repeat(501) })).toThrow(BadRequestException);
+    expect(() => body({ priority: 9 })).toThrow(BadRequestException);
+    expect(body({ title: 'x'.repeat(500) })).toEqual({ title: 'x'.repeat(500) });
+  });
 });
+
+/** Runs a route's body through the pipes declared on its @Body() parameter. */
+function validatedBody(controller: object, method: string, input: unknown): unknown {
+  const meta = (Reflect.getMetadata(ROUTE_ARGS_METADATA, controller, method) ?? {}) as Record<
+    string,
+    { pipes?: Array<{ transform(value: unknown, metadata: { type: string }): unknown }> }
+  >;
+  const bodyArg = Object.entries(meta).find(([key]) => Number(key.split(':')[0]) === RouteParamtypes.BODY)?.[1];
+  return (bodyArg?.pipes ?? []).reduce((value, pipe) => pipe.transform(value, { type: 'body' }), input);
+}
