@@ -40,6 +40,8 @@ import {
   resolveBuildImageRef,
   resolveProjectSecrets,
   expandManifestReferences,
+  readRepoFile,
+  RepoFileError,
   type RelayDb,
   type SecretResolveItem,
   type ToolchainCacheEvent,
@@ -57,6 +59,8 @@ import { runStreamingCommand } from '../execution/streaming-command.js';
 import { buildJobCommandEnv } from '../execution/job-command-env.js';
 
 const execFileAsync = promisify(execFile);
+/** Largest workspace manifest the drift guard reads (matches the API spec cap). */
+const WORKSPACE_MANIFEST_MAX_BYTES = 10 * 1024 * 1024;
 
 function isMissingSecretOverrideError(
   error: unknown,
@@ -2208,10 +2212,16 @@ export class ActionExecutorService {
     const manifestPath = join(workspace, '.eve', 'manifest.yaml');
     let rawManifestYaml: string;
     try {
-      rawManifestYaml = await fs.readFile(manifestPath, 'utf-8');
-    } catch {
-      // No manifest in workspace — nothing to sync
-      return;
+      // Only an in-repo regular file; what is read may be stored as a manifest.
+      rawManifestYaml = await readRepoFile(workspace, join('.eve', 'manifest.yaml'), WORKSPACE_MANIFEST_MAX_BYTES);
+    } catch (error) {
+      if (error instanceof RepoFileError && error.code === 'not_found') {
+        // No manifest in workspace — nothing to sync
+        return;
+      }
+      throw new Error(
+        `Workspace manifest .eve/manifest.yaml refused: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     let manifestYaml: string;
