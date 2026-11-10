@@ -141,6 +141,8 @@ export async function handleChat(
         {
           method: 'POST',
           headers: internalKey ? { 'x-eve-internal-token': internalKey } : undefined,
+          // Never carry the token across a redirect; a 3xx fails the command.
+          redirect: 'manual',
           body: {
             provider,
             account_id: teamId,

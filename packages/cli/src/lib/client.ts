@@ -8,6 +8,8 @@ type RequestOptions = {
   headers?: Record<string, string>;
   allowError?: boolean;
   tokenOverride?: string;
+  /** Fetch redirect mode. 'manual' returns a 3xx as-is (an error unless allowError). */
+  redirect?: 'follow' | 'manual' | 'error';
 };
 
 /** A parsed Server-Sent Events frame. */
@@ -129,6 +131,7 @@ export async function requestRaw(
     method: options.method ?? 'GET',
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    ...(options.redirect ? { redirect: options.redirect } : {}),
   });
 
   const text = await response.text();

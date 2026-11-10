@@ -210,7 +210,8 @@ overlay sets it, `k8s/base` ships it off) and the request carries the
 internal service token (`x-eve-internal-token`). The CLI sends the token from
 `EVE_INTERNAL_API_KEY` in your environment, and only to a local API
 (localhost, 127.0.0.1, ::1, `*.lvh.me`, `*.localhost`); for any other API URL
-it refuses while the key is set. A sender email (`--external-email`)
+it refuses while the key is set. The request never follows a redirect: a 3xx
+answer fails the command. A sender email (`--external-email`)
 is only honoured while simulate is on.
 
 ## Notes
