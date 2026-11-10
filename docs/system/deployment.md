@@ -235,7 +235,7 @@ rollout, or in-cluster calls to `/internal/*` fail:
    reason, an ingress rule that blocks `/internal` on the API host alone does
    not cover the dashboard host; this port split does. The dashboard server
    also answers `404` itself for `/api/internal` and anything under it, in
-   any spelling.)
+   any spelling, and for any `/api` path with a `..` segment.)
 4. Allow the internal port wherever NetworkPolicies restrict traffic to
    `eve-api`, including from app namespaces.
 

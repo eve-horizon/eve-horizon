@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { internalRouteProxyHooks, isInternalApiPath } from '../server/internal-api-guard.js';
+import { internalRouteProxyHooks, isRefusedPath } from '../server/internal-api-guard.js';
 
-describe('isInternalApiPath', () => {
+describe('isRefusedPath', () => {
   it('matches /api/internal however it is spelled', () => {
     for (const path of [
       '/api/internal',
@@ -10,14 +10,20 @@ describe('isInternalApiPath', () => {
       '/api/%25%36%39nternal/x',
       '/api/x/./../INTERNAL/y',
     ]) {
-      expect(isInternalApiPath(path), path).toBe(true);
+      expect(isRefusedPath(path), path).toBe(true);
+    }
+  });
+
+  it('refuses any /api path with a dot-dot segment, judged without the /api mount', () => {
+    for (const path of ['/api/projects/%2e%2e/jobs', '/API/a/../b', '/api/.%2E/x', '/api/%2e%2e/internal/x', '/api/x/..']) {
+      expect(isRefusedPath(path), path).toBe(true);
     }
   });
 
   it('refuses a path still changing after five rounds of decoding', () => {
     let encoded = 'i';
     for (let i = 0; i < 6; i += 1) encoded = encodeURIComponent(encoded).replace('i', '%69');
-    expect(isInternalApiPath(`/api/${encoded}nternal/x`)).toBe(true);
+    expect(isRefusedPath(`/api/${encoded}nternal/x`)).toBe(true);
   });
 
   it('leaves other paths alone', () => {
@@ -32,8 +38,11 @@ describe('isInternalApiPath', () => {
       '/api/orgs/o1/files/50%25off.txt',
       '/api/docs/100%2525%2520off',
       '/api/files/%E0%A4%A',
+      '/api/files/a..b',
+      '/api/files/...',
+      '/assets/../index.html',
     ]) {
-      expect(isInternalApiPath(path), path).toBe(false);
+      expect(isRefusedPath(path), path).toBe(false);
     }
   });
 });
@@ -56,7 +65,7 @@ function fakeResponse() {
 describe('internalRouteProxyHooks', () => {
   it('drops upstream requests under the API /internal and answers them 404', () => {
     const hooks = internalRouteProxyHooks('http://eve-api:4701');
-    for (const path of ['/internal', '/internal/x?y=1', '/%69nternal/x', '/INTERNAL/x', '/x/../internal/y', '/internal/../../x']) {
+    for (const path of ['/internal', '/internal/x?y=1', '/%69nternal/x', '/INTERNAL/x', '/x/../internal/y', '/internal/../../x', '/projects/%2e%2e/jobs']) {
       const proxyReq = fakeProxyReq(path);
       hooks.proxyReq(proxyReq);
       expect(proxyReq.destroyed, path).toBeInstanceOf(Error);
@@ -68,7 +77,7 @@ describe('internalRouteProxyHooks', () => {
 
   it('lets other upstream paths through', () => {
     const hooks = internalRouteProxyHooks('http://eve-api:4701/');
-    for (const path of ['/auth/me', '/internalize', '/projects/internal', '/orgs/o1/jobs?q=/internal/x', '/orgs/o1/files/50%25off.txt']) {
+    for (const path of ['/auth/me', '/internalize', '/projects/internal', '/orgs/o1/jobs?q=/internal/x', '/orgs/o1/files/50%25off.txt', '/files/a..b']) {
       const proxyReq = fakeProxyReq(path);
       hooks.proxyReq(proxyReq);
       expect(proxyReq.destroyed, path).toBeNull();

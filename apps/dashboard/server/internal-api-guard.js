@@ -3,20 +3,22 @@
 // two points:
 //
 // 1. refuseInternalApi, before routing: 404 unless the request target is a
-//    plain origin-form path ("/...", no fragment) that is not /api/internal
-//    or under it.
-// 2. internalRouteProxyHooks, in the proxy: a request whose upstream path is
-//    under the API's /internal is dropped before anything is sent and gets a
-//    404. (http-proxy skips this hook for requests with an Expect header;
-//    point 1 still covers those.)
+//    plain origin-form path ("/...", no fragment). Under /api the path is
+//    also judged as the API will receive it, with the /api mount removed: it
+//    is refused if it holds a ".." segment at all, or names /internal. This
+//    check alone covers requests the proxy hook does not see.
+// 2. internalRouteProxyHooks, in the proxy: a request whose upstream path
+//    holds a ".." segment or is under the API's /internal is dropped before
+//    anything is sent and gets a 404. (http-proxy skips this hook for
+//    requests with an Expect header; point 1 covers those.)
 //
 // Paths are compared however they are spelled: percent-escapes of ASCII
 // characters decoded (repeatedly), backslashes read as slashes, empty and "."
-// segments dropped, letter case ignored, and with ".." segments both kept and
-// resolved. A malformed or non-ASCII escape cannot spell a route name, so it
-// stays as it is and the path is judged on the rest (a path holding "%25"
-// therefore still passes). A path still changing after five rounds of
-// decoding is refused.
+// segments dropped, letter case ignored, and /internal looked for with ".."
+// segments both kept and resolved. A malformed or non-ASCII escape cannot
+// spell a route name, so it stays as it is and the path is judged on the
+// rest (a path holding "%25" therefore still passes). A path still changing
+// after five rounds of decoding is refused.
 
 const MAX_DECODE_ROUNDS = 5;
 const REFUSED = 'EVE_DASHBOARD_INTERNAL_ROUTE';
@@ -33,30 +35,47 @@ function decodeFully(path) {
   }
 }
 
-/** Lower-case segments of `path` with ".." kept, and with ".." resolved; null if it never settles. */
-function segmentViews(path) {
+/** Lower-case, decoded segments of `path` without its query, empty and "." segments dropped; null if it never settles. */
+function segmentsOf(path) {
   const decoded = decodeFully(path.split('?', 1)[0]);
   if (decoded === null) return null;
-  const kept = [];
+  return decoded
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .split('/')
+    .filter((segment) => segment !== '' && segment !== '.');
+}
+
+function startsWith(segments, prefix) {
+  return prefix.every((part, i) => segments[i] === part);
+}
+
+/** True when `segments`, with ".." segments kept or resolved, are `prefix` or under it. */
+function isUnder(segments, prefix) {
   const resolved = [];
-  for (const segment of decoded.replace(/\\/g, '/').toLowerCase().split('/')) {
-    if (segment === '' || segment === '.') continue;
-    kept.push(segment);
+  for (const segment of segments) {
     if (segment === '..') resolved.pop();
     else resolved.push(segment);
   }
-  return [kept, resolved];
+  return startsWith(segments, prefix) || startsWith(resolved, prefix);
 }
 
-/** True when `path` is `prefix` (a segment list) or under it in either view, or never settles. */
-function isUnder(path, prefix) {
-  const views = segmentViews(path);
-  return views === null || views.some((segments) => prefix.every((part, i) => segments[i] === part));
+/** True when an upstream path, as `segments` below the API's base, must not reach the API. */
+function isRefusedUpstream(segments) {
+  return segments.includes('..') || isUnder(segments, ['internal']);
 }
 
-/** True when `target` names /api/internal or a path under it, or never settles. */
-export function isInternalApiPath(target) {
-  return isUnder(target, ['api', 'internal']);
+/**
+ * True when the dashboard refuses the path of `target`: under /api, one the
+ * API would receive with a ".." segment or under /internal; elsewhere, one
+ * that resolves to /api/internal or under it; anywhere, one that never
+ * settles.
+ */
+export function isRefusedPath(target) {
+  const segments = segmentsOf(target);
+  if (segments === null) return true;
+  if (segments[0] === 'api') return isRefusedUpstream(segments.slice(1));
+  return isUnder(segments, ['api', 'internal']);
 }
 
 function isOriginForm(target) {
@@ -69,10 +88,10 @@ function refuse(res) {
   res.end('Not Found');
 }
 
-/** Express middleware: 404 for internal API paths and for unusual request targets. */
+/** Express middleware: 404 for refused paths and for unusual request targets. */
 export function refuseInternalApi(req, res, next) {
   const target = req.originalUrl ?? req.url;
-  if (isOriginForm(target) && !isInternalApiPath(target)) {
+  if (isOriginForm(target) && !isRefusedPath(target)) {
     next();
     return;
   }
@@ -87,15 +106,17 @@ function proxyErrorStatus(code) {
 
 /**
  * http-proxy-middleware `on` hooks for a proxy to `apiUrl`: `proxyReq` drops a
- * request bound for the API's /internal, and `error` answers it with 404.
+ * request whose upstream path holds a ".." segment or is under the API's
+ * /internal, and `error` answers it with 404.
  * Supplying `error` replaces the library's default error response, so it
  * answers other proxy failures the way the default does.
  */
 export function internalRouteProxyHooks(apiUrl) {
-  const prefix = [...new URL(apiUrl).pathname.toLowerCase().split('/').filter(Boolean), 'internal'];
+  const base = new URL(apiUrl).pathname.toLowerCase().split('/').filter(Boolean);
   return {
     proxyReq(proxyReq) {
-      if (isUnder(proxyReq.path, prefix)) {
+      const segments = segmentsOf(proxyReq.path);
+      if (segments === null || !startsWith(segments, base) || isRefusedUpstream(segments.slice(base.length))) {
         proxyReq.destroy(Object.assign(new Error('internal API route'), { code: REFUSED }));
       }
     },
