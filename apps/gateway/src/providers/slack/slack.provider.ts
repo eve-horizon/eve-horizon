@@ -59,6 +59,12 @@ export class SlackGatewayProvider implements GatewayProvider {
   // Webhook validation
   // -------------------------------------------------------------------------
 
+  /** The workspace an Events API request names (`team_id`). */
+  webhookAccountId(req: WebhookRequest): string | undefined {
+    const teamId = (req.body as { team_id?: unknown } | null | undefined)?.team_id;
+    return typeof teamId === 'string' && teamId ? teamId : undefined;
+  }
+
   validateWebhook(req: WebhookRequest): WebhookValidation {
     const secret = this.signingSecret;
     if (!secret) {

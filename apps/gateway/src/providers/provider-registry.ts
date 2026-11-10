@@ -43,17 +43,24 @@ export class GatewayProviderRegistry {
   }
 
   /**
-   * Get any active instance by provider name.
-   *
-   * Useful for webhook routing where the account_id is unknown until the
-   * payload is parsed (e.g. Slack team_id is inside the event body, not in
-   * the URL). Returns the first match.
+   * Get any active instance by provider name (the first match), to check what
+   * the provider supports or read a request's account. Never use it to verify
+   * a request: verify with getInstance() for the account the request names.
    */
   getByProvider(provider: string): GatewayProvider | undefined {
     for (const [key, instance] of this.instances) {
       if (key.startsWith(`${provider}:`)) return instance;
     }
     return undefined;
+  }
+
+  /** All active instances of a provider, one per connected account. */
+  listByProvider(provider: string): GatewayProvider[] {
+    const matches: GatewayProvider[] = [];
+    for (const [key, instance] of this.instances) {
+      if (key.startsWith(`${provider}:`)) matches.push(instance);
+    }
+    return matches;
   }
 
   /** Initialize all integrations. Called on gateway startup. */

@@ -44,6 +44,13 @@ export interface GatewayProvider {
   // --- Webhook transport methods (only for transport === 'webhook') ----------
 
   /**
+   * Read the integration account an inbound webhook names (e.g. Slack
+   * team_id) before it is verified, so it can be verified with that
+   * integration's own secret. Undefined when the request names none.
+   */
+  webhookAccountId?(req: WebhookRequest): string | undefined;
+
+  /**
    * Validate an inbound webhook signature.
    * Called before parsing -- rejects unsigned/tampered requests early.
    */

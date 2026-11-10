@@ -15,7 +15,13 @@ import { GatewayProviderRegistry } from '../providers/provider-registry.js';
 import { GatewayChatService } from '../chat/gateway-chat.service.js';
 import { postJson, getJson } from '../api-client.js';
 import { isSimulateEnabled } from '../simulate-mode.js';
-import type { WebhookRequest, SimulateRequest, SimulateResponse, NormalizedInbound } from '../providers/gateway-provider.interface.js';
+import type {
+  GatewayProvider,
+  WebhookRequest,
+  SimulateRequest,
+  SimulateResponse,
+  NormalizedInbound,
+} from '../providers/gateway-provider.interface.js';
 
 const logger = createJsonLogger('gateway');
 
@@ -102,28 +108,31 @@ export class WebhookController {
     @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string },
   ): Promise<unknown> {
     const startMs = Date.now();
-    const validationProvider = this.registry.getByProvider(providerName);
-    if (!validationProvider || validationProvider.transport !== 'webhook') {
+    const anyInstance = this.registry.getByProvider(providerName);
+    if (!anyInstance || anyInstance.transport !== 'webhook') {
       throw new NotFoundException(`Unknown webhook provider: ${providerName}`);
     }
 
-    if (!validationProvider.validateWebhook || !validationProvider.parseWebhook) {
+    if (!anyInstance.validateWebhook || !anyInstance.parseWebhook) {
       throw new NotFoundException(`Provider ${providerName} does not support webhooks`);
     }
 
-    // 1. Validate signature
     const webhookReq: WebhookRequest = {
       headers: req.headers,
       body: req.body,
       rawBody: req.rawBody,
     };
 
-    const validation = validationProvider.validateWebhook(webhookReq);
-    if (!validation.valid) {
-      if (validation.status === 400) {
-        throw new BadRequestException(validation.body ?? 'Bad request');
-      }
-      throw new UnauthorizedException(validation.body ?? 'Invalid signature');
+    // 1. Verify the signature with the secret of the integration the request
+    //    names (e.g. Slack team_id). A request that names none, such as a
+    //    protocol handshake, may verify with any connected integration's
+    //    secret, and is then only answered as a handshake.
+    const accountId = anyInstance.webhookAccountId?.(webhookReq);
+    const validationProvider = accountId
+      ? this.verifyForAccount(providerName, accountId, webhookReq)
+      : this.verifyForAnyAccount(providerName, webhookReq);
+    if (!validationProvider.parseWebhook) {
+      throw new NotFoundException(`Provider ${providerName} does not support webhooks`);
     }
 
     // 2. Parse inbound event
@@ -140,6 +149,11 @@ export class WebhookController {
       return { ok: true };
     }
 
+    // A message must belong to the integration whose secret verified it.
+    if (!accountId || parsed.inbound.accountId !== accountId) {
+      throw new UnauthorizedException('Unknown integration');
+    }
+
     // 3. Deduplication — drop events we've already seen
     if (isDuplicate(parsed.inbound.dedupeKey)) {
       logger.log({ event: 'webhook.deduplicated', provider: providerName, dedupeKey: parsed.inbound.dedupeKey });
@@ -151,9 +165,8 @@ export class WebhookController {
     const inbound = parsed.inbound;
     setImmediate(async () => {
       try {
-        // Resolve account-specific provider now that accountId is known from parsing.
-        // Falls back to validationProvider for single-integration setups.
-        const accountProvider = this.registry.getInstance(providerName, inbound.accountId) ?? validationProvider;
+        // The verifying instance is the one for this message's account.
+        const accountProvider = validationProvider;
 
         // --- Platform Sentinel channel routing ---
         // If the message is from the sentinel notification channel, route to the
@@ -302,19 +315,6 @@ export class WebhookController {
       throw new BadRequestException('Missing interactive payload');
     }
 
-    // Verify signature using per-org signing secret from the provider instance
-    const slackProvider = this.registry.getByProvider('slack');
-    if (slackProvider) {
-      const validation = slackProvider.validateWebhook?.({
-        headers: req.headers,
-        body: req.body,
-        rawBody: req.rawBody,
-      });
-      if (validation && !validation.valid) {
-        throw new UnauthorizedException('Invalid Slack signature');
-      }
-    }
-
     let payload: {
       type: string;
       actions?: Array<{ action_id: string; value: string }>;
@@ -329,15 +329,23 @@ export class WebhookController {
       throw new BadRequestException('Invalid interactive payload JSON');
     }
 
+    // Verify with the signing secret of the workspace the payload names.
+    const teamId = typeof payload.team?.id === 'string' ? payload.team.id : undefined;
+    this.verifyForAccount('slack', teamId, {
+      headers: req.headers,
+      body: req.body,
+      rawBody: req.rawBody,
+    });
+
     if (payload.type !== 'block_actions' || !payload.actions?.length) {
       return { ok: true };
     }
 
     for (const action of payload.actions) {
       if (action.action_id === 'membership_approve') {
-        await this.handleMembershipAction(action.value, 'approve', payload.team?.id);
+        await this.handleMembershipAction(action.value, 'approve', teamId);
       } else if (action.action_id === 'membership_deny') {
-        await this.handleMembershipAction(action.value, 'deny', payload.team?.id);
+        await this.handleMembershipAction(action.value, 'deny', teamId);
       }
     }
 
@@ -354,22 +362,16 @@ export class WebhookController {
     @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string },
   ): Promise<unknown> {
     // Slack sends slash commands as application/x-www-form-urlencoded
-    const formBody = req.body as Record<string, unknown>;
-
-    // Verify signature using per-org signing secret from the provider instance
-    const slashSlackProvider = this.registry.getByProvider('slack');
-    if (slashSlackProvider) {
-      const validation = slashSlackProvider.validateWebhook?.({
-        headers: req.headers,
-        body: req.body,
-        rawBody: req.rawBody,
-      });
-      if (validation && !validation.valid) {
-        throw new UnauthorizedException('Invalid Slack signature');
-      }
-    }
-
+    const formBody = (req.body ?? {}) as Record<string, unknown>;
     const teamId = typeof formBody.team_id === 'string' ? formBody.team_id : '';
+
+    // Verify with the signing secret of the workspace the command names.
+    this.verifyForAccount('slack', teamId || undefined, {
+      headers: req.headers,
+      body: req.body,
+      rawBody: req.rawBody,
+    });
+
     const userId = typeof formBody.user_id === 'string' ? formBody.user_id : '';
     const channelId = typeof formBody.channel_id === 'string' ? formBody.channel_id : '';
     const text = typeof formBody.text === 'string' ? formBody.text.trim() : '';
@@ -422,6 +424,44 @@ export class WebhookController {
     });
 
     return { response_type: 'ephemeral', text: `Processing: \`${agentSlug}\` ${commandText}` };
+  }
+
+  /**
+   * Verify a webhook with the signing secret of the integration whose account
+   * it names, and return that integration's provider instance. Refuses (401)
+   * when no active integration has that account or the signature does not
+   * match its secret; never falls back to another integration's secret.
+   */
+  private verifyForAccount(
+    providerName: string,
+    accountId: string | undefined,
+    req: WebhookRequest,
+  ): GatewayProvider {
+    const provider = accountId ? this.registry.getInstance(providerName, accountId) : undefined;
+    if (!provider?.validateWebhook) {
+      throw new UnauthorizedException('Unknown integration');
+    }
+    const validation = provider.validateWebhook(req);
+    if (!validation.valid) {
+      if (validation.status === 400) {
+        throw new BadRequestException(validation.body ?? 'Bad request');
+      }
+      throw new UnauthorizedException(validation.body ?? 'Invalid signature');
+    }
+    return provider;
+  }
+
+  /**
+   * Verify a webhook that names no account (e.g. Slack's url_verification
+   * handshake) against each connected integration's own secret.
+   */
+  private verifyForAnyAccount(providerName: string, req: WebhookRequest): GatewayProvider {
+    for (const provider of this.registry.listByProvider(providerName)) {
+      if (provider.validateWebhook?.(req).valid) {
+        return provider;
+      }
+    }
+    throw new UnauthorizedException('Invalid signature');
   }
 
   private async handleMembershipAction(
