@@ -987,7 +987,7 @@ Job, service, and service principal tokens use the explicit `permissions` list c
 - Org-scoped resource checks (org docs, org filesystem, agent memory, env DB) hold job tokens to the same org and project.
 - Job and service tokens (minted for one project) may not create, overwrite or delete org secrets (`/orgs/:org_id/secrets`), create, change or remove cloud-fs mounts, create or revoke org file shares, or publish or unpublish org file paths (`/orgs/:org_id/fs/share`, `/shares/:token`, `/public-paths`), whatever permissions they carry; reads are unchanged. People and org-level service principals manage those.
 - On `/orgs/:org_id/threads/:thread_id` routes, a job or service token gets only org-scope threads and its own project's threads; another project's thread is not found.
-- `orgfs:admin`, `orgdocs:admin` and `cloud_fs:admin` on a job token come only from the actor's org role or org-level bindings (like org management): withheld when no user started the work, and signed by `mint-job-token` only for an actor who holds them at org level.
+- `orgfs:admin`, `orgdocs:admin` and `cloud_fs:admin` on a job token need a user who started the work: they are withheld from runs with no user, dropped from such jobs' tokens, and otherwise signed by `mint-job-token` only when that user holds them for the job's project (built-in project role, custom role bindings or org role).
 - Flat listings that take their scope from the query string stay within the token's scope: `GET /jobs` refuses an `org_id` or `project_id` outside it and otherwise lists only the token's project (an org-only service principal: its org); `GET /projects` lists only a job or service token's own project and refuses an `org_id` other than the token's.
 
 CLI helpers:

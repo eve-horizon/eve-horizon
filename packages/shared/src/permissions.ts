@@ -171,8 +171,10 @@ export function isOrgManagementPermission(permission: string): boolean {
 
 /**
  * Admin permissions over org-wide data (org filesystem, org docs, cloud-fs
- * mounts). Like org management, a job token gets them only from its actor's
- * org role or org-level bindings, never from a project role.
+ * mounts). A job token carries them only for work a user started: they are
+ * withheld from runs with no user. With a user, they are judged against that
+ * user's permissions for the project (built-in project role, custom role
+ * bindings and org role), like other project permissions.
  */
 export const ORG_DATA_ADMIN_PERMISSIONS: readonly Permission[] = [
   'orgfs:admin',
@@ -180,18 +182,18 @@ export const ORG_DATA_ADMIN_PERMISSIONS: readonly Permission[] = [
   'cloud_fs:admin',
 ];
 
-const ORG_ROLE_ONLY_SET: ReadonlySet<string> = new Set<string>([
+const USER_ACTOR_ONLY_SET: ReadonlySet<string> = new Set<string>([
   ...ORG_MANAGEMENT_PERMISSIONS,
   ...ORG_DATA_ADMIN_PERMISSIONS,
 ]);
 
 /**
- * True for permissions a job token may only carry when its actor holds them
- * at org level: {@link ORG_MANAGEMENT_PERMISSIONS} and
- * {@link ORG_DATA_ADMIN_PERMISSIONS}. Withheld when no user started the work.
+ * True for permissions a job token carries only for work a user started:
+ * {@link ORG_MANAGEMENT_PERMISSIONS} and {@link ORG_DATA_ADMIN_PERMISSIONS}.
+ * Withheld when no user started the work.
  */
-export function isOrgRoleOnlyPermission(permission: string): boolean {
-  return ORG_ROLE_ONLY_SET.has(permission);
+export function isUserActorOnlyPermission(permission: string): boolean {
+  return USER_ACTOR_ONLY_SET.has(permission);
 }
 
 /**
@@ -226,15 +228,15 @@ export function isPlatformPermission(permission: string): boolean {
 /**
  * Split permissions declared for a job token when no user started the job
  * (event triggers, schedules, internal runs): platform permissions and those
- * judged on the org role only ({@link isOrgRoleOnlyPermission}) are withheld,
- * everything else is granted. With a user actor the
+ * that need a user ({@link isUserActorOnlyPermission}) are withheld, everything
+ * else is granted. With a user actor the
  * actor's own permissions are the ceiling instead.
  */
 export function splitNoActorJobPermissions(requested: readonly string[]): { granted: string[]; withheld: string[] } {
   const granted: string[] = [];
   const withheld: string[] = [];
   for (const permission of new Set(requested)) {
-    if (isPlatformPermission(permission) || isOrgRoleOnlyPermission(permission)) {
+    if (isPlatformPermission(permission) || isUserActorOnlyPermission(permission)) {
       withheld.push(permission);
     } else {
       granted.push(permission);
@@ -245,12 +247,11 @@ export function splitNoActorJobPermissions(requested: readonly string[]): { gran
 
 /**
  * The permissions a job token may carry, applied when it is minted and again
- * when it is verified: never platform permissions, and org-role-only
- * permissions ({@link isOrgRoleOnlyPermission}) only for a job that a user
- * started.
+ * when it is verified: never platform permissions, and permissions that need
+ * a user ({@link isUserActorOnlyPermission}) only for a job that a user started.
  */
 export function clampJobTokenPermissions(requested: readonly string[], options: { hasActor: boolean }): string[] {
   return [...new Set(requested)].filter(
-    (permission) => !isPlatformPermission(permission) && (options.hasActor || !isOrgRoleOnlyPermission(permission)),
+    (permission) => !isPlatformPermission(permission) && (options.hasActor || !isUserActorOnlyPermission(permission)),
   );
 }

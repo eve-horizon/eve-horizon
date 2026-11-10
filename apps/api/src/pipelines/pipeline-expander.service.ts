@@ -19,7 +19,7 @@ import {
   generatePipelineRunId,
   getScriptConfig,
   hasUserActor,
-  isOrgRoleOnlyPermission,
+  isOrgManagementPermission,
   isValidPermission,
   MINIMAL_JOB_TOKEN_PERMISSIONS,
   mergeEnvOverrides,
@@ -373,9 +373,9 @@ export class PipelineExpanderService {
         org_id: orgId,
         principal_type: 'user',
         principal_id: userId,
-        // Org management and org data admin are judged on the actor's org role
-        // alone, so a project role never grants them to a job token.
-        project_id: isOrgRoleOnlyPermission(permission) ? undefined : projectId,
+        // Org management is judged on the actor's org role alone, so a project
+        // role never lets a job token manage the org.
+        project_id: isOrgManagementPermission(permission) ? undefined : projectId,
         permission,
       });
       if (!result.allowed) {

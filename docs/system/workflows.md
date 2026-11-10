@@ -275,9 +275,11 @@ The CLI does not expose `--scope-*` flags yet.
 Step `permissions:` for the job token may only list permissions the invoking
 actor holds. Org-management permissions (`orgs:create`, `orgs:write`,
 `orgs:admin`, `orgs:invite`, `projects:create`, `integrations:write`,
-`endpoints:write`, `system:read`, `system:admin`) and org data admin permissions
-(`orgfs:admin`, `orgdocs:admin`, `cloud_fs:admin`) count only when the actor holds
+`endpoints:write`, `system:read`, `system:admin`) count only when the actor holds
 them through their org role; a project role alone does not let a step grant them.
+Org data admin permissions (`orgfs:admin`, `orgdocs:admin`, `cloud_fs:admin`) are
+judged like other project permissions (built-in project role, custom role bindings
+or org role).
 The same rule applies to pipeline step permissions. Manual pipeline runs
 (`POST /projects/:id/pipelines/:name/run`) and pipeline deploys run as the
 calling user.

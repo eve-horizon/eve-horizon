@@ -58,6 +58,7 @@ export class AuthInternalController {
       this.accessService,
       job.actor_user_id,
       project.org_id,
+      job.project_id,
       body.permissions ?? body.scopes ?? [],
     );
     let scope: AccessBindingScope | undefined;

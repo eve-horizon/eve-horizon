@@ -130,11 +130,15 @@ describe('org data-plane admin permissions on job tokens', () => {
     expect(step?.token_permissions).toEqual(['orgdocs:read']);
   });
 
-  it('come from the org role only, never from a project role', async () => {
+  it("are judged against the actor's permissions for the project", async () => {
     const access = new AccessService({} as never, rawSql);
     for (const expander of [new WorkflowsService(rawSql, access), new PipelineExpanderService(rawSql, access)] as unknown as StepCeiling[]) {
+      // The built-in project admin role holds cloud_fs:admin, but no orgfs or orgdocs admin.
       await expect(
         expander.ceilStepTokenPermissions('org_a', 'proj_a', 'user_padmin', ['cloud_fs:admin'], 'step'),
+      ).resolves.toEqual({ permissions: ['cloud_fs:admin'], withheld: [] });
+      await expect(
+        expander.ceilStepTokenPermissions('org_a', 'proj_a', 'user_padmin', ['orgdocs:admin'], 'step'),
       ).rejects.toBeInstanceOf(BadRequestException);
       await expect(
         expander.ceilStepTokenPermissions('org_a', 'proj_a', 'user_oadmin', ['cloud_fs:admin'], 'step'),
@@ -142,7 +146,7 @@ describe('org data-plane admin permissions on job tokens', () => {
     }
   });
 
-  it('are signed by mint-job-token only for an actor who holds them at org level', async () => {
+  it("are signed by mint-job-token only for an actor who holds them for the job's project", async () => {
     const controller = new AuthInternalController(buildAuthService(), rawSql, new AccessService({} as never, rawSql));
     const requested = ['jobs:read', ...ORG_DATA_ADMIN];
 
@@ -154,7 +158,7 @@ describe('org data-plane admin permissions on job tokens', () => {
       decode((await controller.mintJobToken({ job_id: jobId, permissions: requested })).access_token).permissions;
 
     expect(await permissionsFor('a-none')).toEqual(['jobs:read']);
-    expect(await permissionsFor('a-padmin')).toEqual(['jobs:read']);
+    expect(await permissionsFor('a-padmin')).toEqual(['jobs:read', 'cloud_fs:admin']);
     expect(await permissionsFor('a-oadmin')).toEqual(['jobs:read', 'cloud_fs:admin']);
   });
 });

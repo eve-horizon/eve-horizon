@@ -1,5 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
-import { clampJobTokenPermissions, hasUserActor, isOrgRoleOnlyPermission } from '@eve/shared';
+import { clampJobTokenPermissions, hasUserActor, isOrgManagementPermission, isUserActorOnlyPermission } from '@eve/shared';
 import type { AuthUser } from './auth.types.js';
 import type { AccessService } from './access.service.js';
 
@@ -105,17 +105,18 @@ export function heldScope(user: AuthUser): AuthUser | undefined {
 }
 
 /**
- * The permissions a job token is signed with. Never platform permissions;
- * org-role-only permissions (org management, org data admin) only for a job a
- * user started, and only those that user holds at org level (org role or org
- * bindings). Step ceilings
- * already judge declared step permissions; this also covers permissions that
- * come from agent config.
+ * The permissions a job token is signed with. Never platform permissions.
+ * Permissions that need a user (org management, org data admin) only for a job
+ * a user started, and only those that user holds: org management at org level
+ * (org role or org bindings), org data admin for the job's project (built-in
+ * project role, custom role bindings and org role). Step ceilings already judge
+ * declared step permissions; this also covers permissions from agent config.
  */
 export async function jobTokenPermissionsFor(
   access: Pick<AccessService, 'can'>,
   actorUserId: string | null,
   orgId: string,
+  projectId: string,
   requested: readonly string[],
 ): Promise<string[]> {
   const hasActor = hasUserActor(actorUserId);
@@ -125,11 +126,12 @@ export async function jobTokenPermissionsFor(
   }
   const kept: string[] = [];
   for (const permission of permissions) {
-    if (isOrgRoleOnlyPermission(permission)) {
+    if (isUserActorOnlyPermission(permission)) {
       const { allowed } = await access.can({
         org_id: orgId,
         principal_type: 'user',
         principal_id: actorUserId,
+        project_id: isOrgManagementPermission(permission) ? undefined : projectId,
         permission,
       });
       if (!allowed) continue;
