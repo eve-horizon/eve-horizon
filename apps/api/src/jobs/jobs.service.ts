@@ -3,13 +3,13 @@ import { Observable } from 'rxjs';
 import type { Db } from '@eve/db';
 import { jobQueries, projectQueries, executionLogQueries, gateQueries, projectManifestQueries, threadMessageQueries, environmentQueries, agentQueries, projectApiSourceQueries, orgQueries, agentConfigQueries, appLinkSubscriptionQueries, type Job, type JobAttempt, type JobHints, type AttemptResultData, type JobWorkspaceConfig, type JobAttemptGitMeta } from '@eve/db';
 import type { AccessBindingScope, JobGit, JobWorkspace, JobHarnessOptions, JobCompareResponse, JobTarget, ResourceRef, CreateBatchRequest, CreateBatchResponse, BatchValidateResponse, InlineProfileBundle } from '@eve/shared';
-import { deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
+import { AccessBindingScopeSchema, hasUserActor, deriveNamespace, parseResourceUri, defaultMountPathForUri, isValidMountPath, renderLogText, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, type AppApiCliInfo, type AppApiInfo, type HarnessProfileSource } from '@eve/shared';
 import * as yaml from 'yaml';
 import { buildApiError } from '../system/api-errors.js';
 import { JobLogsService } from './job-logs.service.js';
 import { JobReceiptsService } from './job-receipts.service.js';
 import { JobBatchService } from './job-batch.service.js';
-import { assertCanGrantJobPermissions, workStartOptions, type WorkStartOptions } from '../auth/token-scope.js';
+import { assertCanGrantJobPermissions, assertCanUseJobScope, workStartOptions, type WorkStartOptions } from '../auth/token-scope.js';
 import { AccessService } from '../auth/access.service.js';
 import type { AuthUser } from '../auth/auth.types.js';
 
@@ -1070,10 +1070,10 @@ export class JobsService {
    * A job runs as its actor (their user secrets, org-fs bindings and step
    * ceiling). When someone other than the actor changes what the job runs or
    * how it runs, they become the actor (with their user-secrets marker), and
-   * the job-token permissions the job carries must be ones they could grant,
-   * otherwise 400 before anything changes. The actor's own edits, and
-   * cosmetic ones (priority, due date, review setting, close reason, or moving
-   * it anywhere but ready or active), keep the actor.
+   * the job-token permissions and token scope the job carries must be ones
+   * they could grant and hold, otherwise 400 before anything changes. The
+   * actor's own edits, and cosmetic ones (priority, due date, review setting,
+   * close reason, or moving it anywhere but ready or active), keep the actor.
    */
   private async takeOverChangedJob(job: Job, updates: UpdateJobRequest, caller?: AuthUser): Promise<void> {
     if (!caller || !changesWhatRuns(job, updates)) {
@@ -1098,12 +1098,40 @@ export class JobsService {
       permissions: job.token_permissions,
       context: `Job ${job.id} job-token permissions`,
     });
+    await assertCanUseJobScope(this.accessService, {
+      orgId: project.org_id,
+      projectId: job.project_id,
+      userId: caller.user_id,
+      scope: this.storedTokenScope(job, caller),
+      context: `Job ${job.id} token scope`,
+    });
 
     await this.db`
       UPDATE jobs
       SET actor_user_id = ${caller.user_id}, user_secrets_excluded = ${nextExcluded}, updated_at = NOW()
       WHERE id = ${job.id}
     `;
+  }
+
+  /**
+   * The token scope a job carries, for judging a new actor against it. A
+   * scope that does not parse, or one judged for a person when the new actor
+   * is work no user started, is refused rather than carried over.
+   */
+  private storedTokenScope(job: Job, caller: AuthUser): AccessBindingScope | null {
+    if (job.token_scope === null || job.token_scope === undefined) {
+      return null;
+    }
+    const parsed = AccessBindingScopeSchema.safeParse(job.token_scope);
+    if (!parsed.success) {
+      throw new BadRequestException(`Job ${job.id} has a token scope that cannot be read`);
+    }
+    if (!hasUserActor(caller.user_id) && hasUserActor(job.actor_user_id)) {
+      throw new BadRequestException(
+        `Job ${job.id} carries a token scope judged for the person who started it; work no user started cannot take it on`,
+      );
+    }
+    return parsed.data;
   }
 
   /**

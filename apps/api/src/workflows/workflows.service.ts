@@ -3,8 +3,8 @@ import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
 import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isAccountLevelPermission, isOrgManagementPermission, isValidPermission, MINIMAL_JOB_TOKEN_PERMISSIONS, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
-import type { WorkStartOptions } from '../auth/token-scope.js';
-import { intersectScopes, pathPatternBase } from './scope-algebra.js';
+import { assertCanUseJobScope, type WorkStartOptions } from '../auth/token-scope.js';
+import { intersectScopes } from './scope-algebra.js';
 import * as yaml from 'yaml';
 
 const VALID_TOOLCHAIN_SET = new Set<string>(VALID_TOOLCHAINS);
@@ -185,53 +185,6 @@ export class WorkflowsService {
     const scopes = [workflowScope, stepScope, invocationScope].filter((scope): scope is AccessBindingScope => Boolean(scope));
     if (scopes.length === 0) return null;
     return scopes.reduce((acc, scope) => intersectScopes(acc, scope));
-  }
-
-  private async assertActorCanUseScope(
-    orgId: string,
-    projectId: string,
-    userId: string | undefined,
-    scope: AccessBindingScope | null,
-    context: string,
-  ): Promise<void> {
-    if (!hasUserActor(userId) || !scope) return;
-    const checks: Array<{ permission: string; resource: { type: 'orgfs' | 'orgdocs' | 'envdb' | 'cloud_fs'; id: string; action: 'read' | 'write' | 'admin' } }> = [];
-    for (const prefix of scope.orgfs?.allow_prefixes ?? []) {
-      checks.push({ permission: 'orgfs:write', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'write' } });
-    }
-    for (const prefix of scope.orgfs?.read_only_prefixes ?? []) {
-      checks.push({ permission: 'orgfs:read', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'read' } });
-    }
-    for (const prefix of scope.orgdocs?.allow_prefixes ?? []) {
-      checks.push({ permission: 'orgdocs:write', resource: { type: 'orgdocs', id: pathPatternBase(prefix), action: 'write' } });
-    }
-    for (const prefix of scope.orgdocs?.read_only_prefixes ?? []) {
-      checks.push({ permission: 'orgdocs:read', resource: { type: 'orgdocs', id: pathPatternBase(prefix), action: 'read' } });
-    }
-    for (const mountId of scope.cloud_fs?.allow_mount_ids ?? []) {
-      checks.push({ permission: 'cloud_fs:read', resource: { type: 'cloud_fs', id: mountId, action: 'read' } });
-    }
-    for (const schema of scope.envdb?.schemas ?? []) {
-      checks.push({ permission: 'envdb:read', resource: { type: 'envdb', id: schema, action: 'read' } });
-    }
-    for (const table of scope.envdb?.tables ?? []) {
-      checks.push({ permission: 'envdb:read', resource: { type: 'envdb', id: table, action: 'read' } });
-    }
-
-    for (const check of checks) {
-      if (check.resource.id === '*') continue;
-      const result = await this.accessService.can({
-        org_id: orgId,
-        principal_type: 'user',
-        principal_id: userId,
-        project_id: projectId,
-        permission: check.permission,
-        resource: check.resource,
-      });
-      if (!result.allowed) {
-        throw new BadRequestException(`${context} is outside the invoking actor's access scope: ${check.permission} ${check.resource.id}`);
-      }
-    }
   }
 
   private parseTokenPermissions(value: unknown, path: string): string[] | undefined {
@@ -1112,13 +1065,13 @@ export class WorkflowsService {
         stepTokenScope,
         invocationTokenScope,
       );
-      await this.assertActorCanUseScope(
-        project.org_id,
+      await assertCanUseJobScope(this.accessService, {
+        orgId: project.org_id,
         projectId,
         userId,
-        stepJobTokenScope,
-        `Workflow "${workflowName}" step "${stepName}" scope`,
-      );
+        scope: stepJobTokenScope,
+        context: `Workflow "${workflowName}" step "${stepName}" scope`,
+      });
       const stepTokenPermissions = this.parseTokenPermissions(
         (step as { permissions?: unknown }).permissions,
         `Workflow "${workflowName}" step "${stepName}".permissions`,
@@ -1402,13 +1355,13 @@ export class WorkflowsService {
         // A retry runs as the retrier, never as whoever ran the step before:
         // the copied permissions and scope are judged again for the retrier.
         const retryContext = `Workflow retry of step "${source.step_name ?? source.id}"`;
-        await this.assertActorCanUseScope(
-          project.org_id,
+        await assertCanUseJobScope(this.accessService, {
+          orgId: project.org_id,
           projectId,
           userId,
-          source.token_scope ?? null,
-          `${retryContext} scope`,
-        );
+          scope: source.token_scope ?? null,
+          context: `${retryContext} scope`,
+        });
         const {
           permissions: retryTokenPermissions,
           withheld: withheldTokenPermissions,

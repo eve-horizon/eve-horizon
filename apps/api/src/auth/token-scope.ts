@@ -5,9 +5,11 @@ import {
   isOrgManagementPermission,
   isUserActorOnlyPermission,
   splitNoActorJobPermissions,
+  type AccessBindingScope,
 } from '@eve/shared';
 import type { AuthUser } from './auth.types.js';
 import type { AccessService } from './access.service.js';
+import { pathPatternBase } from '../workflows/scope-algebra.js';
 
 /** Resolves the project and org references a route names (RbacService implements it). */
 export interface TokenScopeResolver {
@@ -207,6 +209,58 @@ export async function assertCanGrantJobPermissions(
     });
     if (!result.allowed) {
       throw new BadRequestException(`${context} requests permission "${permission}" that the invoking actor does not hold`);
+    }
+  }
+}
+
+/**
+ * A job token scope names the org-fs and org-docs prefixes, cloud-fs mounts
+ * and env-db schemas and tables a job may reach, and its org-fs prefixes are
+ * mounted into the job's workspace. The user a job runs as must hold each
+ * resource the scope names, otherwise 400. Work no user started is not judged
+ * here; its callers refuse scopes that did not come from the manifest.
+ */
+export async function assertCanUseJobScope(
+  access: Pick<AccessService, 'can'>,
+  params: { orgId: string; projectId: string; userId: string | undefined; scope: AccessBindingScope | null; context: string },
+): Promise<void> {
+  const { orgId, projectId, userId, scope, context } = params;
+  if (!hasUserActor(userId) || !scope) return;
+  const checks: Array<{ permission: string; resource: { type: 'orgfs' | 'orgdocs' | 'envdb' | 'cloud_fs'; id: string; action: 'read' | 'write' | 'admin' } }> = [];
+  for (const prefix of scope.orgfs?.allow_prefixes ?? []) {
+    checks.push({ permission: 'orgfs:write', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'write' } });
+  }
+  for (const prefix of scope.orgfs?.read_only_prefixes ?? []) {
+    checks.push({ permission: 'orgfs:read', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'read' } });
+  }
+  for (const prefix of scope.orgdocs?.allow_prefixes ?? []) {
+    checks.push({ permission: 'orgdocs:write', resource: { type: 'orgdocs', id: pathPatternBase(prefix), action: 'write' } });
+  }
+  for (const prefix of scope.orgdocs?.read_only_prefixes ?? []) {
+    checks.push({ permission: 'orgdocs:read', resource: { type: 'orgdocs', id: pathPatternBase(prefix), action: 'read' } });
+  }
+  for (const mountId of scope.cloud_fs?.allow_mount_ids ?? []) {
+    checks.push({ permission: 'cloud_fs:read', resource: { type: 'cloud_fs', id: mountId, action: 'read' } });
+  }
+  for (const schema of scope.envdb?.schemas ?? []) {
+    checks.push({ permission: 'envdb:read', resource: { type: 'envdb', id: schema, action: 'read' } });
+  }
+  for (const table of scope.envdb?.tables ?? []) {
+    checks.push({ permission: 'envdb:read', resource: { type: 'envdb', id: table, action: 'read' } });
+  }
+
+  for (const check of checks) {
+    if (check.resource.id === '*') continue;
+    const result = await access.can({
+      org_id: orgId,
+      principal_type: 'user',
+      principal_id: userId,
+      project_id: projectId,
+      permission: check.permission,
+      resource: check.resource,
+    });
+    if (!result.allowed) {
+      throw new BadRequestException(`${context} is outside the invoking actor's access scope: ${check.permission} ${check.resource.id}`);
     }
   }
 }

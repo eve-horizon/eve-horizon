@@ -8,6 +8,7 @@ import { TokenVerifierService } from './token-verifier.service';
 import { BootstrapService } from './bootstrap.service';
 import { AuthInternalController } from './auth.internal.controller';
 import { createJwtRs256 } from './auth.util';
+import { assertCanUseJobScope } from './token-scope';
 import { WorkflowsService } from '../workflows/workflows.service';
 import { PipelineExpanderService } from '../pipelines/pipeline-expander.service';
 import type { MailerService } from '../mailer/mailer.service';
@@ -108,7 +109,6 @@ function buildAuthService(): AuthService {
 /** The expanders' private checks, called the way their invoke paths call them. */
 type ActorChecks = {
   assertActorCanGrantPermissions(orgId: string, projectId: string, userId: string | undefined, permissions: string[] | null, context: string): Promise<void>;
-  assertActorCanUseScope?(orgId: string, projectId: string, userId: string | undefined, scope: unknown, context: string): Promise<void>;
 };
 
 describe('work started with an org-bound token never carries account-level permissions', () => {
@@ -182,7 +182,13 @@ describe("the 'system' actor counts as no user in the expanders' checks", () => 
     const pipelines = new PipelineExpanderService(rawSql, access()) as unknown as ActorChecks;
 
     await expect(
-      workflows.assertActorCanUseScope?.('org_a', 'proj_a', 'system', { orgfs: { allow_prefixes: ['/groups/projects/a/**'] } }, 'step'),
+      assertCanUseJobScope(access(), {
+        orgId: 'org_a',
+        projectId: 'proj_a',
+        userId: 'system',
+        scope: { orgfs: { allow_prefixes: ['/groups/projects/a/**'] } },
+        context: 'step',
+      }),
     ).resolves.toBeUndefined();
     await expect(workflows.assertActorCanGrantPermissions('org_a', 'proj_a', 'system', ['jobs:read'], 'step')).resolves.toBeUndefined();
     await expect(pipelines.assertActorCanGrantPermissions('org_a', 'proj_a', 'system', ['jobs:read'], 'step')).resolves.toBeUndefined();

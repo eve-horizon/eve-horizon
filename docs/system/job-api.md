@@ -326,9 +326,13 @@ output to the thread its hints name, `assignee`, `harness`, `harness_profile`,
 `defer_until`, or moving it to `ready` or `active`), they become the actor, and
 an org-bound token's edit marks the job to resolve no user-scope secrets. The
 job-token permissions the job already carries must be ones the new actor could
-grant, otherwise the update is refused with 400 and nothing changes. The
-actor's own edits, and cosmetic edits (`priority`, `due_at`, `review_required`,
-`close_reason`, or moving the job to any other phase), keep the actor.
+grant, and the new actor must hold every resource its token scope names (the
+org-fs and org-docs prefixes, cloud-fs mounts and env-db schemas and tables, as
+on workflow invoke and retry); work no user started cannot take on a scope
+judged for a person. Otherwise the update is refused with 400 and nothing
+changes. The actor's own edits, and cosmetic edits (`priority`, `due_at`,
+`review_required`, `close_reason`, or moving the job to any other phase), keep
+the actor.
 
 The body is validated against `UpdateJobRequest` (for example `title` is at
 most 500 characters and `priority` is 0-4); an invalid body is refused with 400.
