@@ -23,6 +23,8 @@ const db = vi.hoisted(() => {
     orgMemberships: [] as Array<{ org_id: string; user_id: string; role: 'owner' | 'admin' | 'member'; created_at: Date }>,
     projectMemberships: [] as Array<{ project_id: string; user_id: string; role: 'owner' | 'admin' | 'member' }>,
     projects: [] as Array<{ id: string; org_id: string }>,
+    identities: [] as Array<{ user_id: string; provider: string }>,
+    userSecrets: [] as Array<{ user_id: string; key: string }>,
   };
 
   const users = {
@@ -65,7 +67,16 @@ const db = vi.hoisted(() => {
     findById: vi.fn(async (id: string) => state.projects.find((p) => p.id === id) ?? null),
   };
 
-  return { state, users, memberships, projects };
+  const identities = {
+    listByUser: vi.fn(async (userId: string) => state.identities.filter((i) => i.user_id === userId)),
+  };
+
+  const secrets = {
+    listByScope: vi.fn(async (scopeType: string, scopeId: string) =>
+      scopeType === 'user' ? state.userSecrets.filter((s) => s.user_id === scopeId) : []),
+  };
+
+  return { state, users, memberships, projects, identities, secrets };
 });
 
 vi.mock('@eve/db', async (importOriginal) => {
@@ -75,6 +86,8 @@ vi.mock('@eve/db', async (importOriginal) => {
     userQueries: vi.fn(() => db.users),
     membershipQueries: vi.fn(() => db.memberships),
     projectQueries: vi.fn(() => db.projects),
+    identityQueries: vi.fn(() => db.identities),
+    secretQueries: vi.fn(() => db.secrets),
   };
 });
 
@@ -131,6 +144,8 @@ describe('AuthController POST /auth/mint', () => {
     db.state.users = [];
     db.state.orgMemberships = [];
     db.state.projectMemberships = [];
+    db.state.identities = [];
+    db.state.userSecrets = [];
     db.state.projects = [
       { id: 'proj_a', org_id: 'org_a' },
       { id: 'proj_a2', org_id: 'org_a' },
@@ -239,6 +254,31 @@ describe('AuthController POST /auth/mint', () => {
       expect(response.role).toBe('member');
       expect(response.access_token).toEqual(expect.any(String));
       expect(db.memberships.upsertOrgMembership).toHaveBeenCalledWith('org_a', response.user_id, 'member');
+    });
+
+    it('cannot mint a token for an existing member who signs in as a person', async () => {
+      for (const provider of ['github_ssh', 'supabase', 'nostr']) {
+        const userId = `user_person_${provider}`;
+        addUser(userId, `${provider}@example.com`);
+        joinOrg(userId, 'org_a', 'member');
+        db.state.identities.push({ user_id: userId, provider });
+
+        await expect(
+          controller.mint(mintRequest({ email: `${provider}@example.com`, org_id: 'org_a' }), orgOwner),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+      }
+      expectNothingMinted();
+    });
+
+    it('cannot mint a token for an existing member who keeps personal secrets', async () => {
+      addUser('user_keeper', 'keeper@example.com');
+      joinOrg('user_keeper', 'org_a', 'member');
+      db.state.userSecrets.push({ user_id: 'user_keeper', key: 'GITHUB_TOKEN' });
+
+      await expect(
+        controller.mint(mintRequest({ email: 'keeper@example.com', org_id: 'org_a' }), orgOwner),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expectNothingMinted();
     });
 
     it('mints again for an existing bot that belongs only to the org', async () => {
