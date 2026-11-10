@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { JobsService } from './jobs.service';
@@ -14,7 +14,12 @@ import type { AuthUser } from '../auth/auth.types';
  */
 const m = vi.hoisted(() => {
   /** job: the row as first read; live: what has changed in the database since. */
-  const state = { job: null as Record<string, unknown> | null, live: {} as Record<string, unknown> };
+  /** compiledChildren: steps a workflow compiled under the job (it is a run root). */
+  const state = {
+    job: null as Record<string, unknown> | null,
+    live: {} as Record<string, unknown>,
+    compiledChildren: [] as Array<{ id: string }>,
+  };
   return {
     state,
     jobQ: {
@@ -66,6 +71,9 @@ function recorder(into: Statement[]) {
     async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
       into.push({ sql, values });
+      if (/WHERE parent_id = \?/.test(sql) && /step_name IS NOT NULL/.test(sql)) {
+        return values[0] === m.state.job?.id ? m.state.compiledChildren : [];
+      }
       if (!/FOR UPDATE/i.test(sql) || !m.state.job) return [];
       const live: Record<string, unknown> = { ...m.state.job, ...m.state.live };
       const meetsConditions = values.every((value, i) => {
@@ -117,6 +125,7 @@ const NO_USER_STEP: AuthUser = {
 
 function pendingJob(overrides: Record<string, unknown> = {}) {
   m.state.live = {};
+  m.state.compiledChildren = [];
   m.state.job = {
     id: 'a-1',
     project_id: 'proj_a',
@@ -240,6 +249,53 @@ describe('PATCH /jobs/:job_id and the job actor', () => {
 
     await expect(update(service(), 'a-1', { description: 'do something else' }, TEAMMATE)).rejects.toBeInstanceOf(ConflictException);
     expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+  });
+
+  describe('on the jobs of a workflow or pipeline run', () => {
+    /** The root of a run: a workflow compiled step jobs under it. */
+    function runRoot() {
+      pendingJob({ phase: 'active', hints: { workflow_root: true, workflow_name: 'report' }, labels: ['workflow:report'] });
+      m.state.compiledChildren = [{ id: 'a-1.1' }];
+    }
+
+    /** A step the workflow compiled (its step_name column is set). */
+    function compiledStep() {
+      pendingJob({ id: 'a-1', parent_id: 'a-0', step_name: 'research', hints: { workflow_name: 'report', step_name: 'research' } });
+    }
+
+    it("refuses a teammate's change to what a run root runs, and changes nothing", async () => {
+      runRoot();
+
+      await expect(update(service(), 'a-1', { labels: ['workflow:report'] }, TEAMMATE)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+    });
+
+    it("refuses a teammate's change to what a compiled step runs, and changes nothing", async () => {
+      compiledStep();
+
+      await expect(update(service(), 'a-1', { description: 'do something else' }, TEAMMATE)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(update(service(), 'a-1', { phase: 'ready' }, TEAMMATE)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+    });
+
+    it("lets the actor change their own run's jobs, and a teammate make cosmetic edits", async () => {
+      compiledStep();
+      await update(service(), 'a-1', { description: 'sharper prompt' }, OWNER);
+      await update(service(), 'a-1', { priority: 0 }, TEAMMATE);
+      runRoot();
+      await update(service(), 'a-1', { labels: ['workflow:report', 'q4'] }, OWNER);
+
+      expect(actorWrites()).toEqual([]);
+      expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toHaveLength(3);
+    });
+
+    it('does not take the workflow_root hint as proof of a run, since PATCH can set it', async () => {
+      pendingJob({ hints: { workflow_root: true } });
+
+      await update(service(), 'a-1', { description: 'do something else' }, TEAMMATE);
+
+      expect(actorWrites()).toEqual([{ actor: 'user_mate', userSecretsExcluded: false }]);
+    });
   });
 
   it('passes the caller from the route', async () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { JobAttachmentsService } from './job-attachments.service';
 import { JobAttachmentsController } from './job-attachments.controller';
 import { JobsService } from '../jobs/jobs.service';
@@ -12,7 +12,12 @@ import type { AuthUser } from '../auth/auth.types';
  */
 const m = vi.hoisted(() => {
   /** job: the row as first read; live: what has changed in the database since. */
-  const state = { job: null as Record<string, unknown> | null, live: {} as Record<string, unknown> };
+  /** compiledChildren: steps a workflow compiled under the job (it is a run root). */
+  const state = {
+    job: null as Record<string, unknown> | null,
+    live: {} as Record<string, unknown>,
+    compiledChildren: [] as Array<{ id: string }>,
+  };
   return {
     state,
     jobQ: {
@@ -73,6 +78,9 @@ function recorder(into: Statement[]) {
     async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
       into.push({ sql, values });
+      if (/WHERE parent_id = \?/.test(sql) && /step_name IS NOT NULL/.test(sql)) {
+        return values[0] === m.state.job?.id ? m.state.compiledChildren : [];
+      }
       if (!/FOR UPDATE/i.test(sql) || !m.state.job) return [];
       const live: Record<string, unknown> = { ...m.state.job, ...m.state.live };
       const meetsConditions = values.every((value, i) => {
@@ -118,6 +126,7 @@ const NOTES = { name: 'notes.md', content: 'Use the staging bucket.' };
 
 function pendingJob(overrides: Record<string, unknown> = {}) {
   m.state.live = {};
+  m.state.compiledChildren = [];
   m.state.job = {
     id: 'a-1',
     project_id: 'proj_a',
@@ -201,6 +210,28 @@ describe('job attachments and the job actor', () => {
 
     await expect(service().create('a-1', NOTES, OWNER)).rejects.toBeInstanceOf(ConflictException);
     expect(m.attachmentQ.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a teammate's attachment changes on a run root or a compiled step, and changes nothing", async () => {
+    pendingJob({ phase: 'active', hints: { workflow_root: true, workflow_name: 'report' } });
+    m.state.compiledChildren = [{ id: 'a-1.1' }];
+    await expect(service().create('a-1', NOTES, TEAMMATE)).rejects.toBeInstanceOf(ForbiddenException);
+
+    pendingJob({ parent_id: 'a-0', step_name: 'research' });
+    await expect(service().delete('a-1', 'att-1', TEAMMATE)).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(m.attachmentQ.create).not.toHaveBeenCalled();
+    expect(m.attachmentQ.delete).not.toHaveBeenCalled();
+    expect(actorWrites()).toEqual([]);
+  });
+
+  it("lets the actor change attachments on their own run's jobs", async () => {
+    pendingJob({ parent_id: 'a-0', step_name: 'research' });
+
+    await service().create('a-1', NOTES, OWNER);
+
+    expect(m.attachmentQ.create).toHaveBeenCalled();
+    expect(actorWrites()).toEqual([]);
   });
 
   it('passes the caller from the routes', async () => {
