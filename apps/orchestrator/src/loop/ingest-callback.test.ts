@@ -135,9 +135,17 @@ describe('ingest completion callbacks', () => {
     vi.unstubAllGlobals();
   });
 
+  // Retries wait on (fake) timers scheduled only after each attempt's async
+  // work, so keep advancing until the sender is done.
   const run = async (callbackUrl: string) => {
-    const done = fire(callbackUrl);
-    await vi.runAllTimersAsync();
+    let finished = false;
+    const done = fire(callbackUrl).finally(() => {
+      finished = true;
+    });
+    while (!finished) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     await done;
   };
 

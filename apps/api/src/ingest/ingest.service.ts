@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import type { Db } from '@eve/db';
 import { ingestRecordQueries, projectQueries, orgQueries, type IngestRecord } from '@eve/db';
-import { generateIngestId } from '@eve/shared';
+import { generateIngestId, OutboundUrlError, vetOutboundUrl } from '@eve/shared';
 import { StorageService } from '../storage/storage.service.js';
 import { EventsService } from '../events/events.service.js';
 
@@ -56,6 +56,21 @@ export class IngestService {
     // Validate source channel
     if (body.source_channel && !ALLOWED_SOURCE_CHANNELS.has(body.source_channel)) {
       throw new BadRequestException(`Invalid source_channel: ${body.source_channel}`);
+    }
+
+    // The orchestrator POSTs to callback_url when processing ends; it must
+    // reach the public internet (checked again before each delivery).
+    if (body.callback_url !== undefined && body.callback_url !== null) {
+      try {
+        await vetOutboundUrl(body.callback_url);
+      } catch (err) {
+        if (err instanceof OutboundUrlError) {
+          throw new BadRequestException(
+            `callback_url not allowed: ${err.message}. Use an http(s) URL that reaches a public internet address.`,
+          );
+        }
+        throw err;
+      }
     }
 
     const ingestId = generateIngestId();

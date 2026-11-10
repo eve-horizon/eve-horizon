@@ -1,6 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { combineK8sName, toK8sName } from '@eve/shared';
-import { OutboundUrlError, requestVettedUrl, vetOutboundUrl } from './outbound-url.js';
+import { combineK8sName, OutboundUrlError, requestVettedUrl, toK8sName, vetOutboundUrl } from '@eve/shared';
 
 const SPEC_TIMEOUT_MS = 15_000;
 export const API_SPEC_MAX_BYTES = 10 * 1024 * 1024;

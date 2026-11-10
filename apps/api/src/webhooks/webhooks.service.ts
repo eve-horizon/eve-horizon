@@ -25,8 +25,8 @@ import type {
   WebhookReplayResponse,
   WebhookReplayStatusResponse,
 } from '@eve/shared';
+import { OutboundUrlError, requestVettedUrl, vetOutboundUrl } from '@eve/shared';
 import { buildApiError } from '../system/api-errors.js';
-import { OutboundUrlError, requestVettedUrl, vetOutboundUrl } from '../common/outbound-url.js';
 
 // ============================================================================
 // Retry schedule: exponential backoff intervals in milliseconds

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isPublicAddress, OutboundUrlError, vetOutboundUrl } from './outbound-url';
+import { isPublicAddress, OutboundUrlError, vetOutboundUrl } from '../outbound-url.js';
 
 // A resolver that behaves like a pod's: a name without a trailing dot is
 // tried with the cluster search path first, so a two-label name such as

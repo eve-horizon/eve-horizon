@@ -123,7 +123,9 @@ addresses (GKE's default service range is `34.118.224.0/20`), set
 `EVE_CLUSTER_PRIVATE_CIDRS` on the API to a comma-separated list of those
 CIDRs; addresses in them are then refused like private ones. It is empty by
 default, and an entry that is not a CIDR refuses every outbound URL. The same
-rules apply to API spec URLs.
+rules apply to API spec URLs and to ingest `callback_url`s (refused with
+`400` at ingest create, checked again and sent to the checked address with no
+redirects when processing ends).
 
 For local development only, `EVE_WEBHOOKS_ALLOW_PRIVATE_TARGETS=true` on the
 API lets subscriptions and deliveries reach private and loopback receivers.

@@ -37,6 +37,9 @@ import {
   readPositiveTimeoutSeconds,
   parseWorkerUrlMapping,
   apiPath,
+  OutboundUrlError,
+  requestVettedUrl,
+  vetOutboundUrl,
 } from '@eve/shared';
 import {
   accessRoleQueries,
@@ -2939,13 +2942,26 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     const delays = [5000, 15000, 45000];
     for (let attempt = 0; attempt < delays.length; attempt++) {
       try {
-        const resp = await fetch(record.callback_url!, {
+        // Checked on every attempt and sent to the checked address only;
+        // redirects are not followed, so a 3xx counts as a failed attempt.
+        let target: Awaited<ReturnType<typeof vetOutboundUrl>>;
+        try {
+          target = await vetOutboundUrl(record.callback_url!);
+        } catch (err) {
+          if (err instanceof OutboundUrlError) {
+            this.logger.error(`Ingest ${record.id}: callback URL not allowed (${err.message}); not sent`);
+            return;
+          }
+          throw err;
+        }
+        const resp = await requestVettedUrl(target, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Eve-Event': 'ingest.completed' },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(10000),
+          timeoutMs: 10_000,
+          maxResponseBytes: 1024,
         });
-        if (resp.ok) {
+        if (resp.status >= 200 && resp.status < 300) {
           this.logger.log(`Ingest ${record.id}: callback delivered (${resp.status})`);
           return;
         }
