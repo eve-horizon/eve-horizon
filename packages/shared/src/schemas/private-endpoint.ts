@@ -10,6 +10,15 @@ export type PrivateEndpointStatus = z.infer<typeof PrivateEndpointStatusSchema>;
 // DNS-safe name: lowercase alphanumeric + hyphens, max 53 chars
 const DNS_SAFE_REGEX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
+/**
+ * A plain URL path for the health probe: one leading "/", then no "/" right
+ * after it, no "@", backslash, whitespace or control characters. Appended to
+ * the endpoint's cluster URL, it can never change the host or port.
+ */
+export function isPlainHealthPath(value: string): boolean {
+  return /^\/(?!\/)[^@\\\s\u0000-\u001f\u007f]*$/.test(value);
+}
+
 export const CreatePrivateEndpointRequestSchema = z.object({
   name: z.string()
     .min(1)
@@ -18,7 +27,11 @@ export const CreatePrivateEndpointRequestSchema = z.object({
   provider: PrivateEndpointProviderSchema.optional().default('tailscale'),
   hostname: z.string().min(1, 'Tailscale hostname is required'),
   port: z.number().int().min(1).max(65535),
-  health_path: z.string().nullable().optional().default('/v1/models'),
+  health_path: z.string()
+    .refine(isPlainHealthPath, 'health_path must be a plain path starting with "/" (no "//", "@", backslash or scheme)')
+    .nullable()
+    .optional()
+    .default('/v1/models'),
   metadata: z.record(z.unknown()).optional(),
 });
 

@@ -2964,7 +2964,7 @@ Requires Docker Desktop; k3d and kubectl are auto-managed by the CLI.`,
           '--tailscale-hostname <fqdn>   Tailscale MagicDNS hostname (e.g., mac-mini.tail12345.ts.net)',
           '--port <port>                 Service port (1-65535)',
           '--org <id>                    Organization ID or slug',
-          '--health-path <path>          HTTP health check path (default: /v1/models, "none" to disable)',
+          '--health-path <path>          HTTP health check path starting with / (default: /v1/models, "none" to disable)',
         ],
         examples: [
           'eve endpoint add --name lmstudio --tailscale-hostname mac-mini.tail12345.ts.net --port 1234 --org org_xxx',

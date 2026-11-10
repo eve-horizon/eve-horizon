@@ -4,6 +4,7 @@ import type { Db } from '@eve/db';
 import { orgQueries, privateEndpointQueries } from '@eve/db';
 import {
   generatePrivateEndpointId,
+  isPlainHealthPath,
   type CreatePrivateEndpointRequest,
   type PrivateEndpointResponse,
   type PrivateEndpointListResponse,
@@ -12,6 +13,9 @@ import {
 } from '@eve/shared';
 
 const EVE_TUNNELS_NS = 'eve-tunnels';
+const UNSAFE_HEALTH_PATH =
+  'Not probed: health_path is not a plain path (it must start with "/" and have no "//", "@", backslash or scheme). ' +
+  'Recreate the endpoint with a path such as /v1/models.';
 
 @Injectable()
 export class PrivateEndpointsService {
@@ -167,7 +171,19 @@ export class PrivateEndpointsService {
       };
     }
 
-    const probeUrl = `${clusterUrl}${ep.health_path}`;
+    const probeUrl = this.buildProbeUrl(clusterUrl, ep.health_path);
+    if (!probeUrl) {
+      return {
+        endpoint: this.toResponse(ep),
+        health: {
+          checked_at: checkedAt,
+          reachable: false,
+          http_status: null,
+          response_time_ms: null,
+          error: UNSAFE_HEALTH_PATH,
+        },
+      };
+    }
     const start = Date.now();
     try {
       const res = await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
@@ -278,9 +294,12 @@ export class PrivateEndpointsService {
     // Check 5: Health probe (if service exists and health_path set)
     if (svcExists && ep.health_path) {
       const clusterUrl = this.buildClusterUrl(ep);
-      if (clusterUrl) {
+      const probeUrl = clusterUrl ? this.buildProbeUrl(clusterUrl, ep.health_path) : null;
+      if (clusterUrl && !probeUrl) {
+        checks.push({ name: 'Health probe', passed: false, detail: UNSAFE_HEALTH_PATH });
+      } else if (probeUrl) {
         try {
-          const res = await fetch(`${clusterUrl}${ep.health_path}`, { signal: AbortSignal.timeout(5000) });
+          const res = await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
           checks.push({
             name: `Health probe ${ep.health_path}`,
             passed: res.ok,
@@ -363,6 +382,15 @@ export class PrivateEndpointsService {
   private buildClusterUrl(ep: { k8s_dns: string | null; port: number }): string | null {
     if (!ep.k8s_dns) return null;
     return `http://${ep.k8s_dns}:${ep.port}`;
+  }
+
+  /** The probe URL, or null when the stored path could leave the endpoint's own host and port. */
+  private buildProbeUrl(clusterUrl: string, healthPath: string): string | null {
+    if (!isPlainHealthPath(healthPath)) return null;
+    const base = new URL(clusterUrl);
+    const probe = new URL(`${clusterUrl}${healthPath}`);
+    if (probe.origin !== base.origin || probe.username || probe.password) return null;
+    return probe.toString();
   }
 
   private toResponse(ep: {
