@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DbRlsResponse, DbSqlResponse } from '@eve/shared';
+import { ForbiddenException } from '@nestjs/common';
+import type { DbResetResponse, DbRlsResponse, DbSqlResponse } from '@eve/shared';
 import { EnvDbController } from './env-db.controller';
 import type { EnvDbService } from './env-db.service';
 import type { AuthService, AuthUser, JobTokenPayload } from '../auth/auth.service';
@@ -9,6 +10,7 @@ type EnvDbServiceMock = {
   resolveOrgIdForProject: ReturnType<typeof vi.fn<(projectId: string) => Promise<string>>>;
   executeSql: ReturnType<typeof vi.fn<() => Promise<DbSqlResponse>>>;
   getRls: ReturnType<typeof vi.fn<() => Promise<DbRlsResponse>>>;
+  reset: ReturnType<typeof vi.fn<() => Promise<DbResetResponse>>>;
 };
 
 type AuthServiceMock = {
@@ -44,6 +46,7 @@ describe('EnvDbController', () => {
           },
         },
       })),
+      reset: vi.fn(async () => ({ reset: true, migrations_applied: [] })),
     };
     authService = {
       isEnabled: vi.fn(() => true),
@@ -129,5 +132,80 @@ describe('EnvDbController', () => {
         permissions: ['envdb:write'],
       }),
     );
+  });
+
+  describe('eve-job-token header', () => {
+    const member: AuthUser = { user_id: 'user_123', permissions: ['envdb:read'] };
+
+    function headerToken(projectId: string, orgId: string): JobTokenPayload {
+      return {
+        sub: 'job',
+        user_id: 'user_123',
+        org_id: orgId,
+        project_id: projectId,
+        job_id: 'job_123',
+        permissions: ['envdb:read', 'envdb:write'],
+        exp: Math.floor(Date.now() / 1000) + 600,
+        iat: Math.floor(Date.now() / 1000),
+        type: 'job',
+      };
+    }
+
+    const runWrite = () =>
+      controller.sql('proj_test', 'test', { sql: 'DELETE FROM notes', allow_write: true }, member, 'req_3', 'job-token-value');
+
+    it('does not unlock writes with a job token from another project in the same org', async () => {
+      authService.verifyJobToken.mockReturnValue(headerToken('proj_sibling', 'org_test'));
+
+      await expect(runWrite()).rejects.toBeInstanceOf(ForbiddenException);
+      expect(envDbService.executeSql).not.toHaveBeenCalled();
+    });
+
+    it('does not unlock writes with a job token from another org', async () => {
+      authService.verifyJobToken.mockReturnValue(headerToken('proj_other', 'org_other'));
+
+      await expect(runWrite()).rejects.toBeInstanceOf(ForbiddenException);
+      expect(envDbService.executeSql).not.toHaveBeenCalled();
+    });
+
+    it('refuses a job token that names no project', async () => {
+      authService.verifyJobToken.mockReturnValue(headerToken('', 'org_test'));
+
+      await expect(runWrite()).rejects.toBeInstanceOf(ForbiddenException);
+      expect(envDbService.executeSql).not.toHaveBeenCalled();
+    });
+
+    it('does not run a reset with a job token from another project', async () => {
+      authService.verifyJobToken.mockReturnValue(headerToken('proj_sibling', 'org_test'));
+
+      await expect(
+        controller.reset('proj_test', 'test', { force: true }, member, 'req_4', 'job-token-value'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(envDbService.reset).not.toHaveBeenCalled();
+    });
+
+    it('does not lend its permissions to read routes of another project', async () => {
+      authService.verifyJobToken.mockReturnValue(headerToken('proj_sibling', 'org_test'));
+
+      await expect(
+        controller.rls('proj_test', 'test', member, 'req_5', 'job-token-value'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(envDbService.getRls).not.toHaveBeenCalled();
+    });
+
+    it("still unlocks writes with a job token from the path's own project", async () => {
+      authService.verifyJobToken.mockReturnValue(headerToken('proj_test', 'org_test'));
+
+      await runWrite();
+
+      expect(envDbService.executeSql).toHaveBeenCalledWith(
+        'proj_test',
+        'test',
+        'DELETE FROM notes',
+        undefined,
+        true,
+        expect.objectContaining({ permissions: ['envdb:read', 'envdb:write'] }),
+      );
+    });
   });
 });
