@@ -19,6 +19,7 @@ import {
   VALID_TOOLCHAINS,
   generatePipelineRunId,
   getScriptConfig,
+  isOrgManagementPermission,
   isValidPermission,
   mergeEnvOverrides,
   parseStepExecution as parseSharedStepExecution,
@@ -340,7 +341,9 @@ export class PipelineExpanderService {
         org_id: orgId,
         principal_type: 'user',
         principal_id: userId,
-        project_id: projectId,
+        // Org management is judged on the actor's org role alone, so a project
+        // role never lets a job token manage the org.
+        project_id: isOrgManagementPermission(permission) ? undefined : projectId,
         permission,
       });
       if (!result.allowed) {

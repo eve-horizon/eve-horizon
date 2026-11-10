@@ -136,29 +136,39 @@ export const DEFAULT_SERVICE_PERMISSIONS: readonly Permission[] = [
 ];
 
 /**
- * Permissions a deployed-service token never carries, whatever the manifest
- * declares in `x-eve.permissions`: platform access and org management that
- * reaches beyond the service's own project. Every `*:admin` permission is
- * excluded as well (see {@link clampServiceTokenPermissions}).
+ * Org- and platform-management permissions: they manage the org (members,
+ * invites, settings, integrations, endpoints, new projects) or the platform,
+ * not a project's work. A project role never confers them on a token; they come
+ * only from an org-level role or binding.
  */
-const SERVICE_TOKEN_EXCLUDED: ReadonlySet<string> = new Set<Permission>([
-  'system:read',
+export const ORG_MANAGEMENT_PERMISSIONS: readonly Permission[] = [
   'orgs:create',
   'orgs:write',
+  'orgs:admin',
   'orgs:invite',
   'projects:create',
   'integrations:write',
   'endpoints:write',
-]);
+  'system:read',
+  'system:admin',
+];
+
+const ORG_MANAGEMENT_SET: ReadonlySet<string> = new Set<string>(ORG_MANAGEMENT_PERMISSIONS);
+
+/** True for a permission in {@link ORG_MANAGEMENT_PERMISSIONS}. */
+export function isOrgManagementPermission(permission: string): boolean {
+  return ORG_MANAGEMENT_SET.has(permission);
+}
 
 /**
- * Drop the permissions a deployed-service token may not carry: every admin-level
- * (`*:admin`) permission and those in {@link SERVICE_TOKEN_EXCLUDED}. Applied
- * when a service token is minted and again when one is verified, so a token
- * signed before a narrower set took effect is held to it too.
+ * Drop the permissions a deployed-service token may not carry, whatever the
+ * manifest declares in `x-eve.permissions`: every admin-level (`*:admin`)
+ * permission and every org-management permission. Applied when a service token
+ * is minted and again when one is verified, so a token signed before a
+ * narrower set took effect is held to it too.
  */
 export function clampServiceTokenPermissions(requested: readonly string[]): string[] {
   return [...new Set(requested)].filter(
-    (permission) => !permission.endsWith(':admin') && !SERVICE_TOKEN_EXCLUDED.has(permission),
+    (permission) => !permission.endsWith(':admin') && !isOrgManagementPermission(permission),
   );
 }

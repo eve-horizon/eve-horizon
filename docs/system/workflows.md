@@ -269,6 +269,13 @@ Supported axes match access binding scopes: `orgfs`, `orgdocs`, `envdb`, and
 intersections fail closed. Request-supplied scope requires `jobs:harness_override`.
 The CLI does not expose `--scope-*` flags yet.
 
+Step `permissions:` for the job token may only list permissions the invoking
+actor holds. Org-management permissions (`orgs:create`, `orgs:write`,
+`orgs:admin`, `orgs:invite`, `projects:create`, `integrations:write`,
+`endpoints:write`, `system:read`, `system:admin`) count only when the actor holds
+them through their org role; a project role alone does not let a step grant them.
+The same rule applies to pipeline step permissions.
+
 ## Validation
 
 `eve manifest validate` checks workflow graphs at sync time:
