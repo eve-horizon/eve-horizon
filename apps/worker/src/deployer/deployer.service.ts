@@ -2755,7 +2755,7 @@ export class DeployerService {
   private async readFilesForConfigMap(repoRoot: string, source: string): Promise<Record<string, string>> {
     let data: Record<string, string>;
     try {
-      data = await readRepoFiles(repoRoot, source, CONFIGMAP_MAX_BYTES);
+      data = await readRepoFiles(repoRoot, source, CONFIGMAP_MAX_BYTES, CONFIGMAP_MAX_BYTES);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to read files from ${source}: ${message}`);

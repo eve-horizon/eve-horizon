@@ -60,8 +60,17 @@ async function resolveInRepo(
   return { root, lexical, real };
 }
 
-/** Read an already-resolved path, checking the opened descriptor itself. */
-async function readRegularFile(realPath: string, label: string, maxBytes: number): Promise<string> {
+/**
+ * Read an already-resolved path, checking the opened descriptor itself.
+ * `overLimit` replaces the size message when the limit is a remaining total.
+ */
+async function readRegularFile(
+  realPath: string,
+  label: string,
+  maxBytes: number,
+  overLimit?: string,
+): Promise<string> {
+  const tooLarge = () => new RepoFileError(overLimit ?? `${label} is larger than ${maxBytes} bytes`, 'too_large');
   // O_NONBLOCK so a named pipe cannot hold the open.
   const handle = await fs.open(realPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
   try {
@@ -70,7 +79,7 @@ async function readRegularFile(realPath: string, label: string, maxBytes: number
       throw new RepoFileError(`${label} is not a regular file`, 'not_regular');
     }
     if (stat.size > maxBytes) {
-      throw new RepoFileError(`${label} is larger than ${maxBytes} bytes`, 'too_large');
+      throw tooLarge();
     }
     const buffer = Buffer.alloc(Math.min(stat.size, maxBytes) + 1);
     let filled = 0;
@@ -80,7 +89,7 @@ async function readRegularFile(realPath: string, label: string, maxBytes: number
       filled += bytesRead;
     }
     if (filled > maxBytes) {
-      throw new RepoFileError(`${label} is larger than ${maxBytes} bytes`, 'too_large');
+      throw tooLarge();
     }
     return buffer.subarray(0, filled).toString('utf8');
   } finally {
@@ -98,20 +107,25 @@ export async function readRepoFile(repoRoot: string, relativePath: string, maxBy
  * Read a file, or the files directly inside a directory, from the checkout,
  * keyed by file name. Subdirectories are skipped (the result is flat); any
  * other entry that is not a regular file inside the checkout is refused.
- * Each file may be at most `maxBytesPerFile`.
+ * Each file may be at most `maxBytesPerFile`, and all of them together at
+ * most `maxTotalBytes`: reading stops at the first file that would pass it.
  */
 export async function readRepoFiles(
   repoRoot: string,
   relativePath: string,
   maxBytesPerFile: number,
+  maxTotalBytes = Number.POSITIVE_INFINITY,
 ): Promise<Record<string, string>> {
   const { root, lexical, real } = await resolveInRepo(repoRoot, relativePath, true);
   const stat = await fs.stat(real);
   if (!stat.isDirectory()) {
-    return { [path.basename(lexical)]: await readRegularFile(real, relativePath, maxBytesPerFile) };
+    return {
+      [path.basename(lexical)]: await readRegularFile(real, relativePath, Math.min(maxBytesPerFile, maxTotalBytes)),
+    };
   }
 
   const data: Record<string, string> = {};
+  let total = 0;
   for (const entry of await fs.readdir(real)) {
     if (entry.toLowerCase() === '.git') {
       continue;
@@ -132,7 +146,16 @@ export async function readRepoFiles(
     if ((await fs.stat(entryReal)).isDirectory()) {
       continue;
     }
-    data[entry] = await readRegularFile(entryReal, label, maxBytesPerFile);
+    const remaining = maxTotalBytes - total;
+    const limit = Math.min(maxBytesPerFile, remaining);
+    const content = await readRegularFile(
+      entryReal,
+      label,
+      limit,
+      limit < maxBytesPerFile ? `files in ${relativePath} are larger than ${maxTotalBytes} bytes in total` : undefined,
+    );
+    total += Buffer.byteLength(content);
+    data[entry] = content;
   }
   return data;
 }
