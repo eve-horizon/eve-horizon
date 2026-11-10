@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -23,6 +23,10 @@ describe('repo file reader', () => {
     fs.writeFileSync(path.join(repo, '..notes.txt'), 'notes\n');
     fs.mkdirSync(path.join(repo, '..data'), { recursive: true });
     fs.writeFileSync(path.join(repo, '..data', 'seed.sql'), 'SELECT 1;\n');
+    fs.mkdirSync(path.join(repo, 'bulk'), { recursive: true });
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      fs.writeFileSync(path.join(repo, 'bulk', name), 'x'.repeat(600 * 1024));
+    }
   });
 
   afterAll(() => {
@@ -64,6 +68,26 @@ describe('repo file reader', () => {
     it('still refuses a real parent segment', async () => {
       expect(await refusal(readRepoFile(repo, '../..notes.txt', MiB))).toBeInstanceOf(RepoFileError);
       expect(await refusal(readRepoFile(repo, 'config/../../outside.txt', MiB))).toBeInstanceOf(RepoFileError);
+    });
+  });
+  describe('directory mount total', () => {
+    it('stops as soon as the running total would pass the limit', async () => {
+      const open = vi.spyOn(fs.promises, 'open');
+      try {
+        const error = await refusal(readRepoFiles(repo, 'bulk', MiB, MiB));
+        expect(error).toBeInstanceOf(RepoFileError);
+        expect((error as RepoFileError).code).toBe('too_large');
+        // The first file is read; the second is refused from its size alone;
+        // the third is never opened.
+        expect(open.mock.calls.length).toBeLessThanOrEqual(2);
+      } finally {
+        open.mockRestore();
+      }
+    });
+
+    it('reads a directory that fits the total', async () => {
+      const files = await readRepoFiles(repo, '..data', MiB, MiB);
+      expect(files).toEqual({ 'seed.sql': 'SELECT 1;\n' });
     });
   });
 });
