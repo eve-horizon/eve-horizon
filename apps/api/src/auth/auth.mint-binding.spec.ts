@@ -71,7 +71,13 @@ const db = vi.hoisted(() => {
     getEffectiveCustomPermissions: vi.fn(async () => []),
   };
 
-  return { state, users, memberships, projects, accessRoles };
+  const identities = {
+    findByFingerprint: vi.fn(async () => null),
+    listByUserAndProvider: vi.fn(async () => []),
+    create: vi.fn(async (row: Record<string, unknown>) => ({ ...row, created_at: new Date(), updated_at: new Date() })),
+  };
+
+  return { state, users, memberships, projects, accessRoles, identities };
 });
 
 vi.mock('@eve/db', async (importOriginal) => {
@@ -82,6 +88,7 @@ vi.mock('@eve/db', async (importOriginal) => {
     membershipQueries: vi.fn(() => db.memberships),
     projectQueries: vi.fn(() => db.projects),
     accessRoleQueries: vi.fn(() => db.accessRoles),
+    identityQueries: vi.fn(() => db.identities),
   };
 });
 
@@ -218,6 +225,19 @@ describe('POST /auth/mint tokens minted by an org or project admin', () => {
     await expect(
       guardAllows(rbacService, later, { url: '/auth/identities', route: '/auth/identities' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('cannot register a login key, even when the service is called directly', async () => {
+    const { controller, authService } = build();
+    const minted = await controller.mint(
+      { email: 'newhire@other.example', org_id: 'org_mine', role: 'member' } as AuthMintRequest,
+      orgOwner,
+    );
+    const holder = await authService.verifyAuthorizationHeader(`Bearer ${minted.access_token}`);
+    const publicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl holder';
+
+    await expect(controller.registerIdentity({ public_key: publicKey } as never, holder)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(authService.registerIdentity({ public_key: publicKey }, holder)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('cannot mint further tokens or reach user-level routes', async () => {
