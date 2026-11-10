@@ -80,6 +80,7 @@ export class AuthInternalController {
       scope,
       ttlSeconds: body.ttl_seconds,
       agentSlug: agentSlug ?? undefined,
+      userSecretsExcluded: job.user_secrets_excluded,
     });
 
     // Decode the exp claim for the response

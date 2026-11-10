@@ -284,6 +284,7 @@ export class AuthService {
     scope?: AccessBindingScope;
     ttlSeconds?: number;
     agentSlug?: string;
+    userSecretsExcluded?: boolean;
   }): string {
     if (!this.signerKey?.privateKey) {
       throw new Error('Signing key not configured');
@@ -308,6 +309,10 @@ export class AuthService {
 
     if (params.scope && Object.keys(params.scope).length > 0) {
       payload.scope = params.scope;
+    }
+
+    if (params.userSecretsExcluded) {
+      payload.user_secrets_excluded = true;
     }
 
     // Include agent identity when available — gives apps a stable agent identifier

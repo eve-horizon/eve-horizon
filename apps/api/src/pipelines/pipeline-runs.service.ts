@@ -20,6 +20,7 @@ import * as yaml from 'yaml';
 import { interval, from, concatMap, switchMap, takeWhile, share } from 'rxjs';
 import type { MessageEvent } from '@nestjs/common';
 import { PipelineExpanderService, type PipelineRunWithJobsResponse } from './pipeline-expander.service.js';
+import type { WorkStartOptions } from '../auth/token-scope.js';
 
 const DEFAULT_WAIT_SECONDS = 60;
 const MIN_WAIT_SECONDS = 5;
@@ -60,10 +61,10 @@ export class PipelineRunsService {
     pipelineName: string,
     request: PipelineRunRequest,
     runMode: string | null,
-    options: { actorUserId?: string; dedupeKey?: string } = {},
+    options: { actorUserId?: string; dedupeKey?: string } & WorkStartOptions = {},
   ): Promise<{ detail: PipelineRunDetailResponse; pipeline: PipelineDefinition }>
   {
-    const { actorUserId, dedupeKey } = options;
+    const { actorUserId, dedupeKey, userSecretsExcluded } = options;
     await this.ensureProjectExists(projectId);
     const { manifest, pipeline } = await this.getPipeline(projectId, pipelineName, request.ref);
 
@@ -74,7 +75,7 @@ export class PipelineRunsService {
 
     // Route all pipelines to job-based execution (build actions require job-based path)
     // Legacy step_run path is retained below but no longer reached
-    return this.createRunAsJobs(projectId, pipelineName, request, pipeline, dedupeKey, actorUserId);
+    return this.createRunAsJobs(projectId, pipelineName, request, pipeline, dedupeKey, actorUserId, { userSecretsExcluded });
 
     /* ===== LEGACY STEP_RUN CODE - RETAINED FOR REFERENCE, NO LONGER EXECUTED =====
     // Handle deduplication: cancel existing active run if dedupe_key provided
@@ -678,6 +679,7 @@ export class PipelineRunsService {
     pipeline: PipelineDefinition,
     dedupeKey?: string,
     actorUserId?: string,
+    workOptions: WorkStartOptions = {},
   ): Promise<{ detail: PipelineRunDetailResponse; pipeline: PipelineDefinition }> {
     // Handle deduplication: cancel existing active run if dedupe_key provided
     if (dedupeKey) {
@@ -690,7 +692,7 @@ export class PipelineRunsService {
       git_sha: request.ref,
       inputs: request.inputs,
       dedupe_key: dedupeKey,
-    }, actorUserId);
+    }, actorUserId, workOptions);
 
     // Map expander response to the expected format
     // Jobs are used instead of step runs, so steps array is empty

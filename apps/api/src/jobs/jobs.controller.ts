@@ -32,7 +32,7 @@ import {
 } from '@nestjs/swagger';
 import { RequirePermission, ScopeNarrowed } from '../auth/permission.decorator.js';
 import { RbacService } from '../auth/rbac.service.js';
-import { actorUserId, heldScope, scopeListFiltersToToken } from '../auth/token-scope.js';
+import { heldScope, scopeListFiltersToToken, workStartOptions } from '../auth/token-scope.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import type { Permission } from '../auth/permissions.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
@@ -145,7 +145,7 @@ export class JobsController {
         await this.rbac.requirePermissions(caller, projectId, needs);
       }
     }
-    return this.jobsService.create(projectId, body, actorUserId(caller), correlationId);
+    return this.jobsService.create(projectId, body, caller?.user_id, correlationId, workStartOptions(caller));
   }
 
   @RequirePermission('jobs:read')
@@ -268,7 +268,7 @@ export class JobsController {
     @CurrentUser() caller: AuthUser | undefined,
     @CorrelationId() correlationId: string | undefined,
   ): Promise<CreateBatchResponse> {
-    return this.jobsService.createBatch(projectId, body, correlationId, actorUserId(caller));
+    return this.jobsService.createBatch(projectId, body, correlationId, caller?.user_id, workStartOptions(caller));
   }
 
   // ==========================================================================

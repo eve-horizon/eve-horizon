@@ -267,6 +267,9 @@ workflows:
 Supported axes match access binding scopes: `orgfs`, `orgdocs`, `envdb`, and
 `cloud_fs`. Workflow, step, and invocation scopes are intersected; empty
 intersections fail closed. Request-supplied scope requires `jobs:harness_override`.
+Request-supplied `permissions` and `scope` need a user who started the run: they
+are refused when there is none, and otherwise judged against that user before any
+job is created.
 The CLI does not expose `--scope-*` flags yet.
 
 Step `permissions:` for the job token may only list permissions the invoking
@@ -325,6 +328,12 @@ Retry creates fresh replacement child jobs, marks the replaced current steps as
 superseded in their hints, preserves the original materialized inputs/git
 controls/resource refs, and rewires dependencies so downstream prior-step
 result injection reads from the replacement attempts.
+
+A retry runs as the user who asks for it, never as whoever ran the workflow
+before: the replacement steps record the retrier as their actor, and their copied
+job-token permissions and scope are judged again for the retrier (refused if the
+retrier does not hold them; withheld as for any run with no user when nobody
+asked).
 
 ## Non-Chat Notifications
 

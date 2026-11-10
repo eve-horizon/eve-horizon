@@ -138,14 +138,20 @@ export async function jobTokenPermissionsFor(
   return kept;
 }
 
+/** How work a caller starts treats the actor's user-scope secrets. */
+export interface WorkStartOptions {
+  /** True for work started with an org-bound token: never resolve the actor's user-scope secrets. */
+  userSecretsExcluded?: boolean;
+}
+
 /**
- * The user to record as the actor of work a caller starts (jobs, workflows,
- * pipeline runs, deploys). An org-bound user token acts as an org-level
- * principal, not as the person behind the account, so work it starts has no
- * user actor and never resolves that user's private secrets or bindings.
+ * Work started with an org-bound user token (a bot), or by a job token for
+ * such work, records the bot as its actor, so step ceilings judge it and the
+ * work stays attributed, but is marked to resolve no user-scope secrets: a
+ * person who later adopts the account must not leak secrets through it.
  */
-export function actorUserId(caller: AuthUser | undefined): string | undefined {
-  return caller && !caller.bound_org_id ? caller.user_id : undefined;
+export function workStartOptions(caller: AuthUser | undefined): Required<WorkStartOptions> {
+  return { userSecretsExcluded: Boolean(caller?.bound_org_id || caller?.user_secrets_excluded) };
 }
 
 /**

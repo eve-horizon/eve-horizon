@@ -396,6 +396,18 @@ type JobDispatchOutcome =
       lastErrorMessage: string | null;
     };
 
+/**
+ * The user whose user-scope secrets a job's invocation may resolve: the job's
+ * actor, unless the API marked the job (work started with an org-bound token)
+ * to resolve none, whoever owns that account later.
+ */
+export function secretsUserIdForJob(job: Pick<Job, 'actor_user_id' | 'user_secrets_excluded'>): string | undefined {
+  if (!job.actor_user_id || job.user_secrets_excluded) {
+    return undefined;
+  }
+  return job.actor_user_id;
+}
+
 @Injectable()
 export class LoopService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LoopService.name);
@@ -2052,8 +2064,9 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     if (Array.isArray(job.token_permissions) && job.token_permissions.length > 0) {
       invocationData.__eve_job_permissions = job.token_permissions;
     }
-    if (job.actor_user_id) {
-      invocationData.user_id = job.actor_user_id;
+    const secretsUserId = secretsUserIdForJob(job);
+    if (secretsUserId) {
+      invocationData.user_id = secretsUserId;
     }
     if (typeof job.hints?.skill_mode === 'string') {
       invocationData.skill_mode = job.hints.skill_mode;

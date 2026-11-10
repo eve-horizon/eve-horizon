@@ -3,6 +3,7 @@ import type { Db } from '@eve/db';
 import { jobQueries, projectQueries, batchJobQueries, type JobHints, type JobGitConfig } from '@eve/db';
 import type { CreateBatchRequest, CreateBatchResponse, BatchValidateResponse, BatchValidationError } from '@eve/shared';
 import { generateBatchId } from '@eve/shared';
+import type { WorkStartOptions } from '../auth/token-scope.js';
 
 /**
  * Batch job graph validation and atomic creation.
@@ -146,6 +147,7 @@ export class JobBatchService {
     request: CreateBatchRequest,
     correlationId?: string,
     userId?: string,
+    options: WorkStartOptions = {},
   ): Promise<CreateBatchResponse> {
     // 1. Validate the graph
     const validation = await this.validateBatch(projectId, request);
@@ -254,6 +256,7 @@ export class JobBatchService {
         resource_refs: node.resource_refs ?? [],
         content_hash: null,
         actor_user_id: userId ?? null,
+        user_secrets_excluded: options.userSecretsExcluded ?? false,
         failure_disposition: null,
         closed_at: null,
         close_reason: null,

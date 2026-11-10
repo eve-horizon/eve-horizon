@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as loop from './loop.service';
-
-type SecretsUserIdForJob = (job: { actor_user_id: string | null; user_secrets_excluded?: boolean }) => string | undefined;
-
-/** The user whose user-scope secrets a job's invocation may resolve. */
-const secretsUserIdForJob = (loop as unknown as { secretsUserIdForJob: SecretsUserIdForJob }).secretsUserIdForJob;
+import { secretsUserIdForJob } from './loop.service';
 
 describe('secretsUserIdForJob', () => {
   it("is the job's actor for work a person started", () => {

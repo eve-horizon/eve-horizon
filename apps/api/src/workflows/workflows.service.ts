@@ -3,6 +3,7 @@ import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
 import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isOrgManagementPermission, isValidPermission, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
+import type { WorkStartOptions } from '../auth/token-scope.js';
 import { intersectScopes, pathPatternBase } from './scope-algebra.js';
 import * as yaml from 'yaml';
 
@@ -885,7 +886,9 @@ export class WorkflowsService {
     request?: WorkflowInvokeRequest,
     wait: boolean = false,
     userId?: string,
+    options: WorkStartOptions = {},
   ): Promise<WorkflowInvokeResponse | WorkflowInvokeResult> {
+    const userSecretsExcluded = options.userSecretsExcluded ?? false;
     // 1. Validate project and workflow exist
     await this.ensureProjectExists(projectId);
     const workflow = await this.findByName(projectId, workflowName);
@@ -946,6 +949,20 @@ export class WorkflowsService {
     );
     const invocationTokenPermissions = this.parseTokenPermissions(
       request?.permissions,
+      `Workflow "${workflowName}" invocation permissions`,
+    );
+    // Caller-supplied permissions and scope need a user to hold them to, and
+    // are judged against that user before any job is created.
+    if ((invocationTokenPermissions || invocationTokenScope) && !hasUserActor(userId)) {
+      throw new BadRequestException(
+        `Workflow "${workflowName}" invocation permissions and scope need a user who started the run`,
+      );
+    }
+    await this.assertActorCanGrantPermissions(
+      project.org_id,
+      projectId,
+      userId,
+      invocationTokenPermissions ?? null,
       `Workflow "${workflowName}" invocation permissions`,
     );
     const appApis = this.extractWithApis(workflow.definition);
@@ -1023,6 +1040,7 @@ export class WorkflowsService {
       resource_refs: resourceRefs,
       content_hash: null,
       actor_user_id: userId ?? null,
+      user_secrets_excluded: userSecretsExcluded,
       failure_disposition: null,
       closed_at: null,
       close_reason: null,
@@ -1192,6 +1210,7 @@ export class WorkflowsService {
         resource_refs: stepResourceRefs,
         content_hash: null,
         actor_user_id: userId ?? null,
+        user_secrets_excluded: userSecretsExcluded,
         failure_disposition: null,
         closed_at: null,
         close_reason: null,
@@ -1259,8 +1278,13 @@ export class WorkflowsService {
     projectId: string,
     request: WorkflowRetryRequest,
     userId?: string,
+    options: WorkStartOptions = {},
   ): Promise<WorkflowRetryResponse> {
     await this.ensureProjectExists(projectId);
+    const project = await this.projects.findById(projectId);
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} not found`);
+    }
 
     const root = await this.jobs.findById(request.root_job_id);
     if (!root) {
@@ -1369,13 +1393,37 @@ export class WorkflowsService {
         const { id: retryJobId } = await txJobs.generateJobId(lockedRoot.project_id, lockedRoot.id);
         oldToNew.set(source.id, retryJobId);
 
-        const retryHints = this.buildRetryStepHints(source, {
-          rootJobId: lockedRoot.id,
-          generation,
-          mode,
-          fromStep: request.from_step,
-          requestedAt,
-        });
+        // A retry runs as the retrier, never as whoever ran the step before:
+        // the copied permissions and scope are judged again for the retrier.
+        const retryContext = `Workflow retry of step "${source.step_name ?? source.id}"`;
+        await this.assertActorCanUseScope(
+          project.org_id,
+          projectId,
+          userId,
+          source.token_scope ?? null,
+          `${retryContext} scope`,
+        );
+        const {
+          permissions: retryTokenPermissions,
+          withheld: withheldTokenPermissions,
+        } = await this.ceilStepTokenPermissions(
+          project.org_id,
+          projectId,
+          userId,
+          source.token_permissions,
+          `${retryContext} permissions`,
+        );
+
+        const retryHints = {
+          ...this.buildRetryStepHints(source, {
+            rootJobId: lockedRoot.id,
+            generation,
+            mode,
+            fromStep: request.from_step,
+            requestedAt,
+          }),
+          ...(withheldTokenPermissions.length > 0 ? { token_permissions_withheld: withheldTokenPermissions } : {}),
+        };
 
         const created = await txJobs.create({
           id: retryJobId,
@@ -1401,7 +1449,7 @@ export class WorkflowsService {
           harness_profile_override: source.harness_profile_override,
           env_overrides: source.env_overrides,
           token_scope: source.token_scope,
-          token_permissions: source.token_permissions,
+          token_permissions: retryTokenPermissions,
           harness_profile_source: source.harness_profile_source,
           harness_profile_hash: source.harness_profile_hash,
           git_json: source.git_json,
@@ -1420,7 +1468,8 @@ export class WorkflowsService {
           target: source.target,
           resource_refs: source.resource_refs,
           content_hash: source.content_hash,
-          actor_user_id: userId ?? source.actor_user_id,
+          actor_user_id: userId ?? null,
+          user_secrets_excluded: options.userSecretsExcluded ?? false,
           failure_disposition: null,
           closed_at: null,
           close_reason: null,

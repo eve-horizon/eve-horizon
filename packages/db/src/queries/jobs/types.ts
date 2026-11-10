@@ -147,6 +147,8 @@ export interface Job {
 
   // Audit
   actor_user_id: string | null;
+  /** Set by the API for work started with an org-bound token: never resolve the actor's user-scope secrets. */
+  user_secrets_excluded: boolean;
   failure_disposition: 'cancelled' | 'failed' | 'upstream_failed' | null;
 
   // Timestamps

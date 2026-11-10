@@ -875,12 +875,13 @@ workflows:
             allow_mount_ids: ["mount_a"]
 `);
 
+      // Request-supplied scope needs a user who started the run.
       await service.invoke('proj_test123', 'scoped', {
         scope: {
           orgfs: { allow_prefixes: ['/groups/projects/project-a/reports/**'] },
           cloud_fs: { allow_mount_ids: ['mount_a'] },
         },
-      });
+      }, false, 'user_test');
 
       const rootJob = allCreatedJobs.find((job) => job.parent_id === null);
       const stepJob = allCreatedJobs.find((job) => job.step_name === 'scoped-step');

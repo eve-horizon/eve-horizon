@@ -31,6 +31,7 @@ describe('WorkflowsController', () => {
       { env_overrides: { WEB_SEARCH_API_KEY: '${secret.WEB_SEARCH_API_KEY}' } },
       false,
       'user_1',
+      { userSecretsExcluded: false },
     );
   });
 
@@ -93,6 +94,7 @@ describe('WorkflowsController', () => {
       body,
       false,
       'user_1',
+      { userSecretsExcluded: false },
     );
   });
 });

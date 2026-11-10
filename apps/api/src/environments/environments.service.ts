@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { PipelineRunsService } from '../pipelines/pipeline-runs.service.js';
 import { EnvDiagnosticsService } from './env-diagnostics.service.js';
 import { ensureManifestEnvironment } from './manifest-environment.js';
+import type { WorkStartOptions } from '../auth/token-scope.js';
 
 @Injectable()
 export class EnvironmentsService {
@@ -579,6 +580,7 @@ export class EnvironmentsService {
     envName: string,
     data: DeployRequest,
     actorUserId?: string,
+    workOptions: WorkStartOptions = {},
   ): Promise<DeployResponse> {
     // Verify project exists
     const project = await this.projects.findById(projectId);
@@ -619,7 +621,7 @@ export class EnvironmentsService {
     // Check if environment has a pipeline configured and direct flag is not set
     if (envConfig?.pipeline && !data.direct) {
       // Route to pipeline execution
-      return this.deployViaPipeline(projectId, envName, envConfig, data, environment, actorUserId);
+      return this.deployViaPipeline(projectId, envName, envConfig, data, environment, actorUserId, workOptions);
     }
 
     // Fall back to direct deploy flow
@@ -633,6 +635,7 @@ export class EnvironmentsService {
     data: DeployRequest,
     environment: Awaited<ReturnType<typeof this.environments.findByProjectAndName>> & object,
     actorUserId?: string,
+    workOptions: WorkStartOptions = {},
   ): Promise<DeployResponse> {
     const pipelineName = envConfig.pipeline!;
 
@@ -679,7 +682,7 @@ export class EnvironmentsService {
       pipelineName,
       pipelineRunRequest,
       'env-deploy',
-      { actorUserId },
+      { actorUserId, ...workOptions },
     );
 
     return {

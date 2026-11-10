@@ -29,7 +29,7 @@ import {
 } from '@nestjs/swagger';
 import { EnvironmentsService } from './environments.service.js';
 import { CurrentUser } from '../common/request-decorators.js';
-import { actorUserId } from '../auth/token-scope.js';
+import { workStartOptions } from '../auth/token-scope.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import { EnvLogsService, type EnvLogsResponse } from './env-logs.service.js';
 import { EnvDiagnosticsService } from './env-diagnostics.service.js';
@@ -210,7 +210,7 @@ export class EnvironmentsController {
     @Body(new ZodValidationPipe(DeployRequestSchema)) body: DeployRequest,
     @CurrentUser() caller?: AuthUser,
   ): Promise<DeployResponse> {
-    return this.environmentsService.deploy(projectId, envName, body, actorUserId(caller));
+    return this.environmentsService.deploy(projectId, envName, body, caller?.user_id, workStartOptions(caller));
   }
 
   @RequirePermission('envs:write')

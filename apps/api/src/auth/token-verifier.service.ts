@@ -410,6 +410,7 @@ export class TokenVerifierService {
       ...(payload.scope ? { scope: payload.scope } : {}),
       ...(payload.agent_slug ? { agent_slug: payload.agent_slug } : {}),
       ...(payload.email ? { email: payload.email } : {}),
+      ...(payload.user_secrets_excluded ? { user_secrets_excluded: true } : {}),
     };
   }
 
@@ -548,6 +549,7 @@ export class TokenVerifierService {
       ...(scope ? { scope } : {}),
       ...(typeof payload.agent_slug === 'string' ? { agent_slug: payload.agent_slug } : {}),
       ...(typeof payload.email === 'string' ? { email: payload.email } : {}),
+      ...(payload.user_secrets_excluded === true ? { user_secrets_excluded: true } : {}),
       exp: payload.exp,
       iat: payload.iat,
       type: 'job',

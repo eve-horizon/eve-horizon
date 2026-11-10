@@ -31,6 +31,7 @@ import {
 } from '@eve/shared';
 import * as yaml from 'yaml';
 import { AccessService } from '../auth/access.service.js';
+import type { WorkStartOptions } from '../auth/token-scope.js';
 
 const VALID_TOOLCHAIN_SET = new Set<string>(VALID_TOOLCHAINS);
 
@@ -420,6 +421,7 @@ export class PipelineExpanderService {
     projectId: string,
     request: ExpandPipelineRequest,
     userId?: string,
+    options: WorkStartOptions = {},
   ): Promise<PipelineRunWithJobsResponse> {
     // 1. Resolve project
     const project = await this.projects.findById(projectId);
@@ -655,6 +657,7 @@ export class PipelineExpanderService {
         resource_refs: [],
         content_hash: null,
         actor_user_id: userId ?? null,
+        user_secrets_excluded: options.userSecretsExcluded ?? false,
         failure_disposition: null,
         closed_at: null,
         close_reason: null,

@@ -199,7 +199,7 @@ describe('job-token permissions when no user started the work', () => {
 
     await handler.call(controller, 'proj_a', 'tidy', {}, false, undefined, undefined, caller);
 
-    expect(service.createRun).toHaveBeenCalledWith('proj_a', 'tidy', {}, 'async', { actorUserId: 'user_padmin' });
+    expect(service.createRun).toHaveBeenCalledWith('proj_a', 'tidy', {}, 'async', { actorUserId: 'user_padmin', userSecretsExcluded: false });
   });
 
   it('mint-job-token signs no platform permissions, and org management only for an actor who holds it', async () => {

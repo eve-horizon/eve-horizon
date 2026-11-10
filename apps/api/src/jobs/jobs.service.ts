@@ -9,6 +9,7 @@ import { buildApiError } from '../system/api-errors.js';
 import { JobLogsService } from './job-logs.service.js';
 import { JobReceiptsService } from './job-receipts.service.js';
 import { JobBatchService } from './job-batch.service.js';
+import type { WorkStartOptions } from '../auth/token-scope.js';
 
 // ============================================================================
 // Request/Response Types (inline - the new model)
@@ -63,7 +64,7 @@ export interface UpdateJobRequest {
   execution_mode?: 'persistent' | 'ephemeral';      // execution strategy
 }
 
-export interface JobResponse extends Omit<Job, 'created_at' | 'updated_at' | 'defer_until' | 'due_at' | 'ready_at' | 'closed_at' | 'git_json' | 'resolved_git_json' | 'workspace_json' | 'target' | 'resource_refs'> {
+export interface JobResponse extends Omit<Job, 'created_at' | 'updated_at' | 'defer_until' | 'due_at' | 'ready_at' | 'closed_at' | 'git_json' | 'resolved_git_json' | 'workspace_json' | 'target' | 'resource_refs' | 'user_secrets_excluded'> {
   created_at: string;
   updated_at: string;
   defer_until: string | null;
@@ -557,7 +558,13 @@ export class JobsService {
   /**
    * Create a new job in a project
    */
-  async create(projectId: string, data: CreateJobRequest, userId?: string, requestId?: string): Promise<JobResponse> {
+  async create(
+    projectId: string,
+    data: CreateJobRequest,
+    userId?: string,
+    requestId?: string,
+    options: WorkStartOptions = {},
+  ): Promise<JobResponse> {
     // Validate required fields
     if (!data.description) {
       throw new BadRequestException('description is required');
@@ -782,6 +789,7 @@ export class JobsService {
       resource_refs: data.resource_refs ?? [],
       content_hash: null,
       actor_user_id: userId ?? null,
+      user_secrets_excluded: options.userSecretsExcluded ?? false,
       failure_disposition: null,
       closed_at: null,
       close_reason: null,
@@ -1711,8 +1719,9 @@ export class JobsService {
     request: CreateBatchRequest,
     correlationId?: string,
     userId?: string,
+    options: WorkStartOptions = {},
   ): Promise<CreateBatchResponse> {
-    return this.jobBatchService.createBatch(projectId, request, correlationId, userId);
+    return this.jobBatchService.createBatch(projectId, request, correlationId, userId, options);
   }
 
   // --------------------------------------------------------------------------

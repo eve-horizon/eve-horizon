@@ -836,9 +836,12 @@ Notes:
   its permissions are the user's in that org. Routes with no project, org or
   resource context, and identity or account routes (`/auth/identities`,
   `/auth/mint`, user secrets), refuse it, and it never holds `orgs:create`
-  (creating orgs), even when the body names its org. Jobs, workflows,
-  pipeline runs and deploys it starts record no user actor, so they never resolve
-  the account's user-scope secrets (even if a person later adopts the account).
+  (creating orgs), even when the body names its org. Jobs, workflows (and their
+  retries), pipeline runs and deploys it starts record the bot as their actor, so
+  step ceilings judge the bot, and are marked by the API (`jobs.user_secrets_excluded`)
+  to never resolve the account's user-scope secrets, even if a person later adopts
+  the account. Job tokens for that work carry the mark, so work they start is
+  marked too.
   Tokens minted by a system admin are not bound.
 - `--ttl <days>` sets the token TTL (1-90 days; the API refuses other values).
   Without it, the server's `EVE_AUTH_TOKEN_TTL_DAYS` applies.
