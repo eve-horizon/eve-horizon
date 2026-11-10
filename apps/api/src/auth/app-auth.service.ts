@@ -345,7 +345,7 @@ export class AppAuthService {
     const { user, created } = existing
       ? { user: existing, created: false }
       : { user: await this.createMintedUser(input.email), created: true };
-    await this.resolveMembership(orgId, user.id, role, input.project_id);
+    const orgRole = await this.resolveMembership(orgId, user.id, role, input.project_id);
 
     // ttl_days is 1-90 (request schema); without it the server default applies.
     const ttlSeconds = input.ttl_days
@@ -361,7 +361,7 @@ export class AppAuthService {
       created,
       org_id: orgId,
       project_id: input.project_id ?? null,
-      role,
+      role: orgRole,
     };
   }
 
@@ -465,16 +465,28 @@ export class AppAuthService {
   }
 
   /** Upsert the org membership (and project membership when scoped to a project). */
+  /**
+   * Upsert the org membership (and project membership when scoped to a
+   * project) without ever lowering an existing role: each keeps the higher of
+   * its current role and the requested one. The caller's own ceiling on the
+   * requested role is checked before this. Returns the resulting org role.
+   */
   private async resolveMembership(
     orgId: string,
     userId: string,
     role: MembershipRole,
     projectId?: string,
-  ): Promise<void> {
-    await this.memberships.upsertOrgMembership(orgId, userId, role);
+  ): Promise<MembershipRole> {
+    const higher = (current: MembershipRole | undefined): MembershipRole =>
+      current && ROLE_RANK[current] > ROLE_RANK[role] ? current : role;
+
+    const orgRole = higher((await this.memberships.findOrgMembership(userId, orgId))?.role);
+    await this.memberships.upsertOrgMembership(orgId, userId, orgRole);
     if (projectId) {
-      await this.memberships.upsertProjectMembership(projectId, userId, role);
+      const projectRole = higher((await this.memberships.findProjectMembership(userId, projectId))?.role);
+      await this.memberships.upsertProjectMembership(projectId, userId, projectRole);
     }
+    return orgRole;
   }
 
   async verifyAppLinkToken(token: string): Promise<AppLinkTokenPayload> {

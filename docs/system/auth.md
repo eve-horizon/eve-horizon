@@ -816,7 +816,9 @@ eve auth mint --email app-bot@example.com --org org_xxx --ttl 90
 Notes:
 - Requires admin privileges (system admin or org/project admin).
 - The user is created if it doesn't already exist.
-- A membership is added to the org/project you specify.
+- A membership is added to the org/project you specify. An existing role is never
+  lowered: the user keeps the higher of their current role and `--role`, and the
+  response reports the resulting org role.
 - Org and project admins stay within their own reach (system admins are not limited):
   - `--role` may not be higher than the caller's own role in the org (a project admin
     whose org role is `member` can mint `member` tokens only);
