@@ -120,6 +120,12 @@ For local development only, `EVE_WEBHOOKS_ALLOW_PRIVATE_TARGETS=true` on the
 API lets subscriptions and deliveries reach private and loopback receivers.
 It is off by default and must stay off on shared or hosted instances.
 
+Subscriptions created before these rules keep their URLs. If one points at a
+private, loopback or cluster address, or its receiver answers with a
+redirect, every delivery to it fails, and after 10 consecutive failures the
+subscription is disabled. Delete it and create a new one with a public URL
+that answers `2xx` directly.
+
 ## Delivery + Retry
 
 - Retry schedule: 1m → 5m → 30m → 2h → 12h (max 5 attempts).

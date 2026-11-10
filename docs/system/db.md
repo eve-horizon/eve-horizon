@@ -59,6 +59,21 @@ are a different server and are not subject to these checks. If the platform
 database host cannot be resolved, env-db commands answer `503` rather than
 guess.
 
+Earlier versions gave an environment with no database a schema named
+`eve_env_<project>_<env>` inside the platform database. Those schemas and
+their data are left in place, unused. An operator can list them with a
+read-only query against the platform database:
+
+```sql
+SELECT schema_name
+FROM information_schema.schemata
+WHERE schema_name LIKE 'eve\_env\_%'
+ORDER BY schema_name;
+```
+
+Move any data a tenant still needs into a database of the environment's own,
+then drop the schema.
+
 The env DB routes (`/projects/:id/envs/:name/db/...`) address the project by id.
 A job token sent in the optional `eve-job-token` header lends its permissions
 (for example `envdb:write`) only when it was minted for that same project; any

@@ -332,6 +332,12 @@ reason `pull_request_from_fork`, `pull_request_author_not_collaborator` or
 is private; making the membership public or adding them as a repository
 collaborator resolves it.
 
+Pull requests opened by bots or GitHub Apps (Dependabot, Renovate, or any
+app installation token) report `CONTRIBUTOR` or `NONE`, so they no longer
+start runs; their events are recorded with reason
+`pull_request_author_not_collaborator`. Cover them another way, for example
+with a push trigger on their branches or by having a collaborator open the PR.
+
 #### Example: PR Preview Deployment
 
 Deploy a preview environment when PR is opened or updated on main:
