@@ -7,10 +7,10 @@
 // `http-proxy-middleware` (with a stub that records what reaches the API).
 import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, parse as legacyParseUrl } from 'node:url';
 
 const appDir = fileURLToPath(new URL('..', import.meta.url));
 
@@ -48,6 +48,70 @@ export function get(port, path) {
   });
 }
 
+/**
+ * Send `target` as the raw request-target of a GET (absolute-form, fragments
+ * and all) and return the response status.
+ */
+export function rawGet(port, target) {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => {
+      socket.write(`GET ${target} HTTP/1.1\r\nHost: dashboard.test\r\nConnection: close\r\n\r\n`);
+    });
+    let response = '';
+    socket.setEncoding('latin1');
+    socket.on('data', (chunk) => {
+      response += chunk;
+    });
+    socket.on('end', () => resolve(Number(response.split(' ', 2)[1])));
+    socket.on('error', reject);
+  });
+}
+
+/**
+ * Stand-in for http-proxy-middleware 3 (over http-proxy 1.18), following
+ * their documented behaviour: an object `pathRewrite` replaces the first
+ * matching pattern in req.url; the upstream path is the target's path joined
+ * with url.parse(req.url).path (so a fragment or an absolute-form host is
+ * dropped); `on.proxyReq(proxyReq, req, res)` runs before anything is sent
+ * (not for requests carrying an Expect header), and a proxyReq it destroys
+ * goes to `on.error`, or to a 500 without one. Paths that would be sent are
+ * pushed to `forwarded`.
+ */
+export function proxyMiddlewareStub(forwarded) {
+  return {
+    createProxyMiddleware(options) {
+      const targetPath = new URL(options.target).pathname.replace(/\/+$/, '');
+      const rewrites = Object.entries(options.pathRewrite ?? {}).map(([from, to]) => [new RegExp(from), to]);
+      return (req, res) => {
+        let url = req.url;
+        const rewrite = rewrites.find(([from]) => from.test(url));
+        if (rewrite) url = url.replace(rewrite[0], rewrite[1]);
+
+        const proxyReq = {
+          path: targetPath + (legacyParseUrl(url).path ?? ''),
+          destroyed: false,
+          destroy(error) {
+            this.destroyed = true;
+            this.error = error ?? Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+          },
+        };
+        if (!req.headers.expect) options.on?.proxyReq?.(proxyReq, req, res, options);
+        if (proxyReq.destroyed) {
+          if (options.on?.error) {
+            options.on.error(proxyReq.error, req, res, options.target);
+          } else if (!res.headersSent) {
+            res.writeHead(500);
+            res.end('Error occurred while trying to proxy');
+          }
+          return;
+        }
+        forwarded.push(proxyReq.path);
+        res.end(`proxied ${proxyReq.path}`);
+      };
+    },
+  };
+}
+
 async function waitForListening(port) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -74,5 +138,5 @@ export async function startDashboardServer(env = {}) {
   Object.assign(process.env, env, { PORT: String(port) });
   await import(/* @vite-ignore */ join(dir, 'server.js'));
   await waitForListening(port);
-  return { port, get: (path) => get(port, path) };
+  return { port, get: (path) => get(port, path), rawGet: (target) => rawGet(port, target) };
 }

@@ -9,12 +9,7 @@ const proxied = vi.hoisted(() => []);
 vi.mock('express', () => ({
   default: createRequire(new URL('../../sso/package.json', import.meta.url))('express'),
 }));
-vi.mock('http-proxy-middleware', () => ({
-  createProxyMiddleware: () => (req, res) => {
-    proxied.push(req.url);
-    res.end(`proxied ${req.url}`);
-  },
-}));
+vi.mock('http-proxy-middleware', async () => (await import('./dashboard-server.js')).proxyMiddlewareStub(proxied));
 
 let dashboard;
 
@@ -60,6 +55,24 @@ describe('dashboard /api proxy and the API internal routes', () => {
     const res = await dashboard.get(path);
     expect(res.status).toBe(200);
     expect(proxied).toEqual([forwarded]);
+  });
+
+  it.each([
+    '/api/internal/integrations/active#/../../..',
+    '/api/internal/secrets#',
+    'http://dashboard.test/api/internal/integrations/active',
+    'HTTP://x/API/internal/secrets',
+    'http://dashboard.test/api/auth/me',
+  ])('answers 404 for the raw request target %s without calling the API', async (target) => {
+    expect(await dashboard.rawGet(target)).toBe(404);
+    expect(proxied).toEqual([]);
+  });
+
+  it('never sends a path under /internal to the API, whatever the proxy rewrites', async () => {
+    for (const path of ['/api/api/internal/x', '/API/api/internal/integrations/active', '/api/API/internal/x']) {
+      await dashboard.get(path);
+    }
+    expect(proxied.filter((path) => /^\/internal(\/|$)/i.test(path))).toEqual([]);
   });
 
   it('still serves the app on SPA routes', async () => {
