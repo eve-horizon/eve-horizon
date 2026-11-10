@@ -10,6 +10,10 @@ describe('secretsUserIdForJob', () => {
     expect(secretsUserIdForJob({ actor_user_id: 'user_bot', user_secrets_excluded: true })).toBeUndefined();
   });
 
+  it("is no one for the 'system' actor of internal runs", () => {
+    expect(secretsUserIdForJob({ actor_user_id: 'system', user_secrets_excluded: false })).toBeUndefined();
+  });
+
   it('is no one when no user started the work', () => {
     expect(secretsUserIdForJob({ actor_user_id: null, user_secrets_excluded: false })).toBeUndefined();
   });
