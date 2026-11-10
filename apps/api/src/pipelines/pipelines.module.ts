@@ -7,8 +7,12 @@ import { PipelineExpanderInternalController } from './pipeline-expander.internal
 import { PipelineRunsService } from './pipeline-runs.service.js';
 import { PipelinesService } from './pipelines.service.js';
 import { PipelineExpanderService } from './pipeline-expander.service.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
+  // The expander holds step job-token permissions to the user who started the
+  // run, which needs AuthModule's AccessService.
+  imports: [AuthModule],
   controllers: [
     PipelinesController,
     PipelineRunsController,

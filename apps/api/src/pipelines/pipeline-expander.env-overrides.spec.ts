@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { PipelineExpanderService } from './pipeline-expander.service.js';
 
+/** The step-permission ceiling is covered elsewhere; these tests let every check pass. */
+const allowAllAccess = { can: async () => ({ allowed: true, source: 'test' }) } as never;
+
 let allCreatedJobs: Array<Record<string, unknown>> = [];
 let createRun: ReturnType<typeof vi.fn>;
 
@@ -27,7 +30,7 @@ function createService(manifestYaml: string): PipelineExpanderService {
   }));
 
   let jobCounter = 0;
-  const service = new PipelineExpanderService({} as any);
+  const service = new PipelineExpanderService({} as any, allowAllAccess);
   (service as any).projects = {
     findById: vi.fn().mockResolvedValue({
       id: 'proj_test123',

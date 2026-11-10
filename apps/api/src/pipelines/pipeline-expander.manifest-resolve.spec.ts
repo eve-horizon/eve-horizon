@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { PipelineExpanderService } from './pipeline-expander.service.js';
 
+/** The step-permission ceiling is covered elsewhere; these tests let every check pass. */
+const allowAllAccess = { can: async () => ({ allowed: true, source: 'test' }) } as never;
+
 /**
  * Verifies the resolveManifestForRun behavior added in Phase 6 of the
  * deploy-error-surfacing plan. The real service owns a wide surface
@@ -20,7 +23,7 @@ describe('PipelineExpanderService - manifest resolution by ref', () => {
 
     // We instantiate with a stub DB and swap the queries objects; the private
     // helper under test only touches `manifests`.
-    service = new PipelineExpanderService({} as any);
+    service = new PipelineExpanderService({} as any, allowAllAccess);
     (service as any).manifests = {
       findByProjectAndGitSha,
       findLatestByProject,

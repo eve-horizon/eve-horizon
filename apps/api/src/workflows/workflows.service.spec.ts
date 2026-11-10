@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WorkflowsService, validateStepGraph, parseStepCondition } from './workflows.service.js';
 
+/** The step-permission ceiling is covered elsewhere; these tests let every check pass. */
+const allowAllAccess = { can: async () => ({ allowed: true, source: 'test' }) } as never;
+
 // Capture what jobs.create receives. `capturedJobCreate` is the *last* job
 // created (most commonly the last step). `allCreatedJobs` holds every call in
 // order so step-specific assertions can pick the right one.
@@ -84,7 +87,7 @@ function createService(
   capturedJobCreate = null;
   allCreatedJobs = [];
 
-  const service = new WorkflowsService(createMockDb(manifestYaml) as any);
+  const service = new WorkflowsService(createMockDb(manifestYaml) as any, allowAllAccess);
 
   // Override the query objects with mocks
   const manifests = {

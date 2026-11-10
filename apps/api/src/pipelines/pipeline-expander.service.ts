@@ -3,7 +3,6 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
-  Optional,
 } from '@nestjs/common';
 import type { Db } from '@eve/db';
 import {
@@ -185,7 +184,7 @@ export class PipelineExpanderService {
 
   constructor(
     @Inject('DB') private readonly db: Db,
-    @Optional() private readonly accessService?: AccessService,
+    private readonly accessService: AccessService,
   ) {
     this.jobs = jobQueries(db);
     this.runs = pipelineRunQueries(db);
@@ -366,7 +365,7 @@ export class PipelineExpanderService {
     permissions: string[] | null,
     context: string,
   ): Promise<void> {
-    if (!userId || !permissions || permissions.length === 0 || !this.accessService) return;
+    if (!userId || !permissions || permissions.length === 0) return;
     for (const permission of permissions) {
       const result = await this.accessService.can({
         org_id: orgId,

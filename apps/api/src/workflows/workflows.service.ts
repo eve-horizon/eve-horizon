@@ -1,4 +1,4 @@
-import { Injectable, Inject, Optional, BadRequestException, NotFoundException, RequestTimeoutException } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, NotFoundException, RequestTimeoutException } from '@nestjs/common';
 import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
 import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isOrgManagementPermission, isValidPermission, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
@@ -32,7 +32,7 @@ export class WorkflowsService {
 
   constructor(
     @Inject('DB') private readonly db: Db,
-    @Optional() private readonly accessService?: AccessService,
+    private readonly accessService: AccessService,
   ) {
     this.manifests = projectManifestQueries(db);
     this.projects = projectQueries(db);
@@ -194,7 +194,7 @@ export class WorkflowsService {
     scope: AccessBindingScope | null,
     context: string,
   ): Promise<void> {
-    if (!userId || !scope || !this.accessService) return;
+    if (!userId || !scope) return;
     const checks: Array<{ permission: string; resource: { type: 'orgfs' | 'orgdocs' | 'envdb' | 'cloud_fs'; id: string; action: 'read' | 'write' | 'admin' } }> = [];
     for (const prefix of scope.orgfs?.allow_prefixes ?? []) {
       checks.push({ permission: 'orgfs:write', resource: { type: 'orgfs', id: pathPatternBase(prefix), action: 'write' } });
@@ -300,7 +300,7 @@ export class WorkflowsService {
     permissions: string[] | null,
     context: string,
   ): Promise<void> {
-    if (!userId || !permissions || permissions.length === 0 || !this.accessService) return;
+    if (!userId || !permissions || permissions.length === 0) return;
     for (const permission of permissions) {
       const result = await this.accessService.can({
         org_id: orgId,
