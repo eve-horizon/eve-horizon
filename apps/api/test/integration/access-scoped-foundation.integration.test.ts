@@ -3,6 +3,16 @@ import type { ProjectResponse } from '@eve/shared';
 
 const apiUrl = process.env.EVE_API_URL || 'http://localhost:4701';
 const databaseUrl = process.env.DATABASE_URL;
+// Env-db commands never run against the platform database, so these tests
+// point the environment at the same server's maintenance database instead.
+const envDatabaseUrl = databaseUrl ? withDatabaseName(databaseUrl, 'postgres') : undefined;
+
+function withDatabaseName(url: string, database: string): string {
+  const parsed = new URL(url);
+  parsed.pathname = `/${database}`;
+  return parsed.toString();
+}
+
 const hasDatabaseUrl = Boolean(databaseUrl);
 
 async function ensureOrg(name: string): Promise<{ id: string }> {
@@ -156,7 +166,7 @@ describe.skipIf(!hasDatabaseUrl)('Access scoped foundation integration', () => {
 
     await createEnvironment(projectId, 'test', {
       db: {
-        url: databaseUrl,
+        url: envDatabaseUrl,
         schema: schemaName,
       },
     });

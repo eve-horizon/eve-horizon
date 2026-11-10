@@ -34,8 +34,10 @@ Resolution order:
 2. Manifest service resolution:
    - Uses `environment.db_ref` if set, else finds a unique `x-eve.role: database` service.
    - URL sources: `x-eve.connection_url`, `service.connection_url`, `service.url`, `environment.DATABASE_URL`, or derived from `POSTGRES_*` + service DNS.
-3. Fallback:
-   - Uses Eve core `DATABASE_URL` with a generated schema (`eve_env_<project>_<env>`).
+3. No target:
+   - The API answers `409` and opens no connection. (An earlier fallback to Eve's
+     own `DATABASE_URL` with a generated `eve_env_<project>_<env>` schema has been
+     removed; env-db commands never run against the platform database.)
 
 ### 1.2 Deployment Behavior Today
 
@@ -135,11 +137,12 @@ Resolution contract (highest to lowest precedence):
 2. Manifest service selected via `environment.db_ref` (or unique DB service when `db_ref` is unset):
    - `x-eve.role: managed_db` -> **managed mode**.
    - `x-eve.role: database` -> **container mode**.
-3. Core Eve fallback schema DB (`eve_env_<project>_<env>`) when no DB target is configured.
+3. No DB target configured -> `409`; there is no fallback to the core Eve database, and a
+   target that resolves to the platform database is refused with `403`.
 
 Fail-fast rule:
 
-- If a service is explicitly selected with `x-eve.role: managed_db`, Eve must not silently downgrade to container or core fallback DB.
+- If a service is explicitly selected with `x-eve.role: managed_db`, Eve must not silently downgrade to a container DB.
 
 ---
 
@@ -497,7 +500,7 @@ Acceptance:
 
 ### 10.4 Resolved Questions
 
-1. **Persistent environments only.** Managed DB is restricted to long-lived environments in v1. Ephemeral/preview environments use container DB or the core fallback schema. This avoids cloud provisioning latency for throwaway work and simplifies cleanup.
+1. **Persistent environments only.** Managed DB is restricted to long-lived environments in v1. Ephemeral/preview environments use a container DB. This avoids cloud provisioning latency for throwaway work and simplifies cleanup.
 2. **60-second timeout with 3 retries.** Tenant creation on a shared instance is fast (`CREATE DATABASE` + `CREATE ROLE`). 60s per attempt, 3 retries = ~3 min max before deploy fails. The slow path (new RDS instance) is an admin operation, never deploy-time.
 3. **Snapshot-on-delete for production classes only.** Only `db.p2+` (or explicitly production-tagged environments) get automatic snapshots before destroy. Dev/staging teardown stays fast and avoids unnecessary storage cost.
 4. **Environment-scoped credentials.** `credential_secret_ref` is scoped per-environment, matching the 1:1 tenant-per-env model. Clean isolation boundary; credential rotation affects only one environment.

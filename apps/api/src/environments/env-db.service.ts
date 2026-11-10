@@ -1,4 +1,11 @@
-import { Inject, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import type { Db } from '@eve/db';
 import { createDb, environmentQueries, projectManifestQueries, projectQueries, orgQueries, managedDbQueries, accessGroupQueries } from '@eve/db';
 import {
@@ -17,6 +24,7 @@ import {
 import * as crypto from 'crypto';
 import * as yaml from 'yaml';
 import { SecretsService } from '../secrets/secrets.service.js';
+import { isSameDatabase } from './env-db-target.js';
 
 type DbContext = {
   user_id?: string;
@@ -41,6 +49,12 @@ type DbContextDiagnostics = {
 type EnvDbConfig = {
   url: string;
   schema: string | null;
+};
+
+type ResolvedEnvDb = {
+  config: EnvDbConfig;
+  schemaFilter: string | null;
+  orgId: string;
 };
 
 type DbClient = ReturnType<typeof createDb>;
@@ -365,6 +379,9 @@ export class EnvDbService {
       throw new BadRequestException('Reset requires force=true for non-production environments');
     }
 
+    // Resolve (and vet) the target before any snapshot or schema work.
+    const { config, orgId } = await this.resolveEnvDb(projectId, envName);
+
     // Snapshot-on-reset: create safety snapshot if configured on the tenant
     if (!options.skip_snapshot) {
       try {
@@ -439,7 +456,6 @@ export class EnvDbService {
       }
     }
 
-    const { config, orgId } = await this.resolveEnvDb(projectId, envName);
     const sessionContext = await this.enrichContext(context, orgId);
 
     await this.withClient(config, sessionContext, true, async (client) => {
@@ -473,11 +489,40 @@ export class EnvDbService {
     return project.org_id;
   }
 
-  private async resolveEnvDb(projectId: string, envName: string): Promise<{
-    config: EnvDbConfig;
-    schemaFilter: string | null;
-    orgId: string;
-  }> {
+  /**
+   * The database every env-db operation runs against. An environment with no
+   * database of its own gets a 409, and a target that is Eve's own database
+   * (however it is spelled or reached) gets a 403, before any connection.
+   */
+  private async resolveEnvDb(projectId: string, envName: string): Promise<ResolvedEnvDb> {
+    const target = await this.resolveEnvDbTarget(projectId, envName);
+    if (!target) {
+      throw new ConflictException(
+        `Environment "${envName}" has no database. Declare a database service in the manifest ` +
+        '(x-eve.role: database or managed_db), or set a database override on the environment.',
+      );
+    }
+    await this.assertNotPlatformDatabase(target.config.url);
+    return target;
+  }
+
+  private async assertNotPlatformDatabase(url: string): Promise<void> {
+    const platformUrl = loadConfig().DATABASE_URL;
+    let platform: boolean;
+    try {
+      platform = await isSameDatabase(url, platformUrl);
+    } catch {
+      throw new BadRequestException('The environment database URL is not a valid Postgres connection string');
+    }
+    if (platform) {
+      throw new ForbiddenException(
+        'The environment database resolves to the Eve platform database. ' +
+        "Env-db commands run only against the environment's own database.",
+      );
+    }
+  }
+
+  private async resolveEnvDbTarget(projectId: string, envName: string): Promise<ResolvedEnvDb | null> {
     const project = await this.projects.findById(projectId, { include_deleted: true });
     if (!project) {
       throw new NotFoundException(`Project ${projectId} not found`);
@@ -567,16 +612,7 @@ export class EnvDbService {
       }
     }
 
-    const fallbackSchema = this.normalizeSchemaName(`eve_env_${project.slug}_${envName}`);
-    const coreUrl = loadConfig().DATABASE_URL;
-    return {
-      config: {
-        url: coreUrl,
-        schema: fallbackSchema,
-      },
-      schemaFilter: fallbackSchema,
-      orgId: project.org_id,
-    };
+    return null;
   }
 
   private async resolveServiceConnectionUrl(

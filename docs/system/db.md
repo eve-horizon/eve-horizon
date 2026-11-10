@@ -1,7 +1,7 @@
 # Database CLI + Managed DB
 
 > Status: Current
-> Last Updated: 2026-05-18
+> Last Updated: 2026-11-10
 > Purpose: Document environment DB tooling and managed database provisioning.
 
 ## Environment DB CLI (Current)
@@ -21,6 +21,30 @@ eve db new create_users [--path db/migrations]
 ```
 
 Migration files use `YYYYMMDDHHmmss_description.sql` under `db/migrations/` by default.
+
+### Which database `--env` targets
+
+The API resolves the environment's database in this order:
+
+1. The environment's DB override (`overrides.db.url`, `connection_url` or
+   `database_url`, with an optional `schema`).
+2. The manifest service named by the environment's `db_ref`, or else the one
+   service with `x-eve.role: database` or `x-eve.role: managed_db`. Managed
+   databases use the tenant's own credentials; container databases use
+   `x-eve.connection_url`, `connection_url`, `url`, `DATABASE_URL`, or the
+   `POSTGRES_*` variables and the service's cluster DNS name.
+
+An environment with none of these has no database: every env-db command
+(`schema`, `rls`, `extensions`, `sql`, `migrate`, `migrations`, `reset`,
+`wipe`) answers `409` and opens no connection. Declare a database service or
+set an override first.
+
+Env-db commands never run against Eve's own platform database. A resolved
+target with the same host, port and database name as the platform's
+`DATABASE_URL` is refused with `403`, whatever credentials it carries; hosts
+match by name (case-insensitive), by resolved address, or as loopback. A
+different database on the same Postgres server, such as a managed tenant
+database, is allowed.
 
 ## Managed DB (Current)
 
