@@ -57,20 +57,28 @@ export class EnvDbController {
     private readonly scopedAccess: ScopedAccessService,
   ) {}
 
-  private parseJobToken(jobToken?: string): { permissions?: string[]; tokenProvided: boolean } {
+  /**
+   * The optional `eve-job-token` header lends its permissions only on routes of
+   * the project it was minted for. These routes address projects by id (the
+   * env DB lookups resolve ids only), so the claim must equal the path.
+   */
+  private parseJobToken(projectId: string, jobToken?: string): { permissions?: string[]; tokenProvided: boolean } {
     if (!jobToken) {
       return { permissions: undefined, tokenProvided: false };
     }
 
     const payload = this.authService.verifyJobToken(jobToken);
+    if (!payload.project_id || payload.project_id !== projectId) {
+      throw new ForbiddenException('Job token is not scoped to this project');
+    }
     return { permissions: payload.permissions, tokenProvided: true };
   }
 
-  private resolveEffectivePermissions(user: AuthUser | undefined, jobToken?: string): {
+  private resolveEffectivePermissions(projectId: string, user: AuthUser | undefined, jobToken?: string): {
     permissions?: string[];
     tokenProvided: boolean;
   } {
-    const parsed = this.parseJobToken(jobToken);
+    const parsed = this.parseJobToken(projectId, jobToken);
     if (parsed.permissions && parsed.permissions.length > 0) {
       return parsed;
     }
@@ -133,7 +141,7 @@ export class EnvDbController {
       request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(projectId, caller, jobToken);
     return this.envDbService.getSchema(projectId, envName, {
       user_id: caller?.user_id,
       project_id: projectId,
@@ -166,7 +174,7 @@ export class EnvDbController {
       request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(projectId, caller, jobToken);
     return this.envDbService.getRls(projectId, envName, {
       user_id: caller?.user_id,
       project_id: projectId,
@@ -199,7 +207,7 @@ export class EnvDbController {
       request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(projectId, caller, jobToken);
     return this.envDbService.getExtensions(projectId, envName, {
       user_id: caller?.user_id,
       project_id: projectId,
@@ -238,7 +246,7 @@ export class EnvDbController {
     });
 
     const allowWrite = body.allow_write ?? false;
-    const { permissions, tokenProvided } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions, tokenProvided } = this.resolveEffectivePermissions(projectId, caller, jobToken);
 
     this.ensureWriteAllowed({
       allowWrite,
@@ -291,7 +299,7 @@ export class EnvDbController {
       request_id: correlationId,
     });
 
-    const { permissions, tokenProvided } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions, tokenProvided } = this.resolveEffectivePermissions(projectId, caller, jobToken);
     this.ensureWriteAllowed({
       allowWrite: true,
       tokenProvided,
@@ -331,7 +339,7 @@ export class EnvDbController {
       request_id: correlationId,
     });
 
-    const { permissions } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions } = this.resolveEffectivePermissions(projectId, caller, jobToken);
     return this.envDbService.listMigrations(projectId, envName, {
       user_id: caller?.user_id,
       project_id: projectId,
@@ -369,7 +377,7 @@ export class EnvDbController {
       request_id: correlationId,
     });
 
-    const { permissions, tokenProvided } = this.resolveEffectivePermissions(caller, jobToken);
+    const { permissions, tokenProvided } = this.resolveEffectivePermissions(projectId, caller, jobToken);
     this.ensureWriteAllowed({
       allowWrite: true,
       tokenProvided,

@@ -46,6 +46,11 @@ match by name (case-insensitive), by resolved address, or as loopback. A
 different database on the same Postgres server, such as a managed tenant
 database, is allowed.
 
+The env DB routes (`/projects/:id/envs/:name/db/...`) address the project by id.
+A job token sent in the optional `eve-job-token` header lends its permissions
+(for example `envdb:write`) only when it was minted for that same project; any
+other header token is a 403 and nothing runs.
+
 ## Managed DB (Current)
 
 Managed databases are declared in the manifest as services with `x-eve.role: managed_db`:
