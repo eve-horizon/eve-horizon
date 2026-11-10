@@ -1,8 +1,6 @@
 import 'reflect-metadata';
 import { createHmac } from 'crypto';
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { registerCorrelationIdHook, registerRawBodyJsonParser } from '@eve/shared';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -12,7 +10,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock('./api-client.js', () => api);
 
-import { AppModule } from './app.module.js';
+import { createGatewayHttpApp } from './http-app.js';
 import { GatewayProviderRegistry } from './providers/provider-registry.js';
 import { GatewayChatService } from './chat/gateway-chat.service.js';
 import { WebhookController } from './webhook/webhook.controller.js';
@@ -26,20 +24,6 @@ Reflect.defineMetadata('design:paramtypes', [GatewayProviderRegistry], DeliveryC
 const TEAM_ID = 'T_WORKSPACE';
 const ORG_ID = 'org_workspace';
 const SIGNING_SECRET = 'workspace-signing-secret';
-
-/** Boot the gateway's HTTP stack with the same adapter and parsers as main.ts. */
-async function bootGateway(): Promise<NestFastifyApplication> {
-  const app = await NestFactory.create<NestFastifyApplication>(
-    AppModule,
-    new FastifyAdapter(),
-    { logger: false },
-  );
-  await app.init();
-  const fastify = app.getHttpAdapter().getInstance();
-  registerRawBodyJsonParser(fastify);
-  registerCorrelationIdHook(fastify);
-  return app;
-}
 
 function signedHeaders(rawBody: string, contentType: string): Record<string, string> {
   const timestamp = String(Math.floor(Date.now() / 1000));
@@ -57,7 +41,8 @@ describe('gateway HTTP stack accepts signed Slack requests', () => {
   let app: NestFastifyApplication;
 
   beforeAll(async () => {
-    app = await bootGateway();
+    // The same HTTP app main.ts serves.
+    app = await createGatewayHttpApp(false);
     await app.get(GatewayProviderRegistry).initializeOne({
       id: 'int_workspace',
       org_id: ORG_ID,

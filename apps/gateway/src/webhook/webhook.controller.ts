@@ -84,6 +84,14 @@ function isDuplicate(dedupeKey: string | undefined): boolean {
 }
 
 /**
+ * The raw request body as text. The JSON parser keeps it as a string; Nest's
+ * form parser (interactive actions, slash commands) keeps it as a Buffer.
+ */
+function rawBodyText(raw: string | Buffer | undefined): string | undefined {
+  return Buffer.isBuffer(raw) ? raw.toString('utf8') : raw;
+}
+
+/**
  * Generic Webhook Controller
  *
  * Handles inbound webhooks for all webhook-transport gateway providers.
@@ -105,7 +113,7 @@ export class WebhookController {
   @HttpCode(HttpStatus.OK)
   async handleWebhook(
     @Param('provider') providerName: string,
-    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string },
+    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string | Buffer },
   ): Promise<unknown> {
     const startMs = Date.now();
     const anyInstance = this.registry.getByProvider(providerName);
@@ -120,7 +128,7 @@ export class WebhookController {
     const webhookReq: WebhookRequest = {
       headers: req.headers,
       body: req.body,
-      rawBody: req.rawBody,
+      rawBody: rawBodyText(req.rawBody),
     };
 
     // 1. Verify the signature with the secret of the integration the request
@@ -305,7 +313,7 @@ export class WebhookController {
   @Post('slack/interactive')
   @HttpCode(HttpStatus.OK)
   async handleSlackInteractive(
-    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string },
+    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string | Buffer },
   ): Promise<unknown> {
     // Slack sends interactive payloads as application/x-www-form-urlencoded
     // with a 'payload' field containing JSON
@@ -334,7 +342,7 @@ export class WebhookController {
     this.verifyForAccount('slack', teamId, {
       headers: req.headers,
       body: req.body,
-      rawBody: req.rawBody,
+      rawBody: rawBodyText(req.rawBody),
     });
 
     if (payload.type !== 'block_actions' || !payload.actions?.length) {
@@ -359,7 +367,7 @@ export class WebhookController {
   @Post('slack/slash')
   @HttpCode(HttpStatus.OK)
   async handleSlackSlash(
-    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string },
+    @Req() req: { headers: Record<string, string | string[] | undefined>; body: unknown; rawBody?: string | Buffer },
   ): Promise<unknown> {
     // Slack sends slash commands as application/x-www-form-urlencoded
     const formBody = (req.body ?? {}) as Record<string, unknown>;
@@ -369,7 +377,7 @@ export class WebhookController {
     this.verifyForAccount('slack', teamId || undefined, {
       headers: req.headers,
       body: req.body,
-      rawBody: req.rawBody,
+      rawBody: rawBodyText(req.rawBody),
     });
 
     const userId = typeof formBody.user_id === 'string' ? formBody.user_id : '';

@@ -1,14 +1,8 @@
 import 'dotenv/config';
 import 'reflect-metadata';
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { LoggerService } from '@nestjs/common';
-import {
-  initServiceTelemetry,
-  registerCorrelationIdHook,
-  registerRawBodyJsonParser,
-} from '@eve/shared';
-import { AppModule } from './app.module.js';
+import { initServiceTelemetry } from '@eve/shared';
+import { createGatewayHttpApp } from './http-app.js';
 import { GatewayProviderRegistry } from './providers/provider-registry.js';
 import { getJson } from './api-client.js';
 
@@ -17,13 +11,7 @@ async function bootstrap() {
 
   const logger = (await initServiceTelemetry('gateway')) as LoggerService;
 
-  const app = await NestFactory.create<NestFastifyApplication>(
-    AppModule,
-    new FastifyAdapter(),
-    { logger },
-  );
-
-  await app.init();
+  const app = await createGatewayHttpApp(logger);
 
   // Bootstrap provider registry from active integrations
   const registry = app.get(GatewayProviderRegistry);
@@ -47,10 +35,6 @@ async function bootstrap() {
     settings_json: Record<string, unknown>; status: string;
   }>>('/internal/integrations/active');
   registry.startSync(fetchIntegrations);
-
-  const fastify = app.getHttpAdapter().getInstance();
-  registerRawBodyJsonParser(fastify);
-  registerCorrelationIdHook(fastify);
 
   await app.listen(port, '0.0.0.0');
   logger.log(`Gateway listening on port ${port}`);
