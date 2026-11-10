@@ -27,7 +27,9 @@ function hasGitSegment(root: string, candidate: string): boolean {
 function isInside(root: string, candidate: string, allowRoot: boolean): boolean {
   const relative = path.relative(root, candidate);
   if (relative === '') return allowRoot;
-  return !relative.startsWith('..') && !path.isAbsolute(relative);
+  // Compare segments, so an in-repo name such as `..notes` is inside and
+  // only a real `..` segment is outside.
+  return !path.isAbsolute(relative) && relative.split(path.sep)[0] !== '..';
 }
 
 async function resolveInRepo(
