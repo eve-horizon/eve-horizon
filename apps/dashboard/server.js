@@ -1,6 +1,6 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { refuseInternalApi } from './server/internal-api-guard.js';
+import { internalRouteProxyHooks, refuseInternalApi } from './server/internal-api-guard.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { contentSecurityPolicy, ssoOriginFromApi } from './server/content-security-policy.js';
@@ -11,14 +11,17 @@ const port = process.env.PORT || 3200;
 const apiUrl = process.env.EVE_API_URL || 'http://eve-api:4701';
 
 // The API's /internal/* routes are for platform services only: 404 for
-// /api/internal and anything under it, however spelled (server/internal-api-guard.js).
+// /api/internal and anything under it, however spelled, and for request
+// targets that are not a plain path (server/internal-api-guard.js).
 app.use(refuseInternalApi);
 
-// Proxy /api/* to the Eve API
+// Proxy /api/* to the Eve API. Express strips the /api mount, so req.url is
+// already the API path. The proxy hooks also refuse any upstream path under
+// the API's /internal.
 app.use('/api', createProxyMiddleware({
   target: apiUrl,
   changeOrigin: true,
-  pathRewrite: { '^/api': '' },
+  on: internalRouteProxyHooks(apiUrl),
   // Support SSE streaming
   onProxyRes(proxyRes) {
     if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
