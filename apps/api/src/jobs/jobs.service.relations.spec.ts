@@ -34,7 +34,7 @@ const store = vi.hoisted(() => {
     relations: [] as Array<{ job_id: string; related_job_id: string; relation_type: string }>,
     projects: [
       { id: 'proj_a', org_id: 'org_a', slug: 'alpha' },
-      { id: 'proj_v', org_id: 'org_v', slug: 'victim' },
+      { id: 'proj_o', org_id: 'org_o', slug: 'other' },
     ],
   };
   const related = (rows: Array<{ id: string; relation_type: string }>) =>
@@ -109,14 +109,14 @@ describe('JobsService jobs related to another project', () => {
     store.state.jobs = [
       store.job('alpha-aaaa1111', 'proj_a'),
       store.job('alpha-aaaa2222', 'proj_a'),
-      store.job('victim-bbbb2222', 'proj_v'),
-      store.job('victim-bbbb2222.1', 'proj_v', 'victim-bbbb2222'),
+      store.job('other-bbbb2222', 'proj_o'),
+      store.job('other-bbbb2222.1', 'proj_o', 'other-bbbb2222'),
     ];
   });
 
   it("refuses a dependency on another project's job", async () => {
     await expect(
-      service().addDependency('alpha-aaaa1111', { related_job_id: 'victim-bbbb2222' }),
+      service().addDependency('alpha-aaaa1111', { related_job_id: 'other-bbbb2222' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(store.jobQ.addDependency).not.toHaveBeenCalled();
   });
@@ -130,9 +130,9 @@ describe('JobsService jobs related to another project', () => {
   it("never returns another project's jobs as dependencies, dependents or blockers", async () => {
     // Relations recorded before cross-project links were refused.
     store.state.relations = [
-      { job_id: 'alpha-aaaa1111', related_job_id: 'victim-bbbb2222', relation_type: 'blocks' },
+      { job_id: 'alpha-aaaa1111', related_job_id: 'other-bbbb2222', relation_type: 'blocks' },
       { job_id: 'alpha-aaaa1111', related_job_id: 'alpha-aaaa2222', relation_type: 'blocks' },
-      { job_id: 'victim-bbbb2222', related_job_id: 'alpha-aaaa1111', relation_type: 'blocks' },
+      { job_id: 'other-bbbb2222', related_job_id: 'alpha-aaaa1111', relation_type: 'blocks' },
     ];
 
     const deps = await service().getDependencies('alpha-aaaa1111');
@@ -144,7 +144,7 @@ describe('JobsService jobs related to another project', () => {
 
   it("refuses to create a job under another project's parent", async () => {
     await expect(
-      service().create('proj_a', { description: 'child', parent_id: 'victim-bbbb2222' } as never),
+      service().create('proj_a', { description: 'child', parent_id: 'other-bbbb2222' } as never),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(store.jobQ.create).not.toHaveBeenCalled();
   });
@@ -158,20 +158,20 @@ describe('JobsService jobs related to another project', () => {
 
   it("never includes another project's jobs in a job's context or tree", async () => {
     // A child recorded under another project's parent before that was refused.
-    store.state.jobs.push(store.job('victim-bbbb2222.2', 'proj_a', 'victim-bbbb2222'));
+    store.state.jobs.push(store.job('other-bbbb2222.2', 'proj_a', 'other-bbbb2222'));
     store.state.relations = [
-      { job_id: 'victim-bbbb2222.2', related_job_id: 'victim-bbbb2222.1', relation_type: 'blocks' },
+      { job_id: 'other-bbbb2222.2', related_job_id: 'other-bbbb2222.1', relation_type: 'blocks' },
     ];
 
-    const fromA = await service().getContext('victim-bbbb2222.2');
+    const fromA = await service().getContext('other-bbbb2222.2');
     expect(fromA.parent).toBeNull();
     expect(fromA.siblings ?? []).toEqual([]);
     expect(fromA.relations.dependencies).toEqual([]);
 
-    const fromVictim = await service().getContext('victim-bbbb2222');
-    expect(fromVictim.children.map((c) => c.id)).toEqual(['victim-bbbb2222.1']);
+    const fromOtherProject = await service().getContext('other-bbbb2222');
+    expect(fromOtherProject.children.map((c) => c.id)).toEqual(['other-bbbb2222.1']);
 
-    const tree = await service().getTree('victim-bbbb2222');
-    expect((tree.children ?? []).map((c) => c.id)).toEqual(['victim-bbbb2222.1']);
+    const tree = await service().getTree('other-bbbb2222');
+    expect((tree.children ?? []).map((c) => c.id)).toEqual(['other-bbbb2222.1']);
   });
 });
