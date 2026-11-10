@@ -8,7 +8,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Db } from '@eve/db';
-import { createDb, describeConnectionTarget, environmentQueries, projectManifestQueries, projectQueries, orgQueries, managedDbQueries, accessGroupQueries } from '@eve/db';
+import { createDb, createDbFromTarget, connectionTargetControlCharacters, describeConnectionTarget, type ConnectionTarget, environmentQueries, projectManifestQueries, projectQueries, orgQueries, managedDbQueries, accessGroupQueries } from '@eve/db';
 import {
   getServicesFromManifest,
   loadConfig,
@@ -55,6 +55,8 @@ type EnvDbConfig = {
    * server. Anything but `false` gets the login privilege check.
    */
   onPlatformServer?: boolean;
+  /** The parsed, checked target the client is built from (never the raw URL). */
+  target?: ConnectionTarget;
 };
 
 /**
@@ -535,9 +537,29 @@ export class EnvDbService {
         '(x-eve.role: database or managed_db), or set a database override on the environment.',
       );
     }
+    const connectionTarget = this.assertPlainConnectionString(target.config.url);
     const onPlatformServer = await this.assertNotPlatformDatabase(target.config.url);
     this.assertAllowedStartupParameters(target.config.url);
-    return { ...target, config: { ...target.config, onPlatformServer } };
+    return { ...target, config: { ...target.config, onPlatformServer, target: connectionTarget } };
+  }
+
+  /** Parses the URL and refuses control characters in any part of it, before any connection. */
+  private assertPlainConnectionString(url: string): ConnectionTarget {
+    let target: ConnectionTarget;
+    try {
+      target = describeConnectionTarget(url);
+    } catch {
+      throw new BadRequestException('The environment database URL is not a valid Postgres connection string');
+    }
+    const parts = connectionTargetControlCharacters(target);
+    // Raw or percent-encoded control characters anywhere in the URL.
+    if (/[\u0000-\u001f\u007f]|%(?:[01][0-9a-f]|7f)/i.test(url) || parts.length > 0) {
+      throw new BadRequestException(
+        'The environment database URL contains control characters' +
+        (parts.length > 0 ? ` (in: ${parts.join(', ')})` : '') + '.',
+      );
+    }
+    return target;
   }
 
   private assertAllowedStartupParameters(url: string): void {
@@ -873,7 +895,10 @@ export class EnvDbService {
     action: (client: DbClient) => Promise<T>,
     options?: { allowMissingSchema?: boolean },
   ): Promise<T> {
-    const client = createDb(config.url);
+    if (!config.target) {
+      throw new Error('Environment database target was not checked');
+    }
+    const client = createDbFromTarget(config.target);
     try {
       if (config.onPlatformServer !== false) {
         await this.assertUnprivilegedLogin(client);

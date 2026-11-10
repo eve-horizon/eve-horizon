@@ -59,7 +59,10 @@ On any server, a connection URL may only set the startup parameters
 such as `sslmode` and `connect_timeout`). Others, such as `role`, `options`
 or `session_authorization`, are refused with `400` before connecting, unless
 the platform `DATABASE_URL` sets the same parameter to the same value
-(managed tenant URLs inherit the platform URL's parameters).
+(managed tenant URLs inherit the platform URL's parameters). A URL with a
+control character (raw or percent-encoded, such as `%00` or `%0A`) in any
+part is refused with `400`, and the client is built from the parsed, checked
+parts rather than the URL string, so it sends exactly what was checked.
 
 A plain role on another database of that server, such as a managed tenant
 database, is allowed. Container databases in the environment's own namespace

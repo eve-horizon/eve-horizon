@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BadRequestException, ConflictException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import { describeConnectionTarget } from '@eve/db';
 import { EnvDbService } from './env-db.service';
 import type { SecretsService } from '../secrets/secrets.service';
 
@@ -20,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@eve/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@eve/db')>()),
-  createDb: mocks.createDb,
+  // The service builds clients from the checked target, never the raw URL.
+  createDbFromTarget: mocks.createDb,
   projectQueries: vi.fn(() => mocks.projects),
   environmentQueries: vi.fn(() => mocks.environments),
   projectManifestQueries: vi.fn(() => mocks.manifests),
@@ -189,7 +191,7 @@ describe('EnvDbService database target', () => {
     environment.overrides_json = { db: { url: 'postgres://app:pw@db.tenant.example:5432/eve' } };
 
     await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
-    expect(mocks.createDb).toHaveBeenCalledWith('postgres://app:pw@db.tenant.example:5432/eve');
+    expect(mocks.createDb).toHaveBeenCalledWith(describeConnectionTarget('postgres://app:pw@db.tenant.example:5432/eve'));
   });
 
   it('allows a managed database on the platform database server under another database name', async () => {
@@ -203,7 +205,7 @@ describe('EnvDbService database target', () => {
 
     await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
     await expect(runReset()).resolves.toMatchObject({ reset: true });
-    expect(mocks.createDb).toHaveBeenCalledWith(managedUrl);
+    expect(mocks.createDb).toHaveBeenCalledWith(describeConnectionTarget(managedUrl));
   });
   describe('the platform database server', () => {
     for (const database of ['postgres', 'template1']) {
@@ -249,7 +251,7 @@ describe('EnvDbService database target', () => {
 
       await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
       expect(mocks.createDb).toHaveBeenCalledWith(
-        'postgres://postgres:pw@dev-db.eve-acme-shop-dev.svc.cluster.local:5432/app',
+        describeConnectionTarget('postgres://postgres:pw@dev-db.eve-acme-shop-dev.svc.cluster.local:5432/app'),
       );
     });
 
@@ -315,7 +317,7 @@ describe('EnvDbService database target', () => {
       environment.overrides_json = { db: { url } };
 
       await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
-      expect(mocks.createDb).toHaveBeenCalledWith(url);
+      expect(mocks.createDb).toHaveBeenCalledWith(describeConnectionTarget(url));
     });
 
     it('allows a managed tenant URL that repeats the platform URL\'s own parameters', async () => {
@@ -330,7 +332,7 @@ describe('EnvDbService database target', () => {
       });
 
       await expect(runSql()).resolves.toMatchObject({ row_count: 0 });
-      expect(mocks.createDb).toHaveBeenCalledWith(managedUrl);
+      expect(mocks.createDb).toHaveBeenCalledWith(describeConnectionTarget(managedUrl));
     });
   });
 });
