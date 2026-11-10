@@ -79,6 +79,15 @@ function update(svc: JobsService, jobId: string, body: Record<string, unknown>, 
 const OWNER: AuthUser = { user_id: 'user_owner' };
 const TEAMMATE: AuthUser = { user_id: 'user_mate' };
 const BOUND_BOT: AuthUser = { user_id: 'user_bot', org_id: 'org_a', bound_org_id: 'org_a', memberships: [] };
+/** The token of a step no user started. */
+const NO_USER_STEP: AuthUser = {
+  user_id: 'system',
+  is_job_token: true,
+  org_id: 'org_a',
+  project_id: 'proj_a',
+  job_id: 'b-1',
+  permissions: ['jobs:read', 'jobs:write'],
+};
 
 function pendingJob(overrides: Record<string, unknown> = {}) {
   m.state.job = {
@@ -146,6 +155,28 @@ describe('PATCH /jobs/:job_id and the job actor', () => {
 
     await expect(update(service(), 'a-1', { description: 'do something else' }, TEAMMATE)).rejects.toBeInstanceOf(BadRequestException);
     expect(actorWrites()).toEqual([]);
+    expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+  });
+
+  it("refuses a teammate who could not hold the job's token scope", async () => {
+    pendingJob({ token_scope: { orgfs: { allow_prefixes: ['/finance/**'] } } });
+
+    await expect(update(service(), 'a-1', { description: 'do something else' }, TEAMMATE)).rejects.toBeInstanceOf(BadRequestException);
+    expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+  });
+
+  it("makes a teammate who could hold the job's token scope its actor", async () => {
+    pendingJob({ token_scope: { cloud_fs: { allow_mount_ids: ['mnt_shared'] } } });
+
+    await update(service(), 'a-1', { description: 'do something else' }, TEAMMATE);
+
+    expect(actorWrites()).toEqual([{ actor: 'user_mate', userSecretsExcluded: false }]);
+  });
+
+  it('refuses a step no user started from carrying a token scope judged for a person', async () => {
+    pendingJob({ token_scope: { orgfs: { allow_prefixes: ['/finance/**'] } } });
+
+    await expect(update(service(), 'a-1', { description: 'do something else' }, NO_USER_STEP)).rejects.toBeInstanceOf(BadRequestException);
     expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
   });
 
