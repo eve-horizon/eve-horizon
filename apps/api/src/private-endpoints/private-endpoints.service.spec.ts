@@ -84,4 +84,26 @@ describe('private endpoint health probe', () => {
     expect(result.health.reachable).toBe(false);
     expect(result.health.error).toMatch(/health_path/);
   });
+  it('does not follow a redirect and reports it as unhealthy', async () => {
+    db.endpoints.findByNameAndOrg.mockResolvedValue(endpoint('/v1/models'));
+    // Like the real fetch: follows a redirect unless told not to.
+    const visited: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      visited.push(String(url));
+      if (String(url).endsWith('/v1/models')) {
+        if ((init?.redirect ?? 'follow') === 'follow') {
+          visited.push('http://169.254.169.254/latest/meta-data/');
+          return new Response('ok', { status: 200 });
+        }
+        return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' } });
+      }
+      return new Response('ok', { status: 200 });
+    });
+
+    const result = await service.healthCheck('org_1', 'llm');
+
+    expect(visited).toEqual(['http://acme-llm.eve-tunnels.svc.cluster.local:8080/v1/models']);
+    expect(result.health.reachable).toBe(false);
+    expect(result.health.http_status).toBe(302);
+  });
 });
