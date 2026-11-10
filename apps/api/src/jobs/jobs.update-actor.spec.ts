@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { JobsService } from './jobs.service';
@@ -13,7 +13,8 @@ import type { AuthUser } from '../auth/auth.types';
  * user_bot: plain member of org_a, reached through an org-bound minted token.
  */
 const m = vi.hoisted(() => {
-  const state = { job: null as Record<string, unknown> | null };
+  /** job: the row as first read; live: what has changed in the database since. */
+  const state = { job: null as Record<string, unknown> | null, live: {} as Record<string, unknown> };
   return {
     state,
     jobQ: {
@@ -51,15 +52,40 @@ vi.mock('@eve/db', async (importOriginal) => {
   };
 });
 
-/** Records every statement; reports the actor writes it saw. */
-const statements: Array<{ sql: string; values: unknown[] }> = [];
-const fakeDb = Object.assign(
-  async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    statements.push({ sql: strings.join('?'), values });
-    return [];
+/**
+ * Records every committed statement; reports the actor writes it saw. A
+ * transaction's statements are committed only when it completes. A row lock
+ * (SELECT ... FOR UPDATE) returns the live row when it meets the statement's
+ * conditions.
+ */
+type Statement = { sql: string; values: unknown[] };
+const statements: Statement[] = [];
+
+function recorder(into: Statement[]) {
+  return Object.assign(
+    async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      const sql = strings.join('?');
+      into.push({ sql, values });
+      if (!/FOR UPDATE/i.test(sql) || !m.state.job) return [];
+      const live: Record<string, unknown> = { ...m.state.job, ...m.state.live };
+      const meetsConditions = values.every((value, i) => {
+        const column = /(\w+)\s*(?:=|IS NOT DISTINCT FROM)\s*$/i.exec(strings[i])?.[1];
+        return !column || !(column in live) || live[column] === value;
+      });
+      return meetsConditions ? [live] : [];
+    },
+    { json: (v: unknown) => v },
+  );
+}
+
+const fakeDb = Object.assign(recorder(statements), {
+  begin: async <T>(work: (tx: unknown) => Promise<T>): Promise<T> => {
+    const pending: Statement[] = [];
+    const result = await work(recorder(pending));
+    statements.push(...pending);
+    return result;
   },
-  { json: (v: unknown) => v },
-);
+});
 
 function actorWrites(): Array<{ actor: unknown; userSecretsExcluded: unknown }> {
   return statements
@@ -90,6 +116,7 @@ const NO_USER_STEP: AuthUser = {
 };
 
 function pendingJob(overrides: Record<string, unknown> = {}) {
+  m.state.live = {};
   m.state.job = {
     id: 'a-1',
     project_id: 'proj_a',
@@ -177,6 +204,27 @@ describe('PATCH /jobs/:job_id and the job actor', () => {
     pendingJob({ token_scope: { orgfs: { allow_prefixes: ['/finance/**'] } } });
 
     await expect(update(service(), 'a-1', { description: 'do something else' }, NO_USER_STEP)).rejects.toBeInstanceOf(BadRequestException);
+    expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+  });
+
+  it('changes nothing when the release fails after the actor would change', async () => {
+    m.jobQ.updatePhase.mockResolvedValueOnce({ success: false, error: 'Invalid phase transition' } as never);
+
+    await expect(update(service(), 'a-1', { description: 'do something else', phase: 'ready' }, TEAMMATE)).rejects.toBeInstanceOf(BadRequestException);
+    expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+  });
+
+  it("refuses the actor's edit when someone else became the actor after it was read, and changes nothing", async () => {
+    m.state.live = { actor_user_id: 'user_mate' };
+
+    await expect(update(service(), 'a-1', { description: 'sharper prompt' }, OWNER)).rejects.toBeInstanceOf(ConflictException);
+    expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
+  });
+
+  it("refuses a teammate's edit when the actor changed after it was read, and changes nothing", async () => {
+    m.state.live = { actor_user_id: 'user_bot', user_secrets_excluded: true };
+
+    await expect(update(service(), 'a-1', { description: 'do something else' }, TEAMMATE)).rejects.toBeInstanceOf(ConflictException);
     expect(statements.filter((s) => /UPDATE jobs/.test(s.sql))).toEqual([]);
   });
 
