@@ -20,6 +20,9 @@ describe('repo file reader', () => {
     fs.writeFileSync(path.join(repo, 'config', 'app.conf'), 'mode=prod\n');
     fs.symlinkSync('.git/config', path.join(repo, 'git-config-link'));
     fs.symlinkSync('../.git/config', path.join(repo, 'config', 'git-link.conf'));
+    fs.writeFileSync(path.join(repo, '..notes.txt'), 'notes\n');
+    fs.mkdirSync(path.join(repo, '..data'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '..data', 'seed.sql'), 'SELECT 1;\n');
   });
 
   afterAll(() => {
@@ -47,6 +50,20 @@ describe('repo file reader', () => {
       const files = await readRepoFiles(plain, '.', MiB);
 
       expect(files).toEqual({ 'README.md': 'readme\n' });
+    });
+  });
+  describe('names that start with two dots', () => {
+    it('reads an in-repo file named ..notes.txt', async () => {
+      await expect(readRepoFile(repo, '..notes.txt', MiB)).resolves.toBe('notes\n');
+    });
+
+    it('mounts an in-repo directory named ..data', async () => {
+      await expect(readRepoFiles(repo, '..data', MiB)).resolves.toEqual({ 'seed.sql': 'SELECT 1;\n' });
+    });
+
+    it('still refuses a real parent segment', async () => {
+      expect(await refusal(readRepoFile(repo, '../..notes.txt', MiB))).toBeInstanceOf(RepoFileError);
+      expect(await refusal(readRepoFile(repo, 'config/../../outside.txt', MiB))).toBeInstanceOf(RepoFileError);
     });
   });
 });
