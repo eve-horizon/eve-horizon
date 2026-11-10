@@ -17,6 +17,11 @@ export type ConnectionTarget = {
   database: string;
   /** Role named in the startup message. */
   user: string;
+  /**
+   * Every other server parameter the client sends at startup (from the URL's
+   * query string, e.g. application_name, options or role), by name.
+   */
+  startupParameters: Record<string, string>;
 };
 
 /**
@@ -37,5 +42,10 @@ export function describeConnectionTarget(connectionString: string): ConnectionTa
       ? startupDatabase
       : options.database,
     user: typeof startupUser === 'string' && startupUser.length > 0 ? startupUser : options.user,
+    startupParameters: Object.fromEntries(
+      Object.entries(options.connection ?? {})
+        .filter(([name]) => name !== 'database' && name !== 'user')
+        .map(([name, value]) => [name, String(value)]),
+    ),
   };
 }

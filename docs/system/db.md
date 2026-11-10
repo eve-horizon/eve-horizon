@@ -48,10 +48,18 @@ or as loopback). On the platform server:
   the target carries;
 - the platform's own role is refused with `403` on any database
   (`postgres`, `template1`, ...);
-- after connecting and before running anything, a login that is a superuser
-  or holds equivalent admin rights (membership in `cloudsqlsuperuser`,
-  `rds_superuser`, `azure_pg_admin` or the `pg_*_server_*` file roles) is
-  refused with `403`.
+- after connecting and before running anything, a login is refused with
+  `403` if its session or current role is, or is a member of, a role with
+  SUPERUSER, CREATEROLE, BYPASSRLS or REPLICATION, or of `cloudsqlsuperuser`,
+  `rds_superuser`, `azure_pg_admin`, `pg_read_all_data`, `pg_write_all_data`
+  or the `pg_*_server_*` file roles.
+
+On any server, a connection URL may only set the startup parameters
+`application_name`, `search_path` and `sslrootcert` (plus client settings
+such as `sslmode` and `connect_timeout`). Others, such as `role`, `options`
+or `session_authorization`, are refused with `400` before connecting, unless
+the platform `DATABASE_URL` sets the same parameter to the same value
+(managed tenant URLs inherit the platform URL's parameters).
 
 A plain role on another database of that server, such as a managed tenant
 database, is allowed. Container databases in the environment's own namespace

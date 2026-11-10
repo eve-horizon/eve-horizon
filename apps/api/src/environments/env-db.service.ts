@@ -68,7 +68,18 @@ const ADMIN_ROLE_NAMES = [
   'pg_execute_server_program',
   'pg_read_server_files',
   'pg_write_server_files',
+  'pg_read_all_data',
+  'pg_write_all_data',
 ];
+
+/**
+ * Server parameters an env-db connection URL may set at startup. Anything
+ * else (role, options, session_authorization, ...) could change who the
+ * session acts as, so it is refused unless the platform DATABASE_URL sets
+ * the same parameter to the same value (managed tenant URLs inherit those).
+ * TLS mode and client timeouts are client settings, not startup parameters.
+ */
+const ALLOWED_STARTUP_PARAMETERS = new Set(['application_name', 'search_path', 'sslrootcert']);
 
 type ResolvedEnvDb = {
   config: EnvDbConfig;
@@ -525,7 +536,22 @@ export class EnvDbService {
       );
     }
     const onPlatformServer = await this.assertNotPlatformDatabase(target.config.url);
+    this.assertAllowedStartupParameters(target.config.url);
     return { ...target, config: { ...target.config, onPlatformServer } };
+  }
+
+  private assertAllowedStartupParameters(url: string): void {
+    const requested = describeConnectionTarget(url).startupParameters;
+    const platform = describeConnectionTarget(loadConfig().DATABASE_URL).startupParameters;
+    const refused = Object.entries(requested)
+      .filter(([name, value]) => !ALLOWED_STARTUP_PARAMETERS.has(name.toLowerCase()) && platform[name] !== value)
+      .map(([name]) => name);
+    if (refused.length > 0) {
+      throw new BadRequestException(
+        `The environment database URL sets connection parameters Eve does not allow: ${refused.join(', ')}. ` +
+        'Allowed: sslmode, connect_timeout, application_name, search_path.',
+      );
+    }
   }
 
   /** Refuses the platform database and the platform role; says whether the target shares its server. */
@@ -564,14 +590,24 @@ export class EnvDbService {
     return comparison.onPlatformServer;
   }
 
-  /** On the platform database server, refuse a login with superuser or equivalent admin rights. */
+  /**
+   * On the platform database server, refuse a login whose session or current
+   * role has (or can take on) superuser, CREATEROLE, BYPASSRLS or REPLICATION,
+   * or a cloud admin, read-all, write-all or server-file role.
+   */
   private async assertUnprivilegedLogin(client: DbClient): Promise<void> {
     const [row] = await client<{ privileged: boolean }[]>`
       SELECT EXISTS (
         SELECT 1
         FROM pg_roles r
-        WHERE pg_has_role(current_user, r.oid, 'MEMBER')
-          AND (r.rolsuper OR r.rolname = ANY(${ADMIN_ROLE_NAMES}))
+        WHERE (pg_has_role(current_user, r.oid, 'MEMBER') OR pg_has_role(session_user, r.oid, 'MEMBER'))
+          AND (
+            r.rolsuper
+            OR r.rolcreaterole
+            OR r.rolbypassrls
+            OR r.rolreplication
+            OR r.rolname = ANY(${ADMIN_ROLE_NAMES})
+          )
       ) AS privileged
     `;
     if (row?.privileged !== false) {
