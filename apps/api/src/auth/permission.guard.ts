@@ -9,7 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from './auth.decorator.js';
 import { AuthService, type AuthUser } from './auth.service.js';
 import { RbacService, type OwnedResourceKind } from './rbac.service.js';
-import { PERMISSION_KEY } from './permission.decorator.js';
+import { PERMISSION_KEY, SCOPE_NARROWED_KEY } from './permission.decorator.js';
 import { expandPermissions, hasAnyPermission, type Permission } from './permissions.js';
 import { isScopedToken, tokenMayAddressOrg, tokenMayAddressProject } from './token-scope.js';
 
@@ -49,11 +49,20 @@ export class PermissionGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
+    const scopeNarrowed = this.reflector.getAllAndOverride<boolean>(SCOPE_NARROWED_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]) ?? false;
 
     // No @RequirePermission decorator:
     // - User tokens pass (backwards-compat during migration)
     // - Job, service, and service principal tokens are blocked (they must have explicit permissions)
+    // - Org-bound user tokens are blocked: these are identity and account routes
+    //   (login keys, minting, user secrets), unless the handler narrows itself
     if (!required || required.length === 0) {
+      if (user.bound_org_id && !scopeNarrowed) {
+        throw new ForbiddenException('Org-bound tokens may not use identity or account endpoints');
+      }
       if (user.is_job_token) {
         throw new ForbiddenException('Job tokens require explicit permission grants for this endpoint');
       }
@@ -67,7 +76,7 @@ export class PermissionGuard implements CanActivate {
     }
 
     // Resolve effective permissions
-    const effective = await this.resolvePermissions(user, request);
+    const effective = await this.resolvePermissions(user, request, scopeNarrowed);
 
     if (!hasAnyPermission(effective, required)) {
       throw new ForbiddenException(
@@ -96,6 +105,7 @@ export class PermissionGuard implements CanActivate {
   private async resolvePermissions(
     user: AuthUser,
     request: any,
+    scopeNarrowed: boolean,
   ): Promise<ReadonlySet<string>> {
     const projectId = extractProjectId(request);
     const resource = projectId ? undefined : extractResourceRef(request);
@@ -103,6 +113,17 @@ export class PermissionGuard implements CanActivate {
     if (isScopedToken(user)) {
       await this.assertTokenMayAddressRoute(user, request, projectId, resource);
       return new Set(user.permissions ?? []);
+    }
+
+    // An org-bound user token is held to its org like an org-only principal,
+    // and needs that org (or something in it) as the route's context.
+    const boundOrgId = user.bound_org_id;
+    if (boundOrgId) {
+      await this.assertTokenMayAddressRoute({ user_id: user.user_id, org_id: boundOrgId }, request, projectId, resource);
+      const hasContext = Boolean(projectId || resource || extractPathOrgId(request) || extractBodyOrgId(request));
+      if (!hasContext && !scopeNarrowed) {
+        throw new ForbiddenException('Org-bound tokens may only address their own org');
+      }
     }
 
     // User tokens: resolve effective permissions (base role + custom roles)
@@ -121,6 +142,9 @@ export class PermissionGuard implements CanActivate {
     } else {
       orgId = extractPathOrgId(request) ?? extractBodyOrgId(request);
     }
+
+    // An org-bound token holds only the user's permissions in its org.
+    orgId ??= boundOrgId;
 
     if (orgId) {
       return this.rbacService.getEffectivePermissions(user.user_id, orgId, contextProjectId);

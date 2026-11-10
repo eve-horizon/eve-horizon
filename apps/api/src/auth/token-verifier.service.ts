@@ -163,7 +163,14 @@ export class TokenVerifierService {
       throw new UnauthorizedException('User not found for token');
     }
 
-    return this.authUserFromUser(user);
+    const authUser = await this.authUserFromUser(user);
+    if (claims.bound_org_id === undefined) {
+      return authUser;
+    }
+    if (typeof claims.bound_org_id !== 'string' || !claims.bound_org_id) {
+      throw new UnauthorizedException('Invalid token bound_org_id');
+    }
+    return bindToOrg(authUser, claims.bound_org_id);
   }
 
   /**
@@ -646,4 +653,20 @@ export class TokenVerifierService {
     }
     return token;
   }
+}
+
+/**
+ * Narrow a user resolved from an org-bound token to that org: only its
+ * membership there, never system-admin rights, and the org as its context.
+ */
+function bindToOrg(user: AuthUser, orgId: string): AuthUser {
+  const membership = user.memberships?.find((m) => m.org_id === orgId);
+  return {
+    ...user,
+    is_admin: false,
+    role: membership?.role,
+    org_id: orgId,
+    memberships: membership ? [membership] : [],
+    bound_org_id: orgId,
+  };
 }

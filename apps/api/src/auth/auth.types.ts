@@ -36,6 +36,12 @@ export type AuthUser = {
   consumer_env?: string | null;
   producer_env?: string;
   api_name?: string;
+  /**
+   * Set for a user token minted through POST /auth/mint by a caller who is not
+   * a system admin: the token acts only within this org (memberships, routes,
+   * permissions) and may not reach identity or account routes.
+   */
+  bound_org_id?: string;
   /** Per-org membership roles (populated for user tokens) */
   memberships?: Array<{ org_id: string; role: string; org_name?: string; org_slug?: string }>;
   /** Redirect URL from a just-applied org invite (used by SSO callback) */

@@ -142,6 +142,15 @@ export class RbacService implements TokenScopeResolver {
       return new Set(user.permissions ?? []);
     }
 
+    // An org-bound user token holds no permissions in a project outside its org.
+    if (
+      user.bound_org_id
+      && projectInput
+      && !(await tokenMayAddressProject({ user_id: user.user_id, org_id: user.bound_org_id }, projectInput, this))
+    ) {
+      return new Set<string>();
+    }
+
     if (projectInput) {
       try {
         const orgId = await this.getProjectOrgId(projectInput);

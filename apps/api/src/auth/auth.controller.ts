@@ -48,6 +48,7 @@ import { loadConfig } from '@eve/shared';
 import { zodSchemaToOpenApi } from '../openapi.js';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { Public } from './auth.decorator.js';
+import { ScopeNarrowed } from './permission.decorator.js';
 import { AuthService } from './auth.service.js';
 import { RbacService } from './rbac.service.js';
 import { permissionMatrix, expandPermissions } from './permissions.js';
@@ -446,6 +447,7 @@ export class AuthController {
   }
 
   @Get('app-access')
+  @ScopeNarrowed()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Get authenticated app org access',
@@ -467,7 +469,17 @@ export class AuthController {
     if (!caller?.user_id) {
       throw new UnauthorizedException('User context required');
     }
-    return this.authService.getAppAccess(projectId, caller.user_id);
+    const access = await this.authService.getAppAccess(projectId, caller.user_id);
+    // An org-bound token may enter the app only through its own org.
+    const boundOrgId = caller.bound_org_id;
+    if (!boundOrgId) {
+      return access;
+    }
+    return {
+      ...access,
+      orgs: access.orgs.filter((org) => org.id === boundOrgId),
+      admin_orgs: access.admin_orgs.filter((org) => org.id === boundOrgId),
+    };
   }
 
   @Post('app-invites')

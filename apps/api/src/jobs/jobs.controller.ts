@@ -30,9 +30,9 @@ import {
   ApiBearerAuth,
   ApiBody,
 } from '@nestjs/swagger';
-import { RequirePermission } from '../auth/permission.decorator.js';
+import { RequirePermission, ScopeNarrowed } from '../auth/permission.decorator.js';
 import { RbacService } from '../auth/rbac.service.js';
-import { isScopedToken, scopeListFiltersToToken } from '../auth/token-scope.js';
+import { heldScope, scopeListFiltersToToken } from '../auth/token-scope.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import type { Permission } from '../auth/permissions.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
@@ -276,6 +276,7 @@ export class JobsController {
   // ==========================================================================
 
   @RequirePermission('jobs:admin')
+  @ScopeNarrowed()
   @Get('jobs')
   @ApiOperation({ summary: 'List all jobs (admin)' })
   @ApiQuery({ name: 'org_id', required: false, description: 'Filter by organization ID' })
@@ -303,9 +304,11 @@ export class JobsController {
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
     @CurrentUser() caller?: AuthUser,
   ): Promise<JobListResponse> {
-    // A job, service or service-principal token lists only within its own scope.
-    const scope = caller && isScopedToken(caller)
-      ? await scopeListFiltersToToken(caller, { org_id: orgId, project_id: projectId }, this.rbac)
+    // A job, service or service-principal token, or an org-bound user token,
+    // lists only within its own scope.
+    const held = caller && heldScope(caller);
+    const scope = held
+      ? await scopeListFiltersToToken(held, { org_id: orgId, project_id: projectId }, this.rbac)
       : { org_id: orgId, project_id: projectId };
     return this.jobsService.listAll({
       orgId: scope.org_id,

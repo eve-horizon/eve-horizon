@@ -267,12 +267,24 @@ export class AppAuthService {
     };
   }
 
-  async mintUserToken(userId: string, email?: string, ttlSeconds?: number): Promise<{ access_token: string; token_type: string; expires_at: number }> {
+  /**
+   * Mint an RS256 user token. With `boundOrgId` the token is bound to that org:
+   * the API treats it as acting only within the org (see `bound_org_id` in the
+   * token verifier and the permission guard), and its `orgs` claim lists only
+   * that org.
+   */
+  async mintUserToken(
+    userId: string,
+    email?: string,
+    ttlSeconds?: number,
+    options: { boundOrgId?: string } = {},
+  ): Promise<{ access_token: string; token_type: string; expires_at: number }> {
     if (!this.signerKey?.privateKey) {
       throw new Error('Signing key not configured');
     }
 
-    const memberships = await this.memberships.listOrgMembershipsForUser(userId);
+    const memberships = (await this.memberships.listOrgMembershipsForUser(userId))
+      .filter((m) => !options.boundOrgId || m.org_id === options.boundOrgId);
     const sortedMemberships = memberships
       .slice()
       .sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
@@ -286,6 +298,7 @@ export class AppAuthService {
       sub: userId,
       email,
       orgs,
+      ...(options.boundOrgId ? { bound_org_id: options.boundOrgId } : {}),
       iat: now,
       exp,
       type: 'user',
@@ -328,10 +341,14 @@ export class AppAuthService {
       : { user: await this.createMintedUser(input.email), created: true };
     await this.resolveMembership(orgId, user.id, role, input.project_id);
 
+    // Capped at the server's user-token lifetime (EVE_AUTH_TOKEN_TTL_DAYS).
     const ttlSeconds = input.ttl_days
-      ? input.ttl_days * 24 * 60 * 60
+      ? Math.min(input.ttl_days * 24 * 60 * 60, this.userTokenTtlSeconds)
       : undefined;
-    const token = await this.mintUserToken(user.id, user.email ?? undefined, ttlSeconds);
+    // A token minted by anyone but a system admin acts only within the minting org.
+    const token = await this.mintUserToken(user.id, user.email ?? undefined, ttlSeconds, {
+      boundOrgId: caller.is_admin ? undefined : orgId,
+    });
     return {
       ...token,
       user_id: user.id,

@@ -824,7 +824,18 @@ Notes:
     org or in another org's project), must not be a system admin, and must hold no
     role in the org or its projects above the caller's own org role.
   Anything else returns 403 and nothing is created or minted.
-- `--ttl <days>` sets the token TTL (1-90 days). Capped at the server's `EVE_AUTH_TOKEN_TTL_DAYS`.
+- A token minted by an org or project admin is **bound to the org** (`bound_org_id`
+  claim). The API treats it as acting only within that org, whatever other
+  memberships the user holds now or later: `/auth/me` and token verification
+  report only that org; project, org and resource routes must belong to it;
+  `body.org_id` and the `GET /jobs` / `GET /projects` listings are held to it;
+  its permissions are the user's in that org. Routes with no project, org or
+  resource context, and identity or account routes (`/auth/identities`,
+  `/auth/mint`, user secrets, creating orgs), refuse it. Tokens minted by a system
+  admin are not bound.
+- `--ttl <days>` sets the token TTL (1-90 days). Capped at the server's
+  `EVE_AUTH_TOKEN_TTL_DAYS` (a longer request is shortened to the cap, not refused).
+  Set `EVE_AUTH_TOKEN_TTL_DAYS` on the instance if bot tokens need a longer life.
 
 ## Challenge-Response Login
 

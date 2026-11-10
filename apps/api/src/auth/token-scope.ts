@@ -86,3 +86,18 @@ export async function scopeListFiltersToToken(
   }
   throw new ForbiddenException('Token carries no project or org scope');
 }
+
+/**
+ * The scope a caller is held to on routes and flat listings, if any: a job,
+ * service or service-principal token itself, or for an org-bound user token
+ * an org-only principal of its bound org. Undefined for an unrestricted caller.
+ */
+export function heldScope(user: AuthUser): AuthUser | undefined {
+  if (isScopedToken(user)) {
+    return user;
+  }
+  if (user.bound_org_id) {
+    return { user_id: user.user_id, org_id: user.bound_org_id };
+  }
+  return undefined;
+}

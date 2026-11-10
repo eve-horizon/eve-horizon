@@ -76,10 +76,10 @@ import {
 } from '@eve/shared';
 import { ZodValidationPipe } from '../pipes/zod-validation.pipe.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
-import { RequirePermission } from '../auth/permission.decorator.js';
+import { RequirePermission, ScopeNarrowed } from '../auth/permission.decorator.js';
 import { CurrentUser } from '../common/request-decorators.js';
 import type { AuthUser } from '../auth/auth.types.js';
-import { isScopedToken } from '../auth/token-scope.js';
+import { heldScope } from '../auth/token-scope.js';
 
 
 @ApiTags('projects')
@@ -140,6 +140,7 @@ export class ProjectsController {
   }
 
   @RequirePermission('projects:read')
+  @ScopeNarrowed()
   @Get()
   @ApiOperation({ summary: 'List projects' })
   @ApiQuery({ name: 'limit', required: false })
@@ -160,17 +161,19 @@ export class ProjectsController {
     @Query('name') name?: string,
   ): Promise<ProjectListResponse> {
     const options = { limit, offset, include_deleted: parseBoolean(includeDeleted), org_id: orgId, name };
-    if (caller && isScopedToken(caller)) {
-      return this.listForToken(caller, options);
+    const held = caller && heldScope(caller);
+    if (held) {
+      return this.listForToken(held, options);
     }
     return this.projectsService.list({ ...options, user_id: caller?.user_id });
   }
 
   /**
-   * A job, service or service-principal token lists only within its own scope.
-   * A job or service token sees its own project. An org-only service principal
-   * keeps its usual listing, held to its org. The org filter matches org ids
-   * only, so it must equal the token's org id.
+   * A job, service or service-principal token, or an org-bound user token (as
+   * its org-only scope), lists only within its own scope. A job or service
+   * token sees its own project. An org-only scope keeps its usual membership
+   * listing, held to its org. The org filter matches org ids only, so it must
+   * equal the scope's org id.
    */
   private async listForToken(
     token: AuthUser,
