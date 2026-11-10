@@ -38,6 +38,7 @@ import { Endpoint } from '../common/endpoint.decorator.js';
 import { SecretsService } from './secrets.service.js';
 import { CurrentUser } from '../common/request-decorators.js';
 import type { AuthUser } from '../auth/auth.types.js';
+import { refuseProjectTokens } from '../auth/token-scope.js';
 
 @ApiTags('secrets')
 @ApiBearerAuth()
@@ -210,7 +211,9 @@ export class OrgSecretsController {
   async create(
     @Param('org_id') orgId: string,
     @Body(new ZodValidationPipe(CreateSecretRequestSchema)) body: CreateSecretRequest,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<SecretResponse> {
+    refuseProjectTokens(caller, 'org secrets');
     return this.secretsService.create('org', orgId, body);
   }
 
@@ -262,7 +265,9 @@ export class OrgSecretsController {
     @Param('org_id') orgId: string,
     @Param('key') key: string,
     @Body(new ZodValidationPipe(UpdateSecretRequestSchema)) body: UpdateSecretRequest,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<SecretResponse> {
+    refuseProjectTokens(caller, 'org secrets');
     return this.secretsService.update('org', orgId, key, body);
   }
 
@@ -276,7 +281,9 @@ export class OrgSecretsController {
   async remove(
     @Param('org_id') orgId: string,
     @Param('key') key: string,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<void> {
+    refuseProjectTokens(caller, 'org secrets');
     await this.secretsService.delete('org', orgId, key);
   }
 }

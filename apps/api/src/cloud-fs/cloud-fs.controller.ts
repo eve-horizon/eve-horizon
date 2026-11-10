@@ -20,6 +20,7 @@ import type {
 } from '@eve/shared';
 import { ScopedAccessService } from '../auth/scoped-access.service.js';
 import type { AuthUser } from '../auth/auth.service.js';
+import { refuseProjectTokens } from '../auth/token-scope.js';
 import { CurrentUser } from '../common/request-decorators.js';
 
 @ApiTags('cloud-fs')
@@ -40,7 +41,9 @@ export class CloudFsController {
   async createMount(
     @Param('org_id') orgId: string,
     @Body() body: CreateCloudFsMountRequest,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<CloudFsMountResponse> {
+    refuseProjectTokens(caller, 'cloud-fs mounts');
     return this.cloudFsService.createMount(orgId, body);
   }
 
@@ -83,6 +86,7 @@ export class CloudFsController {
     @CurrentUser() caller: AuthUser | undefined,
     @Body() body: UpdateCloudFsMountRequest,
   ): Promise<CloudFsMountResponse> {
+    refuseProjectTokens(caller, 'cloud-fs mounts');
     await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'admin', caller);
     return this.cloudFsService.updateMount(mountId, orgId, body);
   }
@@ -97,6 +101,7 @@ export class CloudFsController {
     @Param('mount_id') mountId: string,
     @CurrentUser() caller: AuthUser | undefined,
   ): Promise<{ ok: boolean }> {
+    refuseProjectTokens(caller, 'cloud-fs mounts');
     await this.assertMountAccess(orgId, mountId, 'cloud_fs:admin', 'admin', caller);
     await this.cloudFsService.removeMount(mountId, orgId);
     return { ok: true };

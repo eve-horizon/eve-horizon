@@ -147,3 +147,15 @@ export async function jobTokenPermissionsFor(
 export function actorUserId(caller: AuthUser | undefined): string | undefined {
   return caller && !caller.bound_org_id ? caller.user_id : undefined;
 }
+
+/**
+ * Org-wide settings (org secrets, cloud-fs mounts) are changed by people and
+ * org-level service principals, never by a token minted for one project (job
+ * and service tokens), whatever permissions that token carries. Reads are
+ * unaffected.
+ */
+export function refuseProjectTokens(caller: AuthUser | undefined, what: string): void {
+  if (caller && isScopedToken(caller) && caller.project_id) {
+    throw new ForbiddenException(`Tokens minted for a project may not change ${what}`);
+  }
+}
