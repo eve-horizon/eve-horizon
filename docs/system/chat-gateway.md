@@ -172,8 +172,13 @@ Browser-native agent chat via WebSocket. Follows the subscription transport mode
 
 **Connection:**
 ```
-ws://gateway:4820/?token=<jwt>
+ws://gateway:4821/?token=<jwt>
 ```
+
+The WebSocket listener port comes from the gateway's `EVE_WEBCHAT_PORT`
+(default `4821`, next to the gateway's HTTP port `4820`); a `port` integration
+setting is ignored. A listener that cannot bind (for example, the port is
+taken) is logged as `webchat.listen_failed` and does not stop the gateway.
 
 **Send message:**
 ```json

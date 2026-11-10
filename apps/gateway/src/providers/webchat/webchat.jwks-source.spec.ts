@@ -67,6 +67,7 @@ describe('WebChat token verification keys', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     vi.stubEnv('EVE_API_URL', PLATFORM_API_URL);
+    vi.stubEnv('EVE_WEBCHAT_PORT', '0');
 
     provider = new WebChatGatewayProvider({} as GatewayChatService);
     await provider.initialize({
@@ -78,7 +79,7 @@ describe('WebChat token verification keys', () => {
         tokens_json: null,
         status: 'active',
       } as never,
-      settings: { port: 0, eve_api_url: SETTING_API_URL },
+      settings: { eve_api_url: SETTING_API_URL },
     });
     const server = (provider as unknown as { httpServer: import('http').Server }).httpServer;
     if (!server.listening) {

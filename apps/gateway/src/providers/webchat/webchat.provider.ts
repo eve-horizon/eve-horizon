@@ -59,6 +59,17 @@ export async function verifyWebChatToken(
   }
 }
 
+/** Default port of the webchat WebSocket listener (next to the gateway's 4820). */
+const DEFAULT_WEBCHAT_PORT = 4821;
+
+/** The webchat listener port from the gateway's EVE_WEBCHAT_PORT. */
+export function webchatPort(): number {
+  const raw = process.env.EVE_WEBCHAT_PORT;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_WEBCHAT_PORT;
+  const port = Number(raw);
+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : DEFAULT_WEBCHAT_PORT;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -129,16 +140,18 @@ export class WebChatGatewayProvider implements GatewayProvider {
     this.accountId = config.integration.account_id;
     this.orgId = config.integration.org_id;
 
-    const port = (config.settings['port'] as number) ?? 4820;
-    // Connection tokens are verified only against the platform's own keys,
-    // fetched from the gateway's EVE_API_URL. Integration settings are
-    // editable by org admins, so an eve_api_url setting is ignored.
-    if (config.settings['eve_api_url'] !== undefined) {
-      logger.warn({
-        event: 'webchat.setting_ignored',
-        setting: 'eve_api_url',
-        integrationId: config.integration.id,
-      });
+    // Integration settings are editable by org admins, so the listener port
+    // and the key location come only from the gateway's own configuration
+    // (EVE_WEBCHAT_PORT, EVE_API_URL); those settings are ignored.
+    const port = webchatPort();
+    for (const setting of ['port', 'eve_api_url']) {
+      if (config.settings[setting] !== undefined) {
+        logger.warn({
+          event: 'webchat.setting_ignored',
+          setting,
+          integrationId: config.integration.id,
+        });
+      }
     }
     this.eveApiUrl = process.env.EVE_API_URL ?? '';
     if (!this.eveApiUrl) {
@@ -151,6 +164,17 @@ export class WebChatGatewayProvider implements GatewayProvider {
     });
 
     this.wss = new WebSocketServer({ server: this.httpServer });
+
+    // The WebSocket server re-emits listener errors (e.g. the port is taken).
+    // Log them: a failed webchat listener must not take the gateway down.
+    this.wss.on('error', (err: Error) => {
+      logger.error({
+        event: 'webchat.listen_failed',
+        integrationId: config.integration.id,
+        port,
+        error: err.message,
+      });
+    });
 
     this.wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       this.handleConnection(ws, req).catch((err) => {
