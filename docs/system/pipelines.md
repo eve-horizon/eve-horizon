@@ -1,7 +1,7 @@
 # Pipelines
 
 > Status: Current
-> Last Updated: 2026-05-19
+> Last Updated: 2026-11-10
 > Purpose: Document pipeline definitions, runs, and job-graph expansion.
 
 ## Current (Implemented)
@@ -312,6 +312,25 @@ Base branch filtering supports wildcard patterns:
 - `main` - Exact match
 - `release/*` - Suffix wildcard (matches `release/v1.0`, `release/v2.0`, etc.)
 - `*-prod` - Prefix wildcard (matches `staging-prod`, `main-prod`, etc.)
+
+**Which pull requests start runs:**
+A pull request run builds and executes the PR head commit with the project's
+secrets, so a matching trigger only starts a run when both hold:
+- the PR's head branch is in the project's own repository
+  (`pull_request.head.repo.full_name` equals `pull_request.base.repo.full_name`);
+  PRs from forks do not start runs;
+- the PR author's `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`.
+
+This applies to every trigger that matches a `github.pull_request` event
+(`github`, generic `event`, and `app_link` deliveries), for pipelines and
+workflows alike, and to every action including `closed`. When a PR does not
+qualify, or its payload lacks these fields, the event is still recorded and
+`eve event show` lists the trigger in `triggers_evaluated` as not matched with
+reason `pull_request_from_fork`, `pull_request_author_not_collaborator` or
+`pull_request_origin_unknown`. Push triggers are unaffected. GitHub may report
+`CONTRIBUTOR` rather than `MEMBER` for an organization member whose membership
+is private; making the membership public or adding them as a repository
+collaborator resolves it.
 
 #### Example: PR Preview Deployment
 

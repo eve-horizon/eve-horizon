@@ -1,7 +1,7 @@
 # Events (Event Spine)
 
 > Status: Current
-> Last Updated: 2026-05-15
+> Last Updated: 2026-11-10
 > Purpose: Document the event spine, event sources, and routing behavior.
 
 ## Current (Implemented)
@@ -37,6 +37,14 @@ POST /integrations/github/events/{project_id}
 
 The API verifies webhook signatures, normalizes `push` and `pull_request` events,
 and stores the full payload in `payload_json`.
+
+`github.pull_request` events start pipelines or workflows only for PRs whose
+head branch is in the project's own repository and whose author is an
+`OWNER`, `MEMBER` or `COLLABORATOR` (read from `pull_request.head.repo`,
+`pull_request.base.repo` and `pull_request.author_association`). Other PRs, and
+payloads missing those fields, are recorded but match no trigger; see
+[pipelines.md](./pipelines.md#pull-request-events) for the reasons recorded in
+`triggers_evaluated`.
 
 ### Slack Webhooks
 

@@ -33,12 +33,26 @@ interface GitHubPushPayload {
   [key: string]: unknown;
 }
 
+interface GitHubRepositoryRef {
+  full_name: string; // "owner/name"
+  fork: boolean;
+}
+
+// The payload is stored verbatim as the event's payload_json. The orchestrator
+// starts pull request triggers only when head.repo and base.repo name the same
+// repository and author_association is OWNER, MEMBER or COLLABORATOR.
 interface GitHubPullRequestPayload {
   action: string;
   pull_request: {
+    author_association: string;
     head: {
       sha: string;
       ref: string; // branch name without refs/heads/ prefix
+      repo: GitHubRepositoryRef | null; // null when the head repository was deleted
+    };
+    base: {
+      ref: string;
+      repo: GitHubRepositoryRef;
     };
   };
   sender: {

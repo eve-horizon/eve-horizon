@@ -67,6 +67,64 @@ export interface TriggerMatchResult {
 }
 
 /**
+ * GitHub `author_association` values whose pull requests may start runs.
+ */
+const PULL_REQUEST_AUTHOR_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
+
+/**
+ * Pull request events run pipelines and workflows on the PR head commit, so
+ * they may only start runs when the head branch lives in the project's own
+ * repository and the PR author is an owner, member or collaborator of it.
+ *
+ * Reads the verbatim GitHub payload (`pull_request.head.repo`,
+ * `pull_request.base.repo`, `pull_request.author_association`); for events
+ * delivered through an app link the GitHub payload sits under `original`.
+ * Returns null when runs may start, otherwise the reason they may not. Missing
+ * or malformed fields never allow a run.
+ *
+ * `head.repo.fork` only says whether the head repository is a fork of anything,
+ * so a project whose repository is itself a fork still gets runs for its own
+ * branches; the head and base repository names are what decide.
+ */
+export function pullRequestRefusalReason(event: Event): string | null {
+  if (event.type !== 'github.pull_request') {
+    return null;
+  }
+
+  const payload = asRecord(event.payload_json);
+  const githubPayload = event.source === 'app_link' ? asRecord(payload?.original) : payload;
+  const pullRequest = asRecord(githubPayload?.pull_request);
+  const headRepo = asRecord(asRecord(pullRequest?.head)?.repo);
+  const baseRepo = asRecord(asRecord(pullRequest?.base)?.repo);
+
+  const headName = headRepo?.full_name;
+  const baseName = baseRepo?.full_name;
+  const association = pullRequest?.author_association;
+  if (
+    typeof headName !== 'string' || headName.length === 0 ||
+    typeof baseName !== 'string' || baseName.length === 0 ||
+    typeof headRepo?.fork !== 'boolean' ||
+    typeof association !== 'string'
+  ) {
+    return 'pull_request_origin_unknown';
+  }
+
+  if (headName !== baseName) {
+    return 'pull_request_from_fork';
+  }
+
+  if (!PULL_REQUEST_AUTHOR_ASSOCIATIONS.has(association)) {
+    return 'pull_request_author_not_collaborator';
+  }
+
+  return null;
+}
+
+/**
  * Service to match events against pipeline and workflow triggers.
  *
  * Loads the manifest for an event's project, parses trigger definitions,
@@ -114,10 +172,27 @@ export class TriggerMatcherService {
       return { matches, evaluations };
     }
 
+    // A trigger that matches a pull request event still starts nothing unless
+    // the PR comes from the project's own repository and a collaborator.
+    const pullRequestRefusal = pullRequestRefusalReason(event);
+    const evaluate = (
+      definition: Record<string, unknown>,
+      name: string,
+    ): { matched: boolean; reason?: string } => {
+      const result = this.matchesTrigger(event, definition, name);
+      if (result.matched && pullRequestRefusal) {
+        this.logger.log(
+          `Event ${event.id} → "${name}" not started for pull request: ${pullRequestRefusal}`,
+        );
+        return { matched: false, reason: pullRequestRefusal };
+      }
+      return result;
+    };
+
     // Check pipelines
     if (parsed.pipelines && typeof parsed.pipelines === 'object') {
       for (const [name, definition] of Object.entries(parsed.pipelines)) {
-        const result = this.matchesTrigger(event, definition, name);
+        const result = evaluate(definition, name);
         evaluations.push({ type: 'pipeline', name, matched: result.matched, reason: result.reason });
         if (result.matched) {
           matches.push({
@@ -132,7 +207,7 @@ export class TriggerMatcherService {
     // Check workflows
     if (parsed.workflows && typeof parsed.workflows === 'object') {
       for (const [name, definition] of Object.entries(parsed.workflows)) {
-        const result = this.matchesTrigger(event, definition, name);
+        const result = evaluate(definition, name);
         evaluations.push({ type: 'workflow', name, matched: result.matched, reason: result.reason });
         if (result.matched) {
           matches.push({

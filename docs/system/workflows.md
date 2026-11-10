@@ -360,6 +360,10 @@ workflows:
         branch: main
 ```
 
+Pull request triggers start workflow jobs only for same-repository PRs by an
+owner, member or collaborator; see
+[pipelines.md](./pipelines.md#pull-request-events).
+
 ## Planned (Not Implemented)
 
 - Request/response schema validation

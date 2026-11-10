@@ -3,6 +3,25 @@ import { TriggerMatcherService } from './trigger-matcher.service';
 import type { Event } from '@eve/db';
 import type { ProjectManifest } from '@eve/db';
 
+/**
+ * Adds the fields a pull request payload needs before its triggers can start
+ * runs: a head branch in the same repository and an author who is a member.
+ * See trigger-matcher.pull-request-origin.spec.ts for that rule itself.
+ */
+function fromMember(payload: Record<string, any>): Record<string, any> {
+  const pullRequest = payload.pull_request ?? {};
+  const repo = { full_name: 'org/repo', fork: false };
+  return {
+    ...payload,
+    pull_request: {
+      ...pullRequest,
+      author_association: 'MEMBER',
+      head: { ...(pullRequest.head ?? {}), repo },
+      base: { ...(pullRequest.base ?? {}), repo },
+    },
+  };
+}
+
 describe('TriggerMatcherService', () => {
   let service: TriggerMatcherService;
   let mockDb: any;
@@ -1090,7 +1109,7 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: { action: 'opened' },
+        payload_json: fromMember({ action: 'opened' }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1143,7 +1162,7 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: { action: 'closed' },
+        payload_json: fromMember({ action: 'closed' }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1196,7 +1215,7 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: { action: 'closed' },
+        payload_json: fromMember({ action: 'closed' }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1248,7 +1267,7 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {},
+        payload_json: fromMember({}),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1301,13 +1320,13 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {
+        payload_json: fromMember({
           action: 'opened',
           pull_request: {
             base: { ref: 'main' },
             head: { ref: 'feature/new-feature' },
           },
-        },
+        }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1360,13 +1379,13 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {
+        payload_json: fromMember({
           action: 'opened',
           pull_request: {
             base: { ref: 'develop' },
             head: { ref: 'feature/new-feature' },
           },
-        },
+        }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1418,13 +1437,13 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {
+        payload_json: fromMember({
           action: 'opened',
           pull_request: {
             base: { ref: 'release/v1.0' },
             head: { ref: 'feature/new-feature' },
           },
-        },
+        }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1477,7 +1496,7 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: { action: 'opened' },
+        payload_json: fromMember({ action: 'opened' }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1531,13 +1550,13 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {
+        payload_json: fromMember({
           action: 'synchronize',
           pull_request: {
             base: { ref: 'main' },
             head: { ref: 'feature/new-feature' },
           },
-        },
+        }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -1591,13 +1610,13 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {
+        payload_json: fromMember({
           action: 'opened',
           pull_request: {
             base: { ref: 'develop' },
             head: { ref: 'feature/new-feature' },
           },
-        },
+        }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,
@@ -2029,13 +2048,13 @@ pipelines:
         ref_branch: 'feature/new-feature',
         actor_type: 'user',
         actor_id: 'user_123',
-        payload_json: {
+        payload_json: fromMember({
           action: 'closed',
           pull_request: {
             base: { ref: 'main' },
             head: { ref: 'feature/new-feature' },
           },
-        },
+        }),
         dedupe_key: null,
         job_id: null,
         trigger_match_count: null,

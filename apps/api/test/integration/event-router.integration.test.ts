@@ -355,12 +355,15 @@ pipelines:
         pull_request: {
           number: 42,
           html_url: 'https://github.com/test/repo/pull/42',
+          author_association: 'MEMBER',
           head: {
             ref: 'feature/new-feature',
             sha: gitShaPr,
+            repo: { full_name: 'test/repo', fork: false },
           },
           base: {
             ref: 'main',
+            repo: { full_name: 'test/repo', fork: false },
           },
         },
         repository: {
@@ -430,12 +433,15 @@ pipelines:
         pull_request: {
           number: 99,
           html_url: 'https://github.com/org/project/pull/99',
+          author_association: 'MEMBER',
           head: {
             ref: 'feature/updated-feature',
             sha: gitShaPrSync,
+            repo: { full_name: 'org/project', fork: false },
           },
           base: {
             ref: 'develop',
+            repo: { full_name: 'org/project', fork: false },
           },
         },
         repository: {
