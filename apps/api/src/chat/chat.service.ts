@@ -123,7 +123,9 @@ export class ChatService {
     progress?: boolean;
   }): Promise<{ delivered: boolean; message_id?: string; error?: string }> {
     const thread = await this.threads.findById(input.thread_id);
-    if (!thread) {
+    // The thread id comes from the job's hints; deliver only into a thread of
+    // the job's own project.
+    if (!thread || thread.project_id !== input.projectId) {
       return { delivered: false, error: `Thread ${input.thread_id} not found` };
     }
 

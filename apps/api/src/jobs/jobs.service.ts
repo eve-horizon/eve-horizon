@@ -1215,9 +1215,18 @@ export class JobsService {
     const deadline = Date.now() + timeoutSec * 1000;
     const pollIntervalMs = 2000;
 
-    // Get coordination thread ID from hints
+    // Get coordination thread ID from hints. Hints are caller-supplied, so the
+    // thread is read only when it belongs to the job's own project.
     const coordination = job.hints?.coordination as { thread_id?: string } | undefined;
-    const threadId = coordination?.thread_id;
+    let threadId: string | undefined;
+    if (typeof coordination?.thread_id === 'string' && coordination.thread_id) {
+      const [thread] = await this.db<Array<{ project_id: string | null }>>`
+        SELECT project_id FROM threads WHERE id = ${coordination.thread_id} LIMIT 1
+      `;
+      if (thread?.project_id && thread.project_id === job.project_id) {
+        threadId = coordination.thread_id;
+      }
+    }
 
     while (Date.now() < deadline) {
       // Query child jobs that changed phase since cursor

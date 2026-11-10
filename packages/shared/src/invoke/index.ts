@@ -24,6 +24,7 @@ export type {
   JobAttachmentRow,
   CarryoverContextDb,
   RelayDb,
+  ThreadProjectReader,
   BudgetDb,
   UpdateAttemptGitMetaFn,
 } from './types.js';
@@ -68,6 +69,7 @@ export {
 
 // Carryover context
 export { writeCarryoverContext } from './carryover-context.js';
+export { projectThreadId } from './thread-ownership.js';
 
 // Security policy
 export {

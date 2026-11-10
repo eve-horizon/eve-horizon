@@ -53,6 +53,7 @@ import {
   exchangeRateQueries,
   systemSettingsQueries,
   threadMessageQueries,
+  threadQueries,
   spendQueries,
   balanceLedgerQueries,
   type Db,
@@ -2395,6 +2396,13 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** True when the thread named in job hints belongs to the given project. */
+  private async isProjectThread(threadId: string, projectId: string | null | undefined): Promise<boolean> {
+    if (!projectId) return false;
+    const thread = await threadQueries(this.db).findById(threadId);
+    return Boolean(thread?.project_id) && thread!.project_id === projectId;
+  }
+
   /**
    * Post a job's eve.summary to its parent's coordination thread (if one exists).
    * This is the "end-of-attempt relay" — agents in a team dispatch automatically
@@ -2415,6 +2423,12 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
       const coordThreadId = (parentJob.hints as Record<string, unknown> | null)
         ?.coordination as { thread_id?: string } | undefined;
       if (!coordThreadId?.thread_id) return;
+      // Hints are caller-supplied: write only into a thread of the parent's
+      // own project.
+      if (!(await this.isProjectThread(coordThreadId.thread_id, parentJob.project_id))) {
+        this.logger.warn(`Skipped coordination relay for job ${job.id}: thread is not in the parent's project`);
+        return;
+      }
 
       const messages = threadMessageQueries(this.db);
       const crypto = await import('crypto');
@@ -2535,9 +2549,9 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
     try {
       // Find deferred jobs with wake_on hints
       const deferredJobs = await this.db<Array<{
-        id: string; hints: Record<string, unknown> | null; defer_until: Date | null;
+        id: string; project_id: string; hints: Record<string, unknown> | null; defer_until: Date | null;
       }>>`
-        SELECT id, hints, defer_until FROM jobs
+        SELECT id, project_id, hints, defer_until FROM jobs
         WHERE phase = 'ready'
           AND defer_until IS NOT NULL
           AND defer_until > NOW()
@@ -2579,7 +2593,7 @@ export class LoopService implements OnModuleInit, OnModuleDestroy {
           } else if (condition === 'thread.message') {
             const coordination = job.hints?.coordination as { thread_id?: string } | undefined;
             const threadId = coordination?.thread_id;
-            if (threadId && job.defer_until) {
+            if (threadId && job.defer_until && (await this.isProjectThread(threadId, job.project_id))) {
               const newMessages = await this.db<{ count: string }[]>`
                 SELECT count(*) as count FROM thread_messages
                 WHERE thread_id = ${threadId} AND created_at > ${job.defer_until}

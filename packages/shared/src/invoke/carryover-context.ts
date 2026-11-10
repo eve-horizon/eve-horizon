@@ -17,6 +17,7 @@ import * as path from 'path';
 import type { HarnessInvocation } from '../types/harness.js';
 import type { CarryoverContextDb } from './types.js';
 import { readPositiveInt, parseDurationToMs } from './types.js';
+import { projectThreadId } from './thread-ownership.js';
 
 /**
  * Materialize declarative context carryover from job hints into `.eve/context/`.
@@ -130,7 +131,7 @@ export async function writeCarryoverContext(
     if (threadsCfg?.coordination === true && invocation.parentJobId) {
       const parent = await db.queryJobHints(invocation.parentJobId);
       const coordination = parent?.hints?.coordination as { thread_id?: string } | undefined;
-      const threadId = coordination?.thread_id;
+      const threadId = await projectThreadId(db, coordination?.thread_id, invocation.projectId);
       if (threadId) {
         const maxMessages = readPositiveInt(threadsCfg.max_messages) ?? 20;
         const messages = await db.listThreadMessages(threadId, { limit: maxMessages });

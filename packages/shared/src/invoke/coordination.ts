@@ -10,6 +10,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { HarnessInvocation } from '../types/harness.js';
 import type { CoordinationDb } from './types.js';
+import { projectThreadId } from './thread-ownership.js';
 
 /**
  * Write `.eve/coordination-inbox.md` with recent thread messages so the agent
@@ -25,7 +26,7 @@ export async function writeCoordinationInbox(
   try {
     const parent = await db.queryJobHints(invocation.parentJobId);
     const coordination = parent?.hints?.coordination as { thread_id?: string } | undefined;
-    const threadId = coordination?.thread_id;
+    const threadId = await projectThreadId(db, coordination?.thread_id, invocation.projectId);
     if (!threadId) return;
 
     const messages = await db.listThreadMessages(threadId, {

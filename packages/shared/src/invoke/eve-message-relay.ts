@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { loadConfig } from '../config/schema.js';
 import { apiPath } from '../api-client/internal-fetch.js';
 import type { ChatDeliveryContext, RelayDb } from './types.js';
+import { projectThreadId } from './thread-ownership.js';
 
 /**
  * Post a provisioning-phase error back to the coordination thread (for team
@@ -38,7 +39,7 @@ export async function deliverProvisioningError(
     try {
       const parent = await db.queryJobHints(params.parentJobId);
       const coordination = parent?.hints?.coordination as { thread_id?: string } | undefined;
-      const threadId = coordination?.thread_id;
+      const threadId = await projectThreadId(db, coordination?.thread_id, parent?.project_id);
       if (threadId) {
         await db.createThreadMessage({
           id: randomUUID(),
@@ -58,8 +59,8 @@ export async function deliverProvisioningError(
   // Primary chat thread for direct chat jobs — use job.hints.thread_id.
   try {
     const self = await db.queryJobHints(params.jobId);
-    const threadId = typeof self?.hints?.thread_id === 'string' ? (self.hints.thread_id as string) : null;
-    if (threadId && threadId !== undefined) {
+    const threadId = await projectThreadId(db, self?.hints?.thread_id, self?.project_id);
+    if (threadId) {
       await db.createThreadMessage({
         id: randomUUID(),
         thread_id: threadId,
@@ -173,7 +174,7 @@ export class EveMessageRelay {
     try {
       const parent = await this.db.queryJobHints(this.parentJobId!);
       const coordination = parent?.hints?.coordination as { thread_id?: string } | undefined;
-      const threadId = coordination?.thread_id;
+      const threadId = await projectThreadId(this.db, coordination?.thread_id, parent?.project_id);
       if (!threadId) return;
 
       await this.db.createThreadMessage({

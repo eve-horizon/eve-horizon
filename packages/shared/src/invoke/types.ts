@@ -169,8 +169,14 @@ export interface ThreadMessageRow {
 
 /** Reads a job's hints via an explicit hints query. */
 export interface JobHintsReader {
-  /** SELECT hints FROM jobs WHERE id = jobId */
-  queryJobHints(jobId: string): Promise<{ hints: Record<string, unknown> | null } | undefined>;
+  /** SELECT hints, project_id FROM jobs WHERE id = jobId */
+  queryJobHints(jobId: string): Promise<{ hints: Record<string, unknown> | null; project_id?: string | null } | undefined>;
+}
+
+/** Reads the project a thread belongs to (null for an org thread). */
+export interface ThreadProjectReader {
+  /** SELECT project_id FROM threads WHERE id = threadId */
+  findThreadProjectId(threadId: string): Promise<string | null | undefined>;
 }
 
 /** Reads a job row (hints subset) by ID. Same data as {@link JobHintsReader};
@@ -186,7 +192,7 @@ export interface ThreadMessageReader {
 }
 
 /** DB facade for coordination inbox + thread context. */
-export interface CoordinationDb extends JobHintsReader, JobByIdReader, ThreadMessageReader {}
+export interface CoordinationDb extends JobHintsReader, JobByIdReader, ThreadMessageReader, ThreadProjectReader {}
 
 /** Org document row shape (subset). */
 export interface OrgDocumentRow {
@@ -202,7 +208,7 @@ export interface JobAttachmentRow {
 }
 
 /** DB facade for carryover context materialisation. */
-export interface CarryoverContextDb extends JobHintsReader, JobByIdReader, ThreadMessageReader {
+export interface CarryoverContextDb extends JobHintsReader, JobByIdReader, ThreadMessageReader, ThreadProjectReader {
   findProjectById(projectId: string): Promise<{ org_id: string } | undefined>;
   listOrgDocsByPrefix(orgId: string, prefix: string, limit: number): Promise<OrgDocumentRow[]>;
   findOrgDocByPath(orgId: string, path: string): Promise<{ content: string } | undefined>;
@@ -210,7 +216,7 @@ export interface CarryoverContextDb extends JobHintsReader, JobByIdReader, Threa
 }
 
 /** DB facade for EveMessageRelay. */
-export interface RelayDb extends JobHintsReader {
+export interface RelayDb extends JobHintsReader, ThreadProjectReader {
   createThreadMessage(msg: {
     id: string;
     thread_id: string;

@@ -328,10 +328,16 @@ export class InvokeService {
   private buildCoordinationDb(): CoordinationDb {
     return {
       queryJobHints: async (jobId) => {
-        const rows = await this.db<{ hints: Record<string, unknown> | null }[]>`
-          SELECT hints FROM jobs WHERE id = ${jobId}
+        const rows = await this.db<{ hints: Record<string, unknown> | null; project_id: string }[]>`
+          SELECT hints, project_id FROM jobs WHERE id = ${jobId}
         `;
         return rows[0];
+      },
+      findThreadProjectId: async (threadId) => {
+        const rows = await this.db<{ project_id: string | null }[]>`
+          SELECT project_id FROM threads WHERE id = ${threadId}
+        `;
+        return rows[0]?.project_id ?? null;
       },
       listThreadMessages: (threadId, opts) => threadMessageQueries(this.db).listByThread(threadId, opts),
       findJobById: async (jobId) => {
@@ -362,10 +368,16 @@ export class InvokeService {
         return row ?? undefined;
       },
       queryJobHints: async (jobId) => {
-        const rows = await this.db<{ hints: Record<string, unknown> | null }[]>`
-          SELECT hints FROM jobs WHERE id = ${jobId}
+        const rows = await this.db<{ hints: Record<string, unknown> | null; project_id: string }[]>`
+          SELECT hints, project_id FROM jobs WHERE id = ${jobId}
         `;
         return rows[0];
+      },
+      findThreadProjectId: async (threadId) => {
+        const rows = await this.db<{ project_id: string | null }[]>`
+          SELECT project_id FROM threads WHERE id = ${threadId}
+        `;
+        return rows[0]?.project_id ?? null;
       },
       listThreadMessages: (threadId, opts) => threadMessageQueries(this.db).listByThread(threadId, opts),
     };
@@ -374,10 +386,16 @@ export class InvokeService {
   private buildRelayDb(): RelayDb {
     return {
       queryJobHints: async (jobId) => {
-        const rows = await this.db<{ hints: Record<string, unknown> | null }[]>`
-          SELECT hints FROM jobs WHERE id = ${jobId}
+        const rows = await this.db<{ hints: Record<string, unknown> | null; project_id: string }[]>`
+          SELECT hints, project_id FROM jobs WHERE id = ${jobId}
         `;
         return rows[0];
+      },
+      findThreadProjectId: async (threadId) => {
+        const rows = await this.db<{ project_id: string | null }[]>`
+          SELECT project_id FROM threads WHERE id = ${threadId}
+        `;
+        return rows[0]?.project_id ?? null;
       },
       createThreadMessage: async (msg) => {
         await threadMessageQueries(this.db).create(msg);
@@ -1149,6 +1167,7 @@ export class InvokeService {
   private async stageAttachments(
     workspacePath: string,
     files: ChatFile[],
+    jobId: string,
   ): Promise<void> {
     const eveFiles = files.filter(f => f.url?.startsWith('eve-storage://'));
     if (eveFiles.length === 0) return;
@@ -1191,7 +1210,8 @@ export class InvokeService {
             'content-type': 'application/json',
             'x-eve-internal-token': internalToken,
           },
-          body: JSON.stringify({ key, operation: 'download' }),
+          // The API presigns only keys under this job's org.
+          body: JSON.stringify({ key, operation: 'download', job_id: jobId }),
         });
         if (!presignResp.ok) {
           console.warn(`[attachments] Presign failed for ${key}: ${presignResp.status}`);
@@ -1419,7 +1439,7 @@ export class InvokeService {
       // Stage chat file attachments into .eve/attachments/
       const chatFiles = effectiveInvocation.data?.chat_files;
       if (Array.isArray(chatFiles) && chatFiles.length > 0) {
-        await this.stageAttachments(repoPath, chatFiles as ChatFile[]);
+        await this.stageAttachments(repoPath, chatFiles as ChatFile[], effectiveInvocation.jobId);
       }
 
       const skipWorkspaceSkills = await this.shouldSkipWorkspaceSkills(effectiveInvocation);

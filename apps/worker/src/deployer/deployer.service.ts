@@ -2451,6 +2451,7 @@ export class DeployerService {
       const token = await mintAppLinkToken({
         subscriptionId: subscription.id,
         consumerPrincipal: `service:${context.componentName}`,
+        consumerProjectId: context.projectId,
         consumerEnv: context.envName,
         producerEnv,
         ttlSeconds: 90 * 24 * 60 * 60,

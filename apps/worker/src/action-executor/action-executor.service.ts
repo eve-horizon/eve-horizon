@@ -226,10 +226,16 @@ export class ActionExecutorService {
   private buildRelayDb(): RelayDb {
     return {
       queryJobHints: async (jobId) => {
-        const rows = await this.db<{ hints: Record<string, unknown> | null }[]>`
-          SELECT hints FROM jobs WHERE id = ${jobId}
+        const rows = await this.db<{ hints: Record<string, unknown> | null; project_id: string }[]>`
+          SELECT hints, project_id FROM jobs WHERE id = ${jobId}
         `;
         return rows[0];
+      },
+      findThreadProjectId: async (threadId) => {
+        const rows = await this.db<{ project_id: string | null }[]>`
+          SELECT project_id FROM threads WHERE id = ${threadId}
+        `;
+        return rows[0]?.project_id ?? null;
       },
       createThreadMessage: async (msg) => {
         await threadMessageQueries(this.db).create(msg);

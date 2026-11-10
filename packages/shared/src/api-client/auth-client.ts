@@ -149,6 +149,8 @@ export async function mintAppLinkToken(
   params: {
     subscriptionId: string;
     consumerPrincipal: string;
+    /** The consumer's project; required unless the principal is `job:<id>`. */
+    consumerProjectId?: string | null;
     consumerEnv?: string | null;
     producerEnv?: string | null;
     ttlSeconds?: number;
@@ -178,6 +180,7 @@ export async function mintAppLinkToken(
       body: JSON.stringify({
         subscription_id: params.subscriptionId,
         consumer_principal: params.consumerPrincipal,
+        ...(params.consumerProjectId ? { consumer_project_id: params.consumerProjectId } : {}),
         consumer_env: params.consumerEnv ?? null,
         producer_env: params.producerEnv ?? null,
         ttl_seconds: params.ttlSeconds ?? DEFAULT_APP_LINK_TTL_SECONDS,

@@ -205,10 +205,20 @@ export class AuthInternalController {
       consumer_env?: string | null;
       producer_env?: string | null;
       ttl_seconds?: number;
+      /** Required for a non-job principal (a deployed service): its project. */
+      consumer_project_id?: string | null;
     },
   ): Promise<{ access_token: string; token_type: string; expires_at: number }> {
     const subscription = await this.appLinkSubscriptions.findWithGrantsById(body.subscription_id);
-    if (!subscription || !subscription.api_grant) {
+    // The subscription id comes from job hints or a deploy: mint only when the
+    // subscription's consumer is the principal's own project.
+    const principalProjectId = await this.principalProjectId(body);
+    if (
+      !subscription
+      || !subscription.api_grant
+      || !principalProjectId
+      || subscription.consumer_project_id !== principalProjectId
+    ) {
       throw new NotFoundException(`App-link subscription ${body.subscription_id} not found`);
     }
     const grant = subscription.api_grant;
@@ -258,5 +268,27 @@ export class AuthInternalController {
       token_type: 'bearer',
       expires_at: payload.exp,
     };
+  }
+
+  /**
+   * The project an app-link token is minted for: the job's own project for a
+   * `job:<id>` principal (a stated consumer_project_id must agree), otherwise
+   * the stated consumer_project_id. Null when it cannot be established.
+   */
+  private async principalProjectId(body: {
+    consumer_principal: string;
+    consumer_project_id?: string | null;
+  }): Promise<string | null> {
+    const stated = typeof body.consumer_project_id === 'string' && body.consumer_project_id
+      ? body.consumer_project_id
+      : null;
+    const principal = typeof body.consumer_principal === 'string' ? body.consumer_principal : '';
+    if (principal.startsWith('job:')) {
+      const job = await this.jobs.findById(principal.slice('job:'.length));
+      if (!job) return null;
+      if (stated && stated !== job.project_id) return null;
+      return job.project_id;
+    }
+    return stated;
   }
 }
