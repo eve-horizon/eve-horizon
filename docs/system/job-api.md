@@ -334,6 +334,14 @@ changes. The actor's own edits, and cosmetic edits (`priority`, `due_at`,
 `review_required`, `close_reason`, or moving the job to any other phase), keep
 the actor.
 
+The jobs of a workflow or pipeline run never change actor: the run's root (a
+job with steps the run compiled under it) and each compiled step (its
+`step_name` is set by the workflow or pipeline expander, which no route can
+change). Only their actor can change what they run or their attachments;
+anyone else is refused with 403 and should retry the workflow
+(`eve workflow retry`) or start a new run, which runs as them. Cosmetic edits by
+others still apply.
+
 No actor and the `system` actor that job tokens carry for work no user started
 are the same actor. An edit by such a token to a job no user started keeps the
 job as it is, and work no user started that becomes the actor of a person's job
@@ -350,8 +358,8 @@ applied, the edit is refused with 409 and the caller should read the job again
 and retry.
 
 Adding or removing a job attachment (`POST /jobs/{job_id}/attachments`,
-`DELETE /jobs/{job_id}/attachments/{att_id}`) is judged the same way, since the
-worker writes a job's attachments into its workspace when it runs: someone
+`DELETE /jobs/{job_id}/attachments/{att_id}`) is judged the same way: on the
+jobs of a run only the actor may do it (403 otherwise); on other jobs someone
 other than the actor becomes the actor (400 if they could not grant the job's
 permissions or hold its token scope, 409 if the actor changed after the job was
 read), and the attachment and actor change together or not at all. The actor's

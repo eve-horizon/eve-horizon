@@ -988,13 +988,21 @@ export class JobsService {
 
   /**
    * Applies `change` to what `job` runs, on behalf of `caller`, in one
-   * transaction; used by PATCH and by attachment changes. The caller becomes
-   * the actor when they are not (see actorForChange: 400 if they could not
-   * grant the job's permissions or hold its token scope), the row is locked
-   * while its actor is still the one judged (409 otherwise), and `change` runs
-   * in the same transaction, so nothing changes when any part fails.
+   * transaction; used by PATCH and by attachment changes. On the jobs of a
+   * workflow or pipeline run only the actor may do this (403 otherwise). On
+   * other jobs the caller becomes the actor when they are not (see
+   * actorForChange: 400 if they could not grant the job's permissions or hold
+   * its token scope). The row is locked while its actor is still the one
+   * judged (409 otherwise), and `change` runs in the same transaction, so
+   * nothing changes when any part fails.
    */
   async changeWhatJobRuns<T>(job: Job, caller: AuthUser, change: (tx: Db) => Promise<T>): Promise<T> {
+    if (!isSameActor(job.actor_user_id, caller.user_id) && await this.isRunJob(job)) {
+      throw new ForbiddenException(
+        `Job ${job.id} belongs to a workflow or pipeline run, and only its actor can change what it runs or its attachments; ` +
+        'retry the workflow (eve workflow retry) or start a new run instead',
+      );
+    }
     const nextActor = await this.actorForChange(job, caller);
     const result = await this.db.begin(async (rawTx) => {
       const tx = rawTx as unknown as Db;
@@ -1009,6 +1017,22 @@ export class JobsService {
       return change(tx);
     });
     return result as T;
+  }
+
+  /**
+   * True for the jobs of a workflow or pipeline run: a step the run compiled
+   * (its step_name column, which only the expanders set) or the root of a run
+   * (a job with such a step under it). The steps of a run feed each other as
+   * their own actors or the run's, so these actors never move to someone else.
+   */
+  private async isRunJob(job: Job): Promise<boolean> {
+    if (job.step_name) {
+      return true;
+    }
+    const [compiledChild] = await this.db<Array<{ id: string }>>`
+      SELECT id FROM jobs WHERE parent_id = ${job.id} AND step_name IS NOT NULL LIMIT 1
+    `;
+    return Boolean(compiledChild);
   }
 
   /** The phase transition and field changes of a PATCH, inside its transaction. */

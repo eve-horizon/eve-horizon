@@ -122,12 +122,16 @@ the step it names (matched on the step name the workflow gave it). A step takes
 input only from steps the workflow compiled for the same run: children of the
 same root that carry a step name set by the workflow (jobs created through the
 jobs API never carry one, even under a run root), and that run as the step's
-own actor or as the user who invoked the run (steps no user started count as
-one actor, whether recorded with no actor or as `system`). A retrier's replacement steps
-therefore still read the run's original steps, but a step that someone else
-has since become the actor of feeds no step that runs as another person, and a
-condition that names such a step is not met (the step is skipped with a reason
-saying so).
+own actor or as the user who invoked the run (the root's actor; steps no user
+started count as one actor, whether recorded with no actor or as `system`). A
+condition that names a step it may not read this way is not met, and the step
+is skipped with a reason saying so.
+
+The root and compiled steps of a run keep the actor they were created with:
+only that actor can change what they run or their attachments, and anyone else
+is refused with 403 (see "Job Actor on Update" in `job-api.md`). To run a step
+again as yourself, use workflow retry; a retrier's replacement steps run as the
+retrier and still read the run's original steps, which run as the invoker.
 
 A dependency added to a step later, for example with
 `POST /jobs/{job_id}/dependencies`, still gates when the step runs, but feeds
