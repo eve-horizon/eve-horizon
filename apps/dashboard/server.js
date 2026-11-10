@@ -2,6 +2,7 @@ import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { contentSecurityPolicy, ssoOriginFromApi } from './server/content-security-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -21,6 +22,10 @@ app.use('/api', createProxyMiddleware({
     }
   },
 }));
+
+// Pages carry a Content-Security-Policy whose connect-src names the SSO
+// origin the API reports (see server/content-security-policy.js).
+app.use(contentSecurityPolicy(ssoOriginFromApi(apiUrl)));
 
 // Serve static files
 app.use(express.static(join(__dirname, 'dist')));

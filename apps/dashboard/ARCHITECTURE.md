@@ -26,6 +26,14 @@ Legacy routes (`/board`, `/project`, `/environments`, `/spending`) redirect to t
 
 - **Read-only by design** — the dashboard observes; the CLI/API mutate.
 - **Dark-first responsive shell** — desktop sidebar, tablet rail, mobile bottom tabs.
+- **Job and agent text is data, never markup** — log lines render as React text nodes; ANSI colour
+  codes and search matches only add classes (`src/lib/ansi.ts`). Nothing renders API text as HTML.
+- **Content-Security-Policy on every page** — `server.js` sends it
+  (`server/content-security-policy.js`): scripts only from the dashboard's own files (so
+  `index.html` keeps no inline script; the pre-paint theme script is `public/theme-init.js`),
+  Google Fonts for styles and fonts, and `connect-src` limited to the page itself plus the SSO
+  origin. The server learns that origin from the API's `/auth/config`, the same `sso_url` the
+  browser gets, so it needs no extra configuration.
 
 ## Navigation
 

@@ -27,6 +27,7 @@ RUN npm install --no-save express@4 http-proxy-middleware@3
 
 COPY --from=build /app/apps/dashboard/dist ./dist
 COPY --from=build /app/apps/dashboard/server.js ./server.js
+COPY --from=build /app/apps/dashboard/server ./server
 
 EXPOSE 3200
 CMD ["node", "server.js"]

@@ -14,6 +14,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { createEventSource, api, ApiError } from '@/lib/api';
+import { highlightRanges, matchRanges, parseAnsi, stripAnsi } from '@/lib/ansi';
 
 interface LogViewerProps {
   jobId: string;
@@ -46,26 +47,6 @@ type LogLevel = 'info' | 'warn' | 'error';
 
 const LINE_HEIGHT = 20;
 const OVERSCAN = 20; // Extra lines above/below viewport to render
-
-// Simple ANSI to HTML conversion for common codes
-function ansiToHtml(text: string): string {
-  return text
-    .replace(/\x1b\[0m/g, '</span>')
-    .replace(/\x1b\[1m/g, '<span class="font-bold">')
-    .replace(/\x1b\[31m/g, '<span class="text-red-400">')
-    .replace(/\x1b\[32m/g, '<span class="text-green-400">')
-    .replace(/\x1b\[33m/g, '<span class="text-yellow-400">')
-    .replace(/\x1b\[34m/g, '<span class="text-blue-400">')
-    .replace(/\x1b\[35m/g, '<span class="text-purple-400">')
-    .replace(/\x1b\[36m/g, '<span class="text-cyan-400">')
-    .replace(/\x1b\[90m/g, '<span class="text-gray-500">')
-    .replace(/\x1b\[\d+(?:;\d+)*m/g, ''); // strip unhandled codes
-}
-
-// Strip ANSI codes for plain-text operations (search, copy)
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[\d+(?:;\d+)*m/g, '');
-}
 
 // Detect log level from line content
 function detectLevel(text: string): LogLevel {
@@ -121,11 +102,10 @@ function normalizeLogEntry(entry: LogLine | ApiLogEntry, index: number): LogLine
   };
 }
 
-function buildSearchRegex(search: string, isRegex: boolean, global = false): RegExp | null {
+function buildSearchRegex(search: string, isRegex: boolean): RegExp | null {
   if (!search) return null;
-  const flags = global ? 'gi' : 'i';
   try {
-    return isRegex ? new RegExp(search, flags) : new RegExp(escapeRegex(search), flags);
+    return isRegex ? new RegExp(search, 'i') : new RegExp(escapeRegex(search), 'i');
   } catch {
     return null;
   }
@@ -135,23 +115,6 @@ function lineMatchesSearch(line: LogLine, searchRegex: RegExp | null): boolean {
   if (!searchRegex) return false;
   const regex = new RegExp(searchRegex.source, searchRegex.flags);
   return regex.test(stripAnsi(line.text));
-}
-
-// Highlight search matches in HTML-safe text
-function highlightMatches(html: string, search: string, isRegex: boolean, isCurrentMatch: boolean): string {
-  if (!search) return html;
-
-  const regex = buildSearchRegex(search, isRegex, true);
-  if (!regex) {
-    return html;
-  }
-
-  return html.replace(regex, (match) => {
-    const cls = isCurrentMatch
-      ? 'bg-[var(--amber)] text-black rounded-sm px-px'
-      : 'bg-[var(--amber-dim)] text-[var(--text-primary)] rounded-sm px-px';
-    return `<span class="${cls}">${match}</span>`;
-  });
 }
 
 function escapeRegex(str: string): string {
@@ -620,8 +583,7 @@ export function LogViewer({ jobId, attemptNumber = 1, isActive = false }: LogVie
                     showLineNumbers={showLineNumbers}
                     showTimestamps={showTimestamps}
                     wordWrap={wordWrap}
-                    search={search}
-                    isRegex={isRegex}
+                    searchRegex={searchRegex}
                     isMatchingLine={matchingLineSet.has(lineIdx)}
                     isCurrentMatch={matchingLineIndexes[currentMatchIdx] === lineIdx}
                   />
@@ -639,8 +601,7 @@ export function LogViewer({ jobId, attemptNumber = 1, isActive = false }: LogVie
               showLineNumbers={showLineNumbers}
               showTimestamps={showTimestamps}
               wordWrap={wordWrap}
-              search={search}
-              isRegex={isRegex}
+              searchRegex={searchRegex}
               isMatchingLine={matchingLineSet.has(i)}
               isCurrentMatch={matchingLineIndexes[currentMatchIdx] === i}
             />
@@ -670,8 +631,7 @@ interface LogLineRowProps {
   showLineNumbers: boolean;
   showTimestamps: boolean;
   wordWrap: boolean;
-  search: string;
-  isRegex: boolean;
+  searchRegex: RegExp | null;
   isMatchingLine: boolean;
   isCurrentMatch: boolean;
 }
@@ -682,8 +642,7 @@ function LogLineRow({
   showLineNumbers,
   showTimestamps,
   wordWrap,
-  search,
-  isRegex,
+  searchRegex,
   isMatchingLine,
   isCurrentMatch,
 }: LogLineRowProps) {
@@ -696,10 +655,13 @@ function LogLineRow({
     level === 'warn' ? 'border-l-2 border-l-[var(--amber)]' :
     '';
 
-  let html = ansiToHtml(line.text);
-  if (search && isMatchingLine) {
-    html = highlightMatches(html, search, isRegex, isCurrentMatch);
-  }
+  // Log text renders as text nodes; ANSI codes and search matches only add classes.
+  const segments = parseAnsi(line.text);
+  const ranges = searchRegex && isMatchingLine ? matchRanges(stripAnsi(line.text), searchRegex) : [];
+  const matchClass = isCurrentMatch
+    ? 'bg-[var(--amber)] text-black rounded-sm px-px'
+    : 'bg-[var(--amber-dim)] text-[var(--text-primary)] rounded-sm px-px';
+  const parts = highlightRanges(segments, ranges);
 
   return (
     <div
@@ -724,8 +686,12 @@ function LogLineRow({
       <span
         className={`flex-1 px-3 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre overflow-hidden'}`}
         style={{ paddingTop: 1 }}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+      >
+        {parts.map((part, i) => {
+          const className = [part.className, part.highlighted ? matchClass : ''].filter(Boolean).join(' ');
+          return className ? <span key={i} className={className}>{part.text}</span> : part.text;
+        })}
+      </span>
     </div>
   );
 }
