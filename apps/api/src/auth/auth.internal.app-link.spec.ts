@@ -57,7 +57,7 @@ describe('internal mint-app-link-token binds the subscription to its consumer', 
     mocks.subscriptions.recordTokenMint.mockResolvedValue(undefined);
     mocks.jobs.findById.mockImplementation(async (id: string) => JOBS[id] ?? null);
     mocks.projects.findById.mockImplementation(async (id: string) => PROJECTS[id] ?? null);
-    controller = new AuthInternalController({ mintAppLinkToken } as never, (() => []) as never);
+    controller = new AuthInternalController({ mintAppLinkToken } as never, (() => []) as never, {} as never);
   });
 
   it("mints no token for another project's subscription named by a job", async () => {
