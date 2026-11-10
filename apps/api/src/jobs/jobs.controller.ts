@@ -32,6 +32,7 @@ import {
 } from '@nestjs/swagger';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { RbacService } from '../auth/rbac.service.js';
+import { isScopedToken, scopeListFiltersToToken } from '../auth/token-scope.js';
 import type { AuthUser } from '../auth/auth.service.js';
 import type { Permission } from '../auth/permissions.js';
 import { zodSchemaToOpenApi } from '../openapi.js';
@@ -300,10 +301,15 @@ export class JobsController {
     @Query('failure_disposition') failureDisposition?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<JobListResponse> {
+    // A job, service or service-principal token lists only within its own scope.
+    const scope = caller && isScopedToken(caller)
+      ? await scopeListFiltersToToken(caller, { org_id: orgId, project_id: projectId }, this.rbac)
+      : { org_id: orgId, project_id: projectId };
     return this.jobsService.listAll({
-      orgId,
-      projectId,
+      orgId: scope.org_id,
+      projectId: scope.project_id,
       phase: phase as any,
       label,
       executionType: type,

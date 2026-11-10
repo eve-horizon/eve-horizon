@@ -965,6 +965,7 @@ Job, service, and service principal tokens use the explicit `permissions` list c
 - `/orgs/:org_id/...` and `/orgs/:id/...` (by id or slug) must name the token's org (for a token that carries only a project, that project's org). The same applies to `body.org_id` on routes with none of the above in their path.
 - `/jobs/:job_id/...`, `/pipeline-runs/:runId/...`, `/builds/:build_id/...` and `/threads/:thread_id/...` must name a resource owned by the token's job, project or org.
 - Org-scoped resource checks (org docs, org filesystem, agent memory, env DB) hold job tokens to the same org and project.
+- Flat listings that take their scope from the query string stay within the token's scope: `GET /jobs` refuses an `org_id` or `project_id` outside it and otherwise lists only the token's project (an org-only service principal: its org); `GET /projects` lists only a job or service token's own project and refuses an `org_id` other than the token's.
 
 CLI helpers:
 

@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import type { AuthUser } from './auth.types.js';
 
 /** Resolves the project and org references a route names (RbacService implements it). */
@@ -57,4 +58,31 @@ export async function tokenMayAddressOrg(
     return true;
   }
   return (await scopes.getOrgScopeId(orgInput)) === tokenOrgId;
+}
+
+/**
+ * Hold the org and project filters of a flat listing (a route with no project
+ * or org in its path) to a scoped token's own scope. A filter naming another
+ * org or project is a 403. The result never spans more than the token's own
+ * project, or for an org-only token its org (and the requested project in it).
+ */
+export async function scopeListFiltersToToken(
+  user: AuthUser,
+  filters: { org_id?: string; project_id?: string },
+  scopes: TokenScopeResolver,
+): Promise<{ org_id?: string; project_id?: string }> {
+  if (filters.org_id && !(await tokenMayAddressOrg(user, filters.org_id, scopes))) {
+    throw new ForbiddenException('Token is not scoped to this org');
+  }
+  if (filters.project_id && !(await tokenMayAddressProject(user, filters.project_id, scopes))) {
+    throw new ForbiddenException('Token is not scoped to this project');
+  }
+  if (user.project_id) {
+    return { project_id: user.project_id };
+  }
+  if (user.org_id) {
+    const project = filters.project_id ? await scopes.getProjectScope(filters.project_id) : undefined;
+    return { org_id: user.org_id, project_id: project?.id };
+  }
+  throw new ForbiddenException('Token carries no project or org scope');
 }

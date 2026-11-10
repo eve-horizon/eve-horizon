@@ -15,6 +15,7 @@ import {
   UsePipes,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { parseBoolean, parseOptionalDate } from '../common/query-params.js';
 import { ApiBody, ApiCreatedResponse, ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -78,6 +79,7 @@ import { zodSchemaToOpenApi } from '../openapi.js';
 import { RequirePermission } from '../auth/permission.decorator.js';
 import { CurrentUser } from '../common/request-decorators.js';
 import type { AuthUser } from '../auth/auth.types.js';
+import { isScopedToken } from '../auth/token-scope.js';
 
 
 @ApiTags('projects')
@@ -157,14 +159,41 @@ export class ProjectsController {
     @Query('org_id') orgId?: string,
     @Query('name') name?: string,
   ): Promise<ProjectListResponse> {
-    return this.projectsService.list({
-      limit,
-      offset,
-      include_deleted: parseBoolean(includeDeleted),
-      org_id: orgId,
-      name,
-      user_id: caller?.user_id,
-    });
+    const options = { limit, offset, include_deleted: parseBoolean(includeDeleted), org_id: orgId, name };
+    if (caller && isScopedToken(caller)) {
+      return this.listForToken(caller, options);
+    }
+    return this.projectsService.list({ ...options, user_id: caller?.user_id });
+  }
+
+  /**
+   * A job, service or service-principal token lists only within its own scope.
+   * A job or service token sees its own project. An org-only service principal
+   * keeps its usual listing, held to its org. The org filter matches org ids
+   * only, so it must equal the token's org id.
+   */
+  private async listForToken(
+    token: AuthUser,
+    options: { limit: number; offset: number; include_deleted: boolean; org_id?: string; name?: string },
+  ): Promise<ProjectListResponse> {
+    if (options.org_id && options.org_id !== token.org_id) {
+      throw new ForbiddenException('Token is not scoped to this org');
+    }
+
+    if (!token.project_id) {
+      if (!token.org_id) {
+        throw new ForbiddenException('Token carries no project or org scope');
+      }
+      return this.projectsService.list({ ...options, org_id: token.org_id, user_id: token.user_id });
+    }
+
+    const project = await this.projectsService.findById(token.project_id, options.include_deleted);
+    const listed = project
+      && options.offset === 0
+      && options.limit > 0
+      && (!options.name || project.name === options.name);
+    const data = listed ? [project] : [];
+    return { data, pagination: { limit: options.limit, offset: options.offset, count: data.length } };
   }
 
   @RequirePermission('projects:read')
