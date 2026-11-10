@@ -1,6 +1,6 @@
 import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import type { Db } from '@eve/db';
-import { jobAttachmentQueries, jobQueries, type JobAttachment } from '@eve/db';
+import { jobAttachmentQueries, jobQueries, type Job, type JobAttachment } from '@eve/db';
 import {
   MAX_ATTACHMENT_SIZE,
   MAX_TOTAL_ATTACHMENTS_SIZE,
@@ -9,6 +9,8 @@ import {
   type JobAttachmentListResponse,
   type CreateJobAttachmentRequest,
 } from '@eve/shared';
+import { JobsService } from '../jobs/jobs.service.js';
+import type { AuthUser } from '../auth/auth.types.js';
 
 // ============================================================================
 // Service
@@ -19,7 +21,10 @@ export class JobAttachmentsService {
   private attachments: ReturnType<typeof jobAttachmentQueries>;
   private jobs: ReturnType<typeof jobQueries>;
 
-  constructor(@Inject('DB') private readonly db: Db) {
+  constructor(
+    @Inject('DB') private readonly db: Db,
+    private readonly jobsService: JobsService,
+  ) {
     this.attachments = jobAttachmentQueries(db);
     this.jobs = jobQueries(db);
   }
@@ -27,11 +32,28 @@ export class JobAttachmentsService {
   /**
    * Validate that a job exists, throw NotFoundException if not.
    */
-  private async requireJob(jobId: string): Promise<void> {
+  private async requireJob(jobId: string): Promise<Job> {
     const job = await this.jobs.findById(jobId);
     if (!job) {
       throw new NotFoundException(`Job not found: ${jobId}`);
     }
+    return job;
+  }
+
+  /**
+   * The worker writes a job's attachments into its workspace when it runs, so
+   * adding or removing one changes what the job runs: it is judged and applied
+   * as such for the caller (see JobsService.changeWhatJobRuns).
+   */
+  private changeAttachments<T>(
+    job: Job,
+    caller: AuthUser | undefined,
+    change: (attachments: ReturnType<typeof jobAttachmentQueries>) => Promise<T>,
+  ): Promise<T> {
+    if (!caller) {
+      return change(this.attachments);
+    }
+    return this.jobsService.changeWhatJobRuns(job, caller, (tx) => change(jobAttachmentQueries(tx)));
   }
 
   /**
@@ -40,9 +62,9 @@ export class JobAttachmentsService {
   async create(
     jobId: string,
     data: CreateJobAttachmentRequest,
-    createdBy?: string,
+    caller?: AuthUser,
   ): Promise<JobAttachmentDetailResponse> {
-    await this.requireJob(jobId);
+    const job = await this.requireJob(jobId);
 
     // Enforce single-attachment size limit
     const contentSize = Buffer.byteLength(data.content, 'utf8');
@@ -60,13 +82,13 @@ export class JobAttachmentsService {
       );
     }
 
-    const attachment = await this.attachments.create({
+    const attachment = await this.changeAttachments(job, caller, (attachments) => attachments.create({
       job_id: jobId,
       name: data.name,
       mime_type: data.mime_type ?? 'text/plain',
       content: data.content,
-      created_by: createdBy ?? null,
-    });
+      created_by: caller?.user_id ?? null,
+    }));
 
     return this.toDetailResponse(attachment);
   }
@@ -100,8 +122,8 @@ export class JobAttachmentsService {
   /**
    * Delete an attachment by ID.
    */
-  async delete(jobId: string, attachmentId: string): Promise<{ success: boolean; message: string }> {
-    await this.requireJob(jobId);
+  async delete(jobId: string, attachmentId: string, caller?: AuthUser): Promise<{ success: boolean; message: string }> {
+    const job = await this.requireJob(jobId);
 
     // Verify the attachment belongs to this job
     const attachment = await this.attachments.findById(attachmentId);
@@ -109,10 +131,11 @@ export class JobAttachmentsService {
       throw new NotFoundException(`Attachment not found: ${attachmentId}`);
     }
 
-    const deleted = await this.attachments.delete(attachmentId);
-    if (!deleted) {
-      throw new NotFoundException(`Attachment not found: ${attachmentId}`);
-    }
+    await this.changeAttachments(job, caller, async (attachments) => {
+      if (!(await attachments.delete(attachmentId))) {
+        throw new NotFoundException(`Attachment not found: ${attachmentId}`);
+      }
+    });
 
     return { success: true, message: `Attachment ${attachmentId} deleted` };
   }

@@ -344,6 +344,14 @@ actor the job had when it was read; if the actor changed before the edit is
 applied, the edit is refused with 409 and the caller should read the job again
 and retry.
 
+Adding or removing a job attachment (`POST /jobs/{job_id}/attachments`,
+`DELETE /jobs/{job_id}/attachments/{att_id}`) is judged the same way, since the
+worker writes a job's attachments into its workspace when it runs: someone
+other than the actor becomes the actor (400 if they could not grant the job's
+permissions or hold its token scope, 409 if the actor changed after the job was
+read), and the attachment and actor change together or not at all. The actor's
+own attachments, including an agent attaching to its own job, keep the actor.
+
 ## Dependency Model
 
 Dependencies are stored as relations between jobs (`blocks`, `conditional_blocks`, `waits_for`, etc.).

@@ -54,7 +54,7 @@ export class JobAttachmentsController {
     @Body() body: CreateJobAttachmentRequest,
     @CurrentUser() caller: AuthUser | undefined,
   ): Promise<JobAttachmentDetailResponse> {
-    return this.service.create(jobId, body, caller?.user_id);
+    return this.service.create(jobId, body, caller);
   }
 
   @RequirePermission('jobs:read')
@@ -99,7 +99,8 @@ export class JobAttachmentsController {
   async delete(
     @Param('job_id') jobId: string,
     @Param('att_id') attId: string,
+    @CurrentUser() caller: AuthUser | undefined,
   ): Promise<{ success: boolean; message: string }> {
-    return this.service.delete(jobId, attId);
+    return this.service.delete(jobId, attId, caller);
   }
 }
