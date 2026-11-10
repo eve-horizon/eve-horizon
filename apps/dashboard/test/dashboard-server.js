@@ -2,7 +2,8 @@
 //
 // server.js serves dist/ next to itself and listens on PORT as soon as it is
 // imported, so each start copies it (and server/) into a fresh directory
-// beside a stub dist/index.html and imports that copy on a free port. Test
+// beside a stub dist/ (index.html and one asset, STUB_ASSET_PATH) and imports
+// that copy on a free port. Test
 // files mock `express` (with the workspace's real express) and
 // `http-proxy-middleware` (with a stub that records what reaches the API).
 import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -13,6 +14,8 @@ import { join } from 'node:path';
 import { fileURLToPath, parse as legacyParseUrl } from 'node:url';
 
 const appDir = fileURLToPath(new URL('..', import.meta.url));
+
+export const STUB_ASSET_PATH = '/assets/app.js';
 
 export const STUB_INDEX_HTML =
   '<!doctype html><html><head><title>Eve</title></head><body><div id="root"></div></body></html>';
@@ -133,6 +136,8 @@ export async function startDashboardServer(env = {}) {
   }
   mkdirSync(join(dir, 'dist'));
   writeFileSync(join(dir, 'dist', 'index.html'), STUB_INDEX_HTML);
+  mkdirSync(join(dir, 'dist', 'assets'));
+  writeFileSync(join(dir, 'dist', STUB_ASSET_PATH), 'export {};\n');
 
   const port = await freePort();
   Object.assign(process.env, env, { PORT: String(port) });
