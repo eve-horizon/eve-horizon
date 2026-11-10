@@ -116,12 +116,13 @@ it. Redirects are not followed: a `3xx` response is a failed delivery and is
 retried like any other failure. A refused destination is recorded on the
 delivery as `Webhook URL not allowed: ...`.
 
-Host names are resolved as absolute names (with a trailing dot), so the API
-pod's DNS search path cannot turn a short name such as `api.eve` into a
-cluster service. On clusters whose service or pod ranges are not private
-addresses (GKE's default service range is `34.118.224.0/20`), set
-`EVE_CLUSTER_PRIVATE_CIDRS` on the API to a comma-separated list of those
-CIDRs; addresses in them are then refused like private ones. It is empty by
+Host names are resolved as absolute names (with a trailing dot), so a pod's
+DNS search path cannot turn a short name such as `api.eve` into a cluster
+service. On clusters whose service or pod ranges are not private addresses
+(GKE's default service range is `34.118.224.0/20`), set
+`EVE_CLUSTER_PRIVATE_CIDRS` to a comma-separated list of those CIDRs on both
+the API and the orchestrator (the orchestrator checks ingest callbacks
+before sending them); addresses in them are then refused like private ones. It is empty by
 default, and an entry that is not a CIDR refuses every outbound URL. The same
 rules apply to API spec URLs and to ingest `callback_url`s (refused with
 `400` at ingest create, checked again and sent to the checked address with no

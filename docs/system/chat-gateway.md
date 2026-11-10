@@ -176,9 +176,13 @@ ws://gateway:4821/?token=<jwt>
 ```
 
 The WebSocket listener port comes from the gateway's `EVE_WEBCHAT_PORT`
-(default `4821`, next to the gateway's HTTP port `4820`); a `port` integration
-setting is ignored. A listener that cannot bind (for example, the port is
-taken) is logged as `webchat.listen_failed` and does not stop the gateway.
+(default `4821`, next to the gateway's HTTP port `4820`). One webchat
+integration per gateway listens on it: the first to start binds the port,
+and any later webchat integration on the same gateway cannot bind and logs
+`webchat.listen_failed` (the gateway keeps running). A custom `port` setting
+on a webchat integration, which earlier versions used, is no longer read;
+remove it, and set `EVE_WEBCHAT_PORT` on the gateway instead if the default
+does not suit.
 
 **Send message:**
 ```json
