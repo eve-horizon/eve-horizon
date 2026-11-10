@@ -21,6 +21,7 @@ import {
   hasUserActor,
   isOrgRoleOnlyPermission,
   isValidPermission,
+  MINIMAL_JOB_TOKEN_PERMISSIONS,
   mergeEnvOverrides,
   parseStepExecution as parseSharedStepExecution,
   splitNoActorJobPermissions,
@@ -335,7 +336,8 @@ export class PipelineExpanderService {
    * declared permission must be one the actor holds (400 otherwise). With no
    * actor (event triggers, schedules, internal runs) platform and
    * org-management permissions are withheld and recorded on the job, and the
-   * rest are kept; a step left with none falls back to the executor default.
+   * rest are kept; a step left with none gets the minimal job permissions,
+   * not its executor's broader default.
    */
   private async ceilStepTokenPermissions(
     orgId: string,
@@ -355,7 +357,7 @@ export class PipelineExpanderService {
     if (withheld.length > 0) {
       console.warn(`${context}: withheld ${withheld.join(', ')} (no user started this run)`);
     }
-    return { permissions: granted.length > 0 ? granted : null, withheld };
+    return { permissions: granted.length > 0 ? granted : [...MINIMAL_JOB_TOKEN_PERMISSIONS], withheld };
   }
 
   private async assertActorCanGrantPermissions(

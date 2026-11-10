@@ -118,6 +118,15 @@ export const DEFAULT_ACTION_RUN_JOB_PERMISSIONS: readonly Permission[] = [
 ];
 
 /**
+ * The narrowest job-token permissions: enough for a step to read and report on
+ * its own job and read its project. A step that no user started and whose
+ * declared permissions are all withheld gets these, not its executor's broader
+ * default (agent: {@link DEFAULT_AGENT_PERMISSIONS}, script:
+ * {@link DEFAULT_SCRIPT_JOB_PERMISSIONS}).
+ */
+export const MINIMAL_JOB_TOKEN_PERMISSIONS: readonly Permission[] = DEFAULT_ACTION_RUN_JOB_PERMISSIONS;
+
+/**
  * Default permissions granted to deployed-service tokens.
  *
  * Read-only by design — apps that need write access must declare

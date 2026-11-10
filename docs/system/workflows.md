@@ -286,7 +286,9 @@ When no user started the run (event triggers, schedules, internal runs), the
 step keeps its declared project permissions, but platform (`system:*`),
 org-management and org data admin permissions are withheld: they are dropped, logged, and listed in
 the step job's `hints.token_permissions_withheld`. A step left with no declared
-permission falls back to the executor default.
+permission gets the minimal job permissions (`jobs:read`, `jobs:write`,
+`projects:read`, `envs:read`), not its executor's broader default (agent steps:
+`DEFAULT_AGENT_PERMISSIONS`; script steps: `DEFAULT_SCRIPT_JOB_PERMISSIONS`).
 
 Job tokens are also held to this when minted and verified: they never carry
 `system:*`, and carry org-management permissions only for a job a user started

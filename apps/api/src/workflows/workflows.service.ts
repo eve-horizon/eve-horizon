@@ -1,7 +1,7 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, RequestTimeoutException } from '@nestjs/common';
 import type { Db, Job, JobHints } from '@eve/db';
 import { projectManifestQueries, projectQueries, jobQueries, agentQueries, agentConfigQueries, projectApiSourceQueries, orgQueries, environmentQueries, appLinkSubscriptionQueries } from '@eve/db';
-import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isOrgRoleOnlyPermission, isValidPermission, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
+import { deriveNamespace, ResourceRefSchema, EnvOverridesSchema, AccessBindingScopeSchema, WorkflowDefinitionSchema, VALID_TOOLCHAINS, buildIngestUri, buildAppApiInstructionBlock, getServicesFromManifest, resolveHarnessProfile as sharedResolveHarnessProfile, buildWorkflowInputsScope, hasUserActor, interpolateValue, isOrgRoleOnlyPermission, isValidPermission, MINIMAL_JOB_TOKEN_PERMISSIONS, mergeEnvOverrides, splitNoActorJobPermissions, parseWorkflowStepExecution, type AccessBindingScope, type AppApiCliInfo, type AppApiInfo, type EnvOverrides, type EvaluateScope, type HarnessProfileSource, type InlineProfileBundle, type ResourceRef, type StepExecution, type WorkflowListResponse, type WorkflowResponse, type WorkflowInvokeRequest, type WorkflowInvokeResponse, type WorkflowInvokeResult, type WorkflowRetryRequest, type WorkflowRetryResponse, type WorkflowStepJob } from '@eve/shared';
 import { AccessService } from '../auth/access.service.js';
 import type { WorkStartOptions } from '../auth/token-scope.js';
 import { intersectScopes, pathPatternBase } from './scope-algebra.js';
@@ -270,7 +270,8 @@ export class WorkflowsService {
    * declared permission must be one the actor holds (400 otherwise). With no
    * actor (event triggers, schedules, internal runs) platform and
    * org-management permissions are withheld and recorded on the job, and the
-   * rest are kept; a step left with none falls back to the executor default.
+   * rest are kept; a step left with none gets the minimal job permissions,
+   * not its executor's broader default.
    */
   private async ceilStepTokenPermissions(
     orgId: string,
@@ -290,7 +291,7 @@ export class WorkflowsService {
     if (withheld.length > 0) {
       console.warn(`${context}: withheld ${withheld.join(', ')} (no user started this run)`);
     }
-    return { permissions: granted.length > 0 ? granted : null, withheld };
+    return { permissions: granted.length > 0 ? granted : [...MINIMAL_JOB_TOKEN_PERMISSIONS], withheld };
   }
 
   private async assertActorCanGrantPermissions(
