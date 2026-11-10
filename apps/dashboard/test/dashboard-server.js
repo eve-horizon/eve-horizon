@@ -154,5 +154,5 @@ export async function startDashboardServer(env = {}) {
   Object.assign(process.env, env, { PORT: String(port) });
   await import(/* @vite-ignore */ join(dir, 'server.js'));
   await waitForListening(port);
-  return { port, get: (path) => get(port, path), rawGet: (target) => rawGet(port, target) };
+  return { port, get: (path) => get(port, path), rawGet: (target, extraHeaders) => rawGet(port, target, extraHeaders) };
 }

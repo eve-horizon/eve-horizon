@@ -70,6 +70,32 @@ describe('dashboard /api proxy and the API internal routes', () => {
     expect(proxied).toEqual([]);
   });
 
+  describe.each([
+    ['', []],
+    [' with Expect: 100-continue', ['Expect: 100-continue']],
+  ])('dot segments under /api%s', (_label, headers) => {
+    it.each([
+      '/api/%2e%2e/internal/projects/p1/secrets',
+      '/api/../internal/projects/p1/secrets',
+      '/api/%2E%2e/internal/x',
+      '/api/.%2e/internal/x',
+      '/api/%252e%252e/internal/x',
+      '/api/projects/%2e%2e/jobs',
+      '/api/projects/../jobs',
+      '/api/projects/p1/..',
+    ])('answer 404 for %s without calling the API', async (target) => {
+      expect(await dashboard.rawGet(target, headers)).toBe(404);
+      expect(proxied).toEqual([]);
+    });
+
+    it('still proxy segments that only contain dots', async () => {
+      for (const target of ['/api/files/a..b', '/api/files/...', '/api/files/v1.2.tar']) {
+        expect(await dashboard.rawGet(target, headers), target).toBe(200);
+      }
+      expect(proxied).toEqual(['/files/a..b', '/files/...', '/files/v1.2.tar']);
+    });
+  });
+
   it('never sends a path under /internal to the API, whatever the proxy rewrites', async () => {
     for (const path of ['/api/api/internal/x', '/API/api/internal/integrations/active', '/api/API/internal/x']) {
       await dashboard.get(path);
