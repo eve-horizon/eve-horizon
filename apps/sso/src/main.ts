@@ -12,6 +12,7 @@ import {
 import { registerCallbackRoutes } from './routes/callback.js';
 import { registerLandingRoutes } from './routes/landing.js';
 import { registerLoginRoutes } from './routes/login.js';
+import { registerGoogleRoutes } from './routes/google.js';
 import { registerSessionRoutes } from './routes/session.js';
 import { registerSetPasswordRoutes } from './routes/set-password.js';
 import { registerWrapRoutes } from './routes/wrap.js';
@@ -27,6 +28,7 @@ app.use(express.json());
 registerWrapRoutes(app);
 registerLandingRoutes(app);
 registerLoginRoutes(app);
+registerGoogleRoutes(app);
 registerCallbackRoutes(app);
 registerSetPasswordRoutes(app);
 registerSessionRoutes(app);

@@ -111,6 +111,10 @@ keep the worker, agent runtime and BuildKit reachable only from platform pods.
 
 ## Web Auth Stack (Supabase + SSO)
 
+Optional [Google sign-in](./google-sign-in.md) uses this same stack. It requires
+operator configuration and project `oauth_providers: [google]` opt-in, and admits
+existing app members without creating Eve users or granting membership.
+
 When Supabase Auth is enabled, Eve runs three web-auth components:
 
 - **GoTrue (Supabase Auth)**: Handles email/password, magic links, and invites.

@@ -210,6 +210,7 @@ describe('AuthController app-scoped magic links', () => {
         login_method: 'magic_link',
         self_signup: false,
         invite_requires_password: false,
+        oauth_providers: [],
         org_access: {
           mode: 'allowlist',
           multi_org: true,
@@ -245,6 +246,7 @@ describe('AuthController app-scoped magic links', () => {
         login_method: 'magic_link',
         self_signup: false,
         invite_requires_password: false,
+        oauth_providers: [],
         allowed_redirect_origins: [],
         org_access: {
           mode: 'allowlist',

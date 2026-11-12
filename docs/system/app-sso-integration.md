@@ -1,5 +1,8 @@
 # App SSO Integration
 
+For optional Google login using the same Eve session and app permissions, see
+[Google sign-in for existing app members](./google-sign-in.md).
+
 > Add Eve SSO login to your app in ~25 lines of code.
 
 ## Prerequisites

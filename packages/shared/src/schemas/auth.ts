@@ -186,6 +186,14 @@ export const AuthExchangeResponseSchema = z.object({
 
 export type AuthExchangeResponse = z.infer<typeof AuthExchangeResponseSchema>;
 
+/** Strict request body for an app-scoped third-party OAuth exchange. */
+export const OAuthSignInExchangeRequestSchema = z.object({
+  project_id: z.string().min(1).max(256),
+  provider: z.literal('google'),
+}).strict();
+
+export type OAuthSignInExchangeRequest = z.infer<typeof OAuthSignInExchangeRequestSchema>;
+
 export const AppAuthContextRequestSchema = z.object({
   project_id: z.string().min(1),
 });

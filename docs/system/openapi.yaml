@@ -281,6 +281,27 @@ paths:
           description: ""
       summary: Send a default-branded Supabase Auth invite email (admin only)
       tags: *a1
+  /auth/oauth/exchange:
+    post:
+      description: Requires a GoTrue Bearer token and signs in an existing member only.
+      operationId: OAuthSignInController_exchange
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OAuthSignInExchangeRequest"
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthExchangeResponse"
+      summary: Exchange a verified Google GoTrue session for an Eve app token
+      tags:
+        - auth
   /internal/auth/mint-job-token:
     post:
       operationId: AuthInternalController_mintJobToken
@@ -12055,6 +12076,13 @@ components:
             invite_requires_password:
               type: boolean
               default: true
+            oauth_providers:
+              type: array
+              items:
+                type: string
+                enum:
+                  - google
+              default: &a117 []
             org_access:
               type: object
               properties:
@@ -12079,7 +12107,7 @@ components:
               type: array
               items:
                 type: string
-              default: &a117 []
+              default: &a118 []
           additionalProperties: false
           nullable: true
       required:
@@ -12140,11 +12168,18 @@ components:
             invite_requires_password:
               type: boolean
               default: true
+            oauth_providers:
+              type: array
+              items:
+                type: string
+                enum:
+                  - google
+              default: *a117
             allowed_redirect_origins:
               type: array
               items:
                 type: string
-              default: *a117
+              default: *a118
             org_access:
               type: object
               properties:
@@ -12340,6 +12375,21 @@ components:
           type: boolean
       required:
         - sent
+      additionalProperties: false
+    OAuthSignInExchangeRequest:
+      type: object
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        provider:
+          type: string
+          enum:
+            - google
+      required:
+        - project_id
+        - provider
       additionalProperties: false
     OrgInviteResponse:
       type: object

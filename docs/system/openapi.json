@@ -441,6 +441,39 @@
         ]
       }
     },
+    "/auth/oauth/exchange": {
+      "post": {
+        "description": "Requires a GoTrue Bearer token and signs in an existing member only.",
+        "operationId": "OAuthSignInController_exchange",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthSignInExchangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthExchangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Exchange a verified Google GoTrue session for an Eve app token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/internal/auth/mint-job-token": {
       "post": {
         "operationId": "AuthInternalController_mintJobToken",
@@ -20684,6 +20717,16 @@
                 "type": "boolean",
                 "default": true
               },
+              "oauth_providers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "google"
+                  ]
+                },
+                "default": []
+              },
               "org_access": {
                 "type": "object",
                 "properties": {
@@ -20799,6 +20842,16 @@
               "invite_requires_password": {
                 "type": "boolean",
                 "default": true
+              },
+              "oauth_providers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "google"
+                  ]
+                },
+                "default": []
               },
               "allowed_redirect_origins": {
                 "type": "array",
@@ -21081,6 +21134,27 @@
         },
         "required": [
           "sent"
+        ],
+        "additionalProperties": false
+      },
+      "OAuthSignInExchangeRequest": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "google"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "provider"
         ],
         "additionalProperties": false
       },
