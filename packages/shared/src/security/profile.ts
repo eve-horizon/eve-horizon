@@ -91,6 +91,8 @@ export const SECURITY_RULESETS: Readonly<Record<string, number>> = {
   'auth.nip98_public_url': 3,
   // P4
   'manifest.approval_unenforced': 4,
+  // P5
+  'jobs.token_read_scope': 5,
 };
 
 /** The rule set a `strict` profile set now is stamped with. */

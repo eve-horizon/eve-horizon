@@ -523,6 +523,14 @@ export class RbacService implements TokenScopeResolver {
     return row;
   }
 
+  /** The pipeline run a job is a step of, or null. */
+  async getJobPipelineRunId(jobId: string): Promise<string | null> {
+    const rows = await this.db<{ run_id: string | null }[]>`
+      SELECT run_id FROM jobs WHERE id = ${jobId} LIMIT 1
+    `;
+    return rows[0]?.run_id ?? null;
+  }
+
   private async resolveProject(projectInput: string) {
     if (projectInput.startsWith('proj_')) {
       const project = await this.projects.findById(projectInput, { include_deleted: false });
