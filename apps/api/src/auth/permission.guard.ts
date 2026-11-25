@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -13,6 +14,10 @@ import { PERMISSION_KEY, SCOPE_NARROWED_KEY } from './permission.decorator.js';
 import { expandPermissions, hasAnyPermission, type Permission } from './permissions.js';
 import { isScopedToken, tokenMayAddressOrg, tokenMayAddressProject } from './token-scope.js';
 import { isAccountLevelPermission } from '@eve/shared';
+import { SecurityService } from '../security/security.service.js';
+import { inReadScope, JOB_TOKEN_READ_SCOPE_RULE, jobTreeRoot } from '../jobs/job-token-read-scope.js';
+
+export { JOB_TOKEN_READ_SCOPE_RULE, jobTreeRoot };
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -20,6 +25,7 @@ export class PermissionGuard implements CanActivate {
     private readonly authService: AuthService,
     private readonly rbacService: RbacService,
     private readonly reflector: Reflector,
+    @Optional() private readonly security?: SecurityService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -181,7 +187,7 @@ export class PermissionGuard implements CanActivate {
     }
 
     if (resource) {
-      await this.assertTokenMayAddressResource(user, resource);
+      await this.assertTokenMayAddressResource(user, resource, request);
     }
 
     const orgId = extractPathOrgId(request)
@@ -196,7 +202,7 @@ export class PermissionGuard implements CanActivate {
    * belongs to its own scope: for jobs, the job it was minted for (or that
    * job's subtree); otherwise its project, then its org.
    */
-  private async assertTokenMayAddressResource(user: AuthUser, resource: ResourceRef): Promise<void> {
+  private async assertTokenMayAddressResource(user: AuthUser, resource: ResourceRef, request?: { method?: string }): Promise<void> {
     if (
       resource.kind === 'job'
       && user.job_id
@@ -212,6 +218,9 @@ export class PermissionGuard implements CanActivate {
       if (user.project_id !== owner.project_id) {
         throw new ForbiddenException('Token is not scoped to the project that owns this resource');
       }
+      if (resource.kind === 'job' && user.is_job_token && user.job_id && request?.method?.toUpperCase() === 'GET') {
+        await this.holdJobTokenReadToItsTree(user, user.job_id, resource.id, owner.project_id);
+      }
       return;
     }
 
@@ -223,6 +232,28 @@ export class PermissionGuard implements CanActivate {
     }
 
     throw new ForbiddenException('Token carries no project or org scope for this resource');
+  }
+
+  /**
+   * A job token reads the jobs of its own tree (its root and every job under
+   * it, parents and siblings included) and the other steps of its own
+   * pipeline run. Reading any other job in its project is allowed and
+   * recorded under `audit`, and refused with 403 under `strict`, by the
+   * project's profile (rule jobs.token_read_scope). Writes are held by their
+   * own rules (jobs.run_step_change, jobs.dependency_change).
+   */
+  private async holdJobTokenReadToItsTree(user: AuthUser, readerJobId: string, jobId: string, projectId: string): Promise<void> {
+    if (!this.security || jobTreeRoot(jobId) === jobTreeRoot(readerJobId)) return;
+    const [readerRun, targetRun] = await Promise.all([
+      this.rbacService.getJobPipelineRunId(readerJobId),
+      this.rbacService.getJobPipelineRunId(jobId),
+    ]);
+    if (inReadScope({ jobId: readerJobId, runId: readerRun }, { id: jobId, run_id: targetRun })) return;
+    await this.security.gate(
+      JOB_TOKEN_READ_SCOPE_RULE,
+      { governing: 'project', projectId, actor: user, detail: { job_id: jobId, reader_job_id: readerJobId } },
+      `A job token reads only its own job tree and pipeline run: job ${readerJobId} may not read job ${jobId}`,
+    );
   }
 }
 

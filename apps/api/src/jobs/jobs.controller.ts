@@ -188,8 +188,9 @@ export class JobsController {
     @Query('failure_disposition') failureDisposition?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<JobListResponse> {
-    return this.jobsService.list(projectId, {
+    return this.jobsService.scopeListToCaller(caller, await this.jobsService.list(projectId, {
       phase: phase as any,
       assignee,
       priority: priority ? parseInt(priority, 10) : undefined,
@@ -202,7 +203,7 @@ export class JobsController {
       failureDisposition,
       limit,
       offset,
-    });
+    }));
   }
 
   @RequirePermission('jobs:read')
@@ -219,8 +220,9 @@ export class JobsController {
     @Param('project_id') projectId: string,
     @Query('assignee') assignee?: string,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit?: number,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<JobListResponse> {
-    return this.jobsService.getReadyJobs(projectId, { assignee, limit });
+    return this.jobsService.scopeListToCaller(caller, await this.jobsService.getReadyJobs(projectId, { assignee, limit }));
   }
 
   @RequirePermission('jobs:read')
@@ -233,8 +235,9 @@ export class JobsController {
   })
   async getBlockedJobs(
     @Param('project_id') projectId: string,
+    @CurrentUser() caller?: AuthUser,
   ): Promise<JobListResponse> {
-    return this.jobsService.getBlockedJobs(projectId);
+    return this.jobsService.scopeListToCaller(caller, await this.jobsService.getBlockedJobs(projectId));
   }
 
   // ==========================================================================

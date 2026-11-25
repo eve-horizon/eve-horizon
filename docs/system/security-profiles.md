@@ -255,6 +255,14 @@ A profile stamped 1, 2 or 3 runs these under `audit` until `strict` is set again
 |---|---|---|
 | `manifest.approval_unenforced` | Project | Manifest sync refuses (400) a manifest whose `environments.<env>.approval` asks for a gate (any value but `none`, in any case, or blank), with "Environment approval gates are not enforced by Eve. Remove `approval` from environments.<env>." Eve has no deploy approval gate: deploys to the environment never waited for a person. Under `audit` the manifest syncs with that text in its warnings and the environments are recorded; under `legacy`, the warning only. |
 
+### Rule set 5 (0.1.336)
+
+A profile stamped 1 to 4 runs this under `audit` until `strict` is set again.
+
+| Rule | Governs | Under `strict` |
+|---|---|---|
+| `jobs.token_read_scope` | Project | A job token reads (GET) only the jobs of its own job tree, its root and every job under it, parents and siblings included (job ids are hierarchical: `proj-1a2b3c4d.2.1` is in the tree of `proj-1a2b3c4d`), and the other steps of its own pipeline run. Any other job in its project gets 403 on `/jobs/:job_id` and every route under it (attempts, logs, results, receipts, streams). Under `audit` the read is allowed and recorded with the reader and the job; under `legacy`, allowed. A job token never reached another project's jobs. Writes are held by their own rules (`jobs.run_step_change`, `jobs.dependency_change`). |
+
 ### Internal service keys
 
 Platform services call each other with a key per service, sent as

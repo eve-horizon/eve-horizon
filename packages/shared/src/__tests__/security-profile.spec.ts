@@ -68,7 +68,14 @@ describe('profile stamps', () => {
     expect(securityRuleSet(rule)).toBe(4);
     expect(resolveSecurityProfile({ project: 'strict', projectRuleset: 3 }, rule)).toBe('audit');
     expect(resolveSecurityProfile({ project: 'strict', projectRuleset: 4 }, rule)).toBe('strict');
-    expect(SECURITY_CURRENT_RULESET).toBe(4);
+  });
+
+  it('places the P5 rule in rule set 5, which a rule-set-4 strict runs under audit', () => {
+    const rule = 'jobs.token_read_scope';
+    expect(securityRuleSet(rule)).toBe(5);
+    expect(resolveSecurityProfile({ project: 'strict', projectRuleset: 4 }, rule)).toBe('audit');
+    expect(resolveSecurityProfile({ project: 'strict', projectRuleset: 5 }, rule)).toBe('strict');
+    expect(SECURITY_CURRENT_RULESET).toBe(5);
   });
 
   it('counts a rule it does not know, or no rule, as rule set 1', () => {

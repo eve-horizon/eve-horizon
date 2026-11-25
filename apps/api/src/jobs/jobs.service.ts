@@ -15,6 +15,7 @@ import { RbacService, SECRETS_USE_RULE } from '../auth/rbac.service.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import { SecurityService } from '../security/security.service.js';
 import { holdReservedEnvOverrides } from '../security/reserved-env.js';
+import { inReadScope, JOB_TOKEN_READ_SCOPE_RULE } from './job-token-read-scope.js';
 import { APPROVE_TOKEN_RULE, DEPENDENCY_CHANGE_RULE, RUN_STEP_CHANGE_RULE, deciderOf, howToChangeRun, isUserToken, runKind, runOfRecord, type RunRef } from './run-steps.js';
 
 // ============================================================================
@@ -1025,6 +1026,29 @@ export class JobsService {
   /**
    * Get blocked jobs for a project
    */
+  /**
+   * A project job list as the caller may see it (rule jobs.token_read_scope).
+   * A job token sees the jobs of its own tree and pipeline run; when the list
+   * holds others, `audit` records that and returns the list, and `strict`
+   * records it and returns only the caller's own (a page may then be short).
+   * User tokens get the list as it is.
+   */
+  async scopeListToCaller(caller: AuthUser | undefined, list: JobListResponse): Promise<JobListResponse> {
+    if (!this.security || !caller?.is_job_token || !caller.job_id) return list;
+    const reader = { jobId: caller.job_id, runId: (await this.jobs.findById(caller.job_id))?.run_id ?? null };
+    const others = list.jobs.filter((job) => !inReadScope(reader, job));
+    if (others.length === 0) return list;
+    const profile = await this.security.decide(JOB_TOKEN_READ_SCOPE_RULE, {
+      governing: 'project',
+      projectId: others[0].project_id,
+      actor: caller,
+      detail: { reader_job_id: caller.job_id, other_jobs_listed: others.length },
+    });
+    if (profile !== 'strict') return list;
+    const jobs = list.jobs.filter((job) => inReadScope(reader, job));
+    return { ...list, jobs, ...(list.total === undefined ? {} : { total: jobs.length }) };
+  }
+
   async getBlockedJobs(projectId: string): Promise<JobListResponse> {
     const resolvedProjectId = await this.resolveProject(projectId);
 
