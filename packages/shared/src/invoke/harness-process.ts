@@ -8,6 +8,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EVE_HARNESS_CONFIG_RESOLVED } from '../harnesses/config.js';
 
 export interface EveAgentCliArgsOptions {
   harness: string;
@@ -45,7 +46,8 @@ export function spawnHarnessProcess(
 ): ChildProcessWithoutNullStreams {
   const child = spawn(binary, args, {
     cwd: options.cwd,
-    env: options.env,
+    // The runtime adapter has already selected any config directory it passes.
+    env: { ...options.env, [EVE_HARNESS_CONFIG_RESOLVED]: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: options.detached ?? false,
   });

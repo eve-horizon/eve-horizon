@@ -6,6 +6,7 @@ export type CliContext = {
   prompt: string;
   permission: PermissionPolicy;
   variant?: string;
+  configDirResolved?: boolean;
   model?: string;
   reasoning?: string;
   env: Record<string, string | undefined>;

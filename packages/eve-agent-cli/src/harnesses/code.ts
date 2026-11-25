@@ -12,11 +12,13 @@ export function buildCodeCommand(
   if (strictCheckoutSettings && ctx.harness !== 'codex') {
     throw new Error(checkoutSettingsRefusal(`${ctx.harness} has no confirmed way to keep checkout settings from rerouting it`));
   }
-  const configDir = resolveCodeConfigDir(
-    ctx.harness === 'codex' ? 'codex' : 'code',
-    ctx.variant,
-    { repoPath: ctx.workspace, env },
-  );
+  const configDir = ctx.configDirResolved && env.CODEX_HOME
+    ? env.CODEX_HOME
+    : resolveCodeConfigDir(
+      ctx.harness === 'codex' ? 'codex' : 'code',
+      ctx.variant,
+      { repoPath: ctx.workspace, env },
+    );
   env.CODEX_HOME = configDir;
 
   // Diagnostic: log auth state for debugging

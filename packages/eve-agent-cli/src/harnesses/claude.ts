@@ -20,10 +20,12 @@ function buildClaudeFamilyCommand(
   opts: ClaudeFamilyOptions,
 ): { command: HarnessCommand; warnings: string[] } {
   const env = { ...ctx.env };
-  env.CLAUDE_CONFIG_DIR = resolveClaudeConfigDir(opts.name, ctx.variant, {
-    repoPath: ctx.workspace,
-    env,
-  });
+  if (!ctx.configDirResolved || !env.CLAUDE_CONFIG_DIR) {
+    env.CLAUDE_CONFIG_DIR = resolveClaudeConfigDir(opts.name, ctx.variant, {
+      repoPath: ctx.workspace,
+      env,
+    });
+  }
 
   const args = [...CLAUDE_ARGS];
 

@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as readline from 'readline';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { EVE_HARNESS_CONFIG_RESOLVED } from '@eve/shared';
 import { resolveCliAdapter } from './harnesses/index';
 import type { HarnessName, PermissionPolicy } from './harnesses/types';
 
@@ -436,11 +437,14 @@ async function main(): Promise<void> {
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const permission = normalizePermission(options.permission);
   const env: Record<string, string | undefined> = { ...process.env, EVE_HARNESS_NAME: harness };
+  const configDirResolved = env[EVE_HARNESS_CONFIG_RESOLVED] === '1';
+  delete env[EVE_HARNESS_CONFIG_RESOLVED];
   const { command, warnings } = adapter.buildCommand({
     harness,
     prompt,
     permission,
     variant: options.variant,
+    configDirResolved,
     model: options.model,
     reasoning: options.reasoning,
     env,

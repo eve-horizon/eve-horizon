@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+export const EVE_HARNESS_CONFIG_RESOLVED = 'EVE_HARNESS_CONFIG_RESOLVED';
+
 export type HarnessConfigSource = 'env' | 'repo' | 'default';
 
 export type HarnessConfigOptions = {
